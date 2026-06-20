@@ -1,0 +1,260 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="Duplicates.Views.ScanPage"
+    x:Name="PageRoot"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:toolkit="using:CommunityToolkit.WinUI.Controls">
+    <ScrollViewer Background="{ThemeResource BgBaseBrush}">
+        <Grid
+            MaxWidth="900"
+            Padding="32"
+            HorizontalAlignment="Center">
+            <StackPanel Spacing="24">
+                <StackPanel Spacing="6">
+                    <TextBlock
+                        Style="{ThemeResource TitleTextBlockStyle}"
+                        Foreground="{ThemeResource TextPrimaryBrush}"
+                        Text="Scan for duplicates" />
+                    <TextBlock
+                        Style="{StaticResource MutedTextBlockStyle}"
+                        Text="Choose folders, narrow the scan if needed, and compare files by exact byte content." />
+                </StackPanel>
+
+                <InfoBar
+                    IsOpen="{Binding IsStatusOpen}"
+                    Message="{Binding StatusMessage}"
+                    Severity="Informational" />
+
+                <StackPanel Visibility="{Binding SetupVisibility}" Spacing="24">
+                    <Border
+                        x:Name="FoldersCard"
+                        Style="{StaticResource CardBorderStyle}"
+                        AllowDrop="True"
+                        DragOver="FoldersCard_DragOver"
+                        Drop="FoldersCard_Drop">
+                        <StackPanel Spacing="16">
+                            <Grid ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock
+                                        Style="{ThemeResource SubtitleTextBlockStyle}"
+                                        Foreground="{ThemeResource TextPrimaryBrush}"
+                                        Text="Folders" />
+                                    <TextBlock
+                                        Style="{StaticResource MutedTextBlockStyle}"
+                                        Text="Add one or more folders. Duplicate detection works across all selected folders." />
+                                </StackPanel>
+                                <Button
+                                    Grid.Column="1"
+                                    Style="{StaticResource PrimaryButtonStyle}"
+                                    Click="AddFolder_Click">
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <SymbolIcon Symbol="Add" />
+                                        <TextBlock Text="Add folder" />
+                                    </StackPanel>
+                                </Button>
+                            </Grid>
+
+                            <ItemsControl ItemsSource="{Binding Folders}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid Margin="0,4" ColumnSpacing="12">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock
+                                                Style="{StaticResource PathTextBlockStyle}"
+                                                Text="{Binding}"
+                                                ToolTipService.ToolTip="{Binding}" />
+                                            <Button
+                                                Grid.Column="1"
+                                                Command="{Binding ViewModel.RemoveFolderCommand, ElementName=PageRoot}"
+                                                CommandParameter="{Binding}"
+                                                AutomationProperties.Name="Remove folder">
+                                                <SymbolIcon Symbol="Cancel" />
+                                            </Button>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+
+                            <StackPanel
+                                HorizontalAlignment="Center"
+                                Spacing="8"
+                                Visibility="{Binding EmptyFoldersVisibility}">
+                                <FontIcon
+                                    FontSize="32"
+                                    Foreground="{ThemeResource AccentMintTextBrush}"
+                                    Glyph="&#xE8B7;" />
+                                <TextBlock
+                                    HorizontalAlignment="Center"
+                                    Style="{ThemeResource BodyStrongTextBlockStyle}"
+                                    Foreground="{ThemeResource TextPrimaryBrush}"
+                                    Text="No folders added yet" />
+                                <TextBlock
+                                    HorizontalAlignment="Center"
+                                    Style="{StaticResource MutedTextBlockStyle}"
+                                    Text="Add a folder or drag one here to begin." />
+                                <Button
+                                    Style="{StaticResource PrimaryButtonStyle}"
+                                    Click="AddFolder_Click">
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <SymbolIcon Symbol="Add" />
+                                        <TextBlock Text="Add folder" />
+                                    </StackPanel>
+                                </Button>
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <toolkit:SettingsExpander
+                        Header="Options"
+                        Description="Adjust the duplicate scan before it starts.">
+                        <StackPanel Spacing="16">
+                            <CheckBox
+                                Content="Include subfolders"
+                                IsChecked="{Binding IncludeSubfolders, Mode=TwoWay}" />
+
+                            <Grid ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBox
+                                    Header="Minimum size, bytes"
+                                    Text="{Binding MinSizeText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                <TextBox
+                                    Grid.Column="1"
+                                    Header="Maximum size, bytes"
+                                    PlaceholderText="No cap"
+                                    Text="{Binding MaxSizeText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                            </Grid>
+
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <Button
+                                    Content="Any"
+                                    Command="{Binding UseAnySizeCommand}"
+                                    Style="{StaticResource SecondaryButtonStyle}" />
+                                <Button
+                                    Content="1 KB+"
+                                    Command="{Binding UseOneKilobyteMinimumCommand}"
+                                    Style="{StaticResource SecondaryButtonStyle}" />
+                                <Button
+                                    Content="1 MB+"
+                                    Command="{Binding UseOneMegabyteMinimumCommand}"
+                                    Style="{StaticResource SecondaryButtonStyle}" />
+                            </StackPanel>
+
+                            <ComboBox
+                                Header="File types"
+                                SelectedIndex="{Binding SelectedFileFilterIndex, Mode=TwoWay}">
+                                <ComboBoxItem Content="All files" />
+                                <ComboBoxItem Content="Categories" />
+                                <ComboBoxItem Content="Custom extensions" />
+                            </ComboBox>
+
+                            <StackPanel
+                                Orientation="Horizontal"
+                                Spacing="8"
+                                Visibility="{Binding CategoryFiltersVisibility}">
+                                <CheckBox Content="Images" IsChecked="{Binding ImagesSelected, Mode=TwoWay}" />
+                                <CheckBox Content="Video" IsChecked="{Binding VideoSelected, Mode=TwoWay}" />
+                                <CheckBox Content="Audio" IsChecked="{Binding AudioSelected, Mode=TwoWay}" />
+                                <CheckBox Content="Documents" IsChecked="{Binding DocumentsSelected, Mode=TwoWay}" />
+                                <CheckBox Content="Archives" IsChecked="{Binding ArchivesSelected, Mode=TwoWay}" />
+                                <CheckBox Content="Code" IsChecked="{Binding CodeSelected, Mode=TwoWay}" />
+                            </StackPanel>
+
+                            <TextBox
+                                Header="Custom extensions"
+                                PlaceholderText="psd, ai, sketch"
+                                Visibility="{Binding CustomExtensionsVisibility}"
+                                Text="{Binding CustomExtensionsText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+                            <CheckBox
+                                Content="Ignore hidden files"
+                                IsChecked="{Binding IgnoreHiddenFiles, Mode=TwoWay}" />
+                            <CheckBox
+                                Content="Ignore system files"
+                                IsChecked="{Binding IgnoreSystemFiles, Mode=TwoWay}" />
+                            <CheckBox
+                                Content="Verify byte-by-byte before reporting duplicates"
+                                IsChecked="{Binding VerifyByteByByte, Mode=TwoWay}" />
+                        </StackPanel>
+                    </toolkit:SettingsExpander>
+
+                    <Button
+                        HorizontalAlignment="Right"
+                        Command="{Binding StartScanCommand}"
+                        Style="{StaticResource PrimaryButtonStyle}">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <SymbolIcon Symbol="Play" />
+                            <TextBlock Text="Start scan" />
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+
+                <Border
+                    Style="{StaticResource CardBorderStyle}"
+                    Visibility="{Binding ProgressVisibility}">
+                    <StackPanel Spacing="16">
+                        <TextBlock
+                            Style="{ThemeResource SubtitleTextBlockStyle}"
+                            Foreground="{ThemeResource TextPrimaryBrush}"
+                            Text="{Binding PhaseText}" />
+                        <ProgressBar
+                            Maximum="100"
+                            IsIndeterminate="{Binding IsProgressIndeterminate}"
+                            Value="{Binding ProgressValue}" />
+                        <Grid ColumnSpacing="16">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition />
+                                <ColumnDefinition />
+                                <ColumnDefinition />
+                                <ColumnDefinition />
+                                <ColumnDefinition />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBlock Style="{ThemeResource CaptionTextBlockStyle}" Text="Discovered" />
+                                <TextBlock Text="{Binding FilesDiscoveredText}" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1">
+                                <TextBlock Style="{ThemeResource CaptionTextBlockStyle}" Text="Processed" />
+                                <TextBlock Text="{Binding FilesProcessedText}" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Style="{ThemeResource CaptionTextBlockStyle}" Text="Data" />
+                                <TextBlock Text="{Binding BytesProcessedText}" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="3">
+                                <TextBlock Style="{ThemeResource CaptionTextBlockStyle}" Text="Elapsed" />
+                                <TextBlock Text="{Binding ElapsedText}" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="4">
+                                <TextBlock Style="{ThemeResource CaptionTextBlockStyle}" Text="ETA" />
+                                <TextBlock Text="{Binding EtaText}" />
+                            </StackPanel>
+                        </Grid>
+                        <TextBlock
+                            Style="{StaticResource PathTextBlockStyle}"
+                            Text="{Binding CurrentFilePath}" />
+                        <Button
+                            HorizontalAlignment="Right"
+                            Command="{Binding CancelScanCommand}"
+                            Style="{StaticResource SecondaryButtonStyle}">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <SymbolIcon Symbol="Cancel" />
+                                <TextBlock Text="Cancel" />
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </Grid>
+    </ScrollViewer>
+</Page>

@@ -1,0 +1,10 @@
+bin/
+obj/
+.vs/
+.sonar/
+.idea/
+*.user
+*.suo
+TestResults/
+reports/
+certs/

@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "Duplicates (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "Duplicates (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}

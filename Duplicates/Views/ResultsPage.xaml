@@ -1,0 +1,318 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="Duplicates.Views.ResultsPage"
+    x:Name="PageRoot"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid Padding="24" Background="{ThemeResource BgBaseBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <StackPanel Spacing="12">
+            <TextBlock
+                Style="{ThemeResource TitleTextBlockStyle}"
+                Foreground="{ThemeResource TextPrimaryBrush}"
+                Text="Results" />
+            <TextBlock
+                Style="{StaticResource MutedTextBlockStyle}"
+                Text="{Binding SummaryText}" />
+            <InfoBar
+                IsOpen="{Binding IsDeleteStatusOpen}"
+                Message="{Binding DeleteStatusMessage}"
+                Severity="Informational" />
+            <StackPanel
+                Spacing="6"
+                Visibility="{Binding DeleteProgressVisibility}">
+                <TextBlock
+                    Style="{StaticResource MutedTextBlockStyle}"
+                    Text="{Binding DeleteProgressText}" />
+                <ProgressBar
+                    Maximum="100"
+                    Value="{Binding DeleteProgressValue}" />
+            </StackPanel>
+            <Expander
+                Header="Delete failures"
+                Visibility="{Binding DeleteFailureDetailsVisibility}">
+                <TextBlock
+                    Style="{StaticResource PathTextBlockStyle}"
+                    Text="{Binding DeleteFailureDetailsText}" />
+            </Expander>
+            <Expander
+                Header="{Binding SkippedFilesSummaryText}"
+                Visibility="{Binding SkippedFilesVisibility}">
+                <TextBlock
+                    Style="{StaticResource PathTextBlockStyle}"
+                    Text="{Binding SkippedFilesDetailsText}" />
+            </Expander>
+
+            <Grid ColumnSpacing="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="2*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBox
+                    Header="Search"
+                    PlaceholderText="Filename or path"
+                    Text="{Binding SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                <ComboBox
+                    Grid.Column="1"
+                    Header="Sort"
+                    SelectedIndex="{Binding SelectedSortIndex, Mode=TwoWay}">
+                    <ComboBoxItem Content="Reclaimable size" />
+                    <ComboBoxItem Content="File size" />
+                    <ComboBoxItem Content="Copies" />
+                    <ComboBoxItem Content="File name" />
+                    <ComboBoxItem Content="File type" />
+                </ComboBox>
+                <Button Grid.Column="2" Style="{StaticResource SecondaryButtonStyle}">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="Auto-select" />
+                        <FontIcon Glyph="&#xE70D;" />
+                    </StackPanel>
+                    <Button.Flyout>
+                        <MenuFlyout>
+                            <MenuFlyoutItem Text="Keep newest" Command="{Binding AutoSelectKeepNewestCommand}" />
+                            <MenuFlyoutItem Text="Keep oldest" Command="{Binding AutoSelectKeepOldestCommand}" />
+                            <MenuFlyoutItem Text="Keep shortest path" Command="{Binding AutoSelectKeepShortestPathCommand}" />
+                            <MenuFlyoutItem Text="Keep preferred folder" Click="KeepPreferredFolder_Click" />
+                        </MenuFlyout>
+                    </Button.Flyout>
+                </Button>
+                <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="8">
+                    <Button Content="Select all" Command="{Binding SelectAllCommand}" Style="{StaticResource SecondaryButtonStyle}" />
+                    <Button Content="Clear" Command="{Binding ClearSelectionCommand}" Style="{StaticResource SecondaryButtonStyle}" />
+                    <Button
+                        Content="Undo"
+                        Command="{Binding UndoSelectionCommand}"
+                        IsEnabled="{Binding CanUndoSelection}"
+                        Style="{StaticResource SecondaryButtonStyle}" />
+                </StackPanel>
+                <Button
+                    Grid.Column="4"
+                    AutomationProperties.Name="Toggle preview pane"
+                    Command="{Binding TogglePreviewPaneCommand}"
+                    Style="{StaticResource SecondaryButtonStyle}">
+                    <SymbolIcon Symbol="View" />
+                </Button>
+                <Button
+                    Grid.Column="5"
+                    Content="{Binding DeleteButtonText}"
+                    IsEnabled="{Binding CanDelete}"
+                    Style="{StaticResource DangerButtonStyle}"
+                    Click="Delete_Click" />
+            </Grid>
+        </StackPanel>
+
+        <Grid Grid.Row="1" Margin="0,20,0,0">
+            <Border
+                Style="{StaticResource CardBorderStyle}"
+                Visibility="{Binding BeforeFirstScanVisibility}">
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8">
+                    <FontIcon
+                        FontSize="36"
+                        Foreground="{ThemeResource AccentMintTextBrush}"
+                        Glyph="&#xE8B6;" />
+                    <TextBlock
+                        HorizontalAlignment="Center"
+                        Style="{ThemeResource SubtitleTextBlockStyle}"
+                        Text="Run a scan to see results" />
+                </StackPanel>
+            </Border>
+
+            <Border
+                Style="{StaticResource CardBorderStyle}"
+                Visibility="{Binding NoDuplicatesVisibility}">
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8">
+                    <FontIcon
+                        FontSize="36"
+                        Foreground="{ThemeResource SuccessBrush}"
+                        Glyph="&#xE73E;" />
+                    <TextBlock
+                        HorizontalAlignment="Center"
+                        Style="{ThemeResource SubtitleTextBlockStyle}"
+                        Text="No duplicates found" />
+                    <TextBlock
+                        HorizontalAlignment="Center"
+                        Style="{StaticResource MutedTextBlockStyle}"
+                        Text="Every file in the scanned folders is unique." />
+                    <Button
+                        Content="New scan"
+                        Style="{StaticResource PrimaryButtonStyle}"
+                        Click="NewScan_Click" />
+                </StackPanel>
+            </Border>
+
+            <Grid Visibility="{Binding ResultsVisibility}" ColumnSpacing="16">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="2*" />
+                    <ColumnDefinition Width="360" />
+                </Grid.ColumnDefinitions>
+                <ListView
+                    ItemsSource="{Binding Groups}"
+                    SelectionMode="None">
+                    <ListView.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <ItemsStackPanel />
+                        </ItemsPanelTemplate>
+                    </ListView.ItemsPanel>
+                    <ListView.ItemTemplate>
+                        <DataTemplate>
+                            <Expander
+                                Margin="0,0,0,10"
+                                Background="{ThemeResource BgCardBrush}"
+                                BorderBrush="{ThemeResource StrokeSubtleBrush}"
+                                BorderThickness="1"
+                                IsExpanded="{Binding IsExpanded, Mode=TwoWay}">
+                                <Expander.Header>
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel>
+                                            <TextBlock
+                                                Style="{ThemeResource BodyStrongTextBlockStyle}"
+                                                Foreground="{ThemeResource TextPrimaryBrush}"
+                                                Text="{Binding DisplayName}" />
+                                            <TextBlock
+                                                Style="{StaticResource MutedTextBlockStyle}"
+                                                Text="{Binding SelectedSummaryText}" />
+                                        </StackPanel>
+                                        <TextBlock Grid.Column="1" Text="{Binding SizeText}" />
+                                        <TextBlock Grid.Column="2" Text="{Binding CountText}" />
+                                        <TextBlock
+                                            Grid.Column="3"
+                                            Foreground="{ThemeResource AccentMintTextBrush}"
+                                            Text="{Binding WastedText}" />
+                                    </Grid>
+                                </Expander.Header>
+                                <ListView ItemsSource="{Binding VisibleFiles}" SelectionMode="None">
+                                    <ListView.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <ItemsStackPanel />
+                                        </ItemsPanelTemplate>
+                                    </ListView.ItemsPanel>
+                                    <ListView.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid
+                                                ColumnSpacing="10"
+                                                Padding="0,6"
+                                                Tapped="FileRow_Tapped">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <CheckBox
+                                                    AutomationProperties.Name="Select file for deletion"
+                                                    IsChecked="{Binding IsSelected, Mode=TwoWay}" />
+                                                <StackPanel Grid.Column="1">
+                                                    <TextBlock
+                                                        Style="{StaticResource PathTextBlockStyle}"
+                                                        Text="{Binding DisplayPath}"
+                                                        ToolTipService.ToolTip="{Binding FullPath}" />
+                                                    <TextBlock
+                                                        Style="{ThemeResource CaptionTextBlockStyle}"
+                                                        Text="{Binding ModifiedText}" />
+                                                </StackPanel>
+                                                <TextBlock Grid.Column="2" Text="{Binding SizeText}" />
+                                                <StackPanel
+                                                    Grid.Column="3"
+                                                    Orientation="Horizontal"
+                                                    Spacing="4"
+                                                    Visibility="{Binding KeptVisibility}">
+                                                    <SymbolIcon Symbol="Favorite" />
+                                                    <TextBlock
+                                                        Foreground="{ThemeResource AccentMintTextBrush}"
+                                                        Text="Kept" />
+                                                </StackPanel>
+                                                <StackPanel Grid.Column="4" Orientation="Horizontal" Spacing="4">
+                                                    <Button
+                                                        AutomationProperties.Name="Open file"
+                                                        Click="OpenFile_Click">
+                                                        <SymbolIcon Symbol="OpenFile" />
+                                                    </Button>
+                                                    <Button
+                                                        AutomationProperties.Name="Reveal in folder"
+                                                        Click="RevealFile_Click">
+                                                        <SymbolIcon Symbol="Folder" />
+                                                    </Button>
+                                                    <Button
+                                                        AutomationProperties.Name="Copy path"
+                                                        Click="CopyPath_Click">
+                                                        <SymbolIcon Symbol="Copy" />
+                                                    </Button>
+                                                    <Button
+                                                        AutomationProperties.Name="Exclude from group"
+                                                        Command="{Binding ViewModel.ExcludeFileCommand, ElementName=PageRoot}"
+                                                        CommandParameter="{Binding}">
+                                                        <SymbolIcon Symbol="Remove" />
+                                                    </Button>
+                                                </StackPanel>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ListView.ItemTemplate>
+                                </ListView>
+                            </Expander>
+                        </DataTemplate>
+                    </ListView.ItemTemplate>
+                </ListView>
+
+                <Border
+                    Grid.Column="1"
+                    Style="{StaticResource CardBorderStyle}"
+                    Visibility="{Binding PreviewPaneVisibility}">
+                    <StackPanel Spacing="12">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock
+                                Style="{ThemeResource SubtitleTextBlockStyle}"
+                                Foreground="{ThemeResource TextPrimaryBrush}"
+                                Text="Preview" />
+                            <Button
+                                Grid.Column="1"
+                                AutomationProperties.Name="Collapse preview pane"
+                                Command="{Binding TogglePreviewPaneCommand}">
+                                <SymbolIcon Symbol="Cancel" />
+                            </Button>
+                        </Grid>
+                        <Image
+                            MaxHeight="220"
+                            Stretch="Uniform"
+                            Source="{Binding PreviewImage}"
+                            Visibility="{Binding PreviewImageVisibility}" />
+                        <FontIcon
+                            HorizontalAlignment="Center"
+                            FontSize="56"
+                            Foreground="{ThemeResource AccentMintTextBrush}"
+                            Glyph="&#xE8A5;"
+                            Visibility="{Binding PreviewMetadataVisibility}" />
+                        <TextBlock
+                            Style="{ThemeResource BodyStrongTextBlockStyle}"
+                            Foreground="{ThemeResource TextPrimaryBrush}"
+                            Text="{Binding PreviewFileName}" />
+                        <TextBlock
+                            Style="{StaticResource PathTextBlockStyle}"
+                            Text="{Binding PreviewPath}" />
+                        <TextBlock
+                            Style="{StaticResource MutedTextBlockStyle}"
+                            Text="{Binding PreviewDetails}" />
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </Grid>
+    </Grid>
+</Page>

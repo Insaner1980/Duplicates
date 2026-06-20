@@ -1,0 +1,53 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows10.0.22621.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.22000.0</TargetPlatformMinVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>14.0</LangVersion>
+    <IsPackable>false</IsPackable>
+    <Platforms>x64</Platforms>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="CommunityToolkit.Mvvm" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference
+      Include="..\Duplicates\Duplicates.csproj"
+      ReferenceOutputAssembly="false"
+      PrivateAssets="all"
+      AdditionalProperties="DisableWindowsAppSdkAutoInitialize=true" />
+    <ProjectReference Include="..\Duplicates.Engine\Duplicates.Engine.csproj" />
+    <Reference Include="Duplicates">
+      <HintPath>..\Duplicates\bin\$(Platform)\$(Configuration)\net10.0-windows10.0.22621.0\win-x64\Duplicates.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="Microsoft.WinUI">
+      <HintPath>..\Duplicates\bin\$(Platform)\$(Configuration)\net10.0-windows10.0.22621.0\win-x64\Microsoft.WinUI.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="WinRT.Runtime">
+      <HintPath>..\Duplicates\bin\$(Platform)\$(Configuration)\net10.0-windows10.0.22621.0\win-x64\WinRT.Runtime.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>

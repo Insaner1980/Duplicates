@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="Duplicates.Views.SettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:toolkit="using:CommunityToolkit.WinUI.Controls">
+    <ScrollViewer Background="{ThemeResource BgBaseBrush}">
+        <Grid
+            MaxWidth="900"
+            Padding="32"
+            HorizontalAlignment="Center">
+            <StackPanel Spacing="24">
+                <StackPanel Spacing="6">
+                    <TextBlock
+                        Style="{ThemeResource TitleTextBlockStyle}"
+                        Foreground="{ThemeResource TextPrimaryBrush}"
+                        Text="Settings" />
+                    <TextBlock
+                        Style="{StaticResource MutedTextBlockStyle}"
+                        Text="Defaults are saved locally. Scan folders and results are not stored." />
+                </StackPanel>
+
+                <toolkit:SettingsExpander Header="Appearance" Description="Theme and window material.">
+                    <StackPanel Spacing="16">
+                        <toolkit:SettingsCard Header="Theme">
+                            <ComboBox
+                                ItemsSource="{Binding ThemeModes}"
+                                SelectedItem="{Binding SelectedThemeMode, Mode=TwoWay}" />
+                        </toolkit:SettingsCard>
+                        <toolkit:SettingsCard Header="Backdrop">
+                            <ComboBox
+                                ItemsSource="{Binding BackdropModes}"
+                                SelectedItem="{Binding SelectedBackdropMode, Mode=TwoWay}" />
+                        </toolkit:SettingsCard>
+                    </StackPanel>
+                </toolkit:SettingsExpander>
+
+                <toolkit:SettingsExpander Header="Scanning defaults" Description="Used when a new scan page is opened.">
+                    <StackPanel Spacing="16">
+                        <toolkit:SettingsCard Header="Default minimum file size">
+                            <StackPanel Spacing="8">
+                                <TextBox
+                                    Width="180"
+                                    Text="{Binding DefaultMinSizeText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <Button
+                                        Content="Any"
+                                        Command="{Binding UseAnySizeDefaultCommand}"
+                                        Style="{StaticResource SecondaryButtonStyle}" />
+                                    <Button
+                                        Content="1 KB+"
+                                        Command="{Binding UseOneKilobyteDefaultCommand}"
+                                        Style="{StaticResource SecondaryButtonStyle}" />
+                                    <Button
+                                        Content="1 MB+"
+                                        Command="{Binding UseOneMegabyteDefaultCommand}"
+                                        Style="{StaticResource SecondaryButtonStyle}" />
+                                </StackPanel>
+                            </StackPanel>
+                        </toolkit:SettingsCard>
+                        <toolkit:SettingsCard Header="Verify byte-by-byte">
+                            <ToggleSwitch IsOn="{Binding VerifyByteByByte, Mode=TwoWay}" />
+                        </toolkit:SettingsCard>
+                        <toolkit:SettingsCard Header="Ignore hidden files">
+                            <ToggleSwitch IsOn="{Binding IgnoreHiddenFiles, Mode=TwoWay}" />
+                        </toolkit:SettingsCard>
+                        <toolkit:SettingsCard Header="Ignore system files">
+                            <ToggleSwitch IsOn="{Binding IgnoreSystemFiles, Mode=TwoWay}" />
+                        </toolkit:SettingsCard>
+                        <toolkit:SettingsCard Header="Hashing concurrency">
+                            <ComboBox
+                                ItemsSource="{Binding ConcurrencyOptions}"
+                                SelectedIndex="{Binding SelectedConcurrencyIndex, Mode=TwoWay}" />
+                        </toolkit:SettingsCard>
+                    </StackPanel>
+                </toolkit:SettingsExpander>
+
+                <toolkit:SettingsExpander Header="Deletion" Description="Deletion defaults are intentionally conservative.">
+                    <StackPanel Spacing="16">
+                        <toolkit:SettingsCard Header="Default action">
+                            <ComboBox
+                                ItemsSource="{Binding DeletionModes}"
+                                SelectedItem="{Binding SelectedDeletionMode, Mode=TwoWay}" />
+                        </toolkit:SettingsCard>
+                        <InfoBar
+                            IsOpen="True"
+                            Message="Permanent delete bypasses the Recycle Bin and cannot be undone."
+                            Severity="Warning"
+                            Visibility="{Binding PermanentDeleteWarningVisibility}" />
+                        <toolkit:SettingsCard Header="Confirm before deleting">
+                            <ToggleSwitch IsOn="{Binding ConfirmBeforeDelete, Mode=TwoWay}" />
+                        </toolkit:SettingsCard>
+                    </StackPanel>
+                </toolkit:SettingsExpander>
+
+                <Border Style="{StaticResource CardBorderStyle}">
+                    <StackPanel Spacing="8">
+                        <TextBlock
+                            Style="{ThemeResource SubtitleTextBlockStyle}"
+                            Foreground="{ThemeResource TextPrimaryBrush}"
+                            Text="About" />
+                        <TextBlock
+                            Style="{StaticResource MutedTextBlockStyle}"
+                            Text="{Binding AboutText}" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </Grid>
+    </ScrollViewer>
+</Page>
