@@ -25,6 +25,7 @@
 
 - `Duplicates.Engine` ei saa viitata WinUI-, Windows App SDK- tai app-projektin tyyppeihin.
 - UI kutsuu enginea vain `DuplicateScanner.ScanAsync(ScanOptions, IProgress<ScanProgress>?, CancellationToken)` -rajapinnan kautta.
+- Scan-sivun valitut kansiot ovat `ScanFolderViewModel`-olioita: `FullPath` on kanoninen engineen välitettävä arvo, kun taas `DisplayName` ja `ParentPath` ovat vain UI-esitystä. Rinnakkaista string-kokoelmaa ei ylläpidetä.
 - Results-nakyma sailyttaa kanonisen duplicate-ryhmalistan erillaan nakyvasta search/sort-listasta. Valinnat, delete guard, delete-paivitykset ja totals lasketaan kanonisesta listasta.
 - Tiedostopoistot kulkevat `IFileActionService.DeleteAsync(files, IProgress<DeleteProgress>?, CancellationToken)` -rajapinnan kautta; progress ja failure-detailit ovat appin ViewModel-tilaa.
 - Skannaustuloksia, valintoja ja poistovirtaa ei tallenneta pysyvasti v1:ssa. Vain asetukset tallennetaan `%LOCALAPPDATA%\Duplicates\settings.json`.
@@ -41,6 +42,7 @@
 - Ala lisaa omaa `ControlTemplate`a tai yleisia Primary/Secondary/Card-jaljitelmatyyleja. Kayta WinUI:n `AccentButtonStyle`a ensisijaisiin toimintoihin ja oletustyylia muihin painikkeisiin.
 - Lukittu varipaletti on `Colors.xaml`-tiedoston viisi `Palette*`-resurssia. Kontrollien hover-, pressed-, disabled-, focus- ja high-contrast-tilat kuuluvat WinUI:lle.
 - Results kayttaa grouped `ListView` -valintaa preview-kohteelle; poistovalinta sailyy erillisena `DuplicateFileViewModel.IsSelected`-tilana ja kanoninen ryhmalista pysyy `ResultsViewModel`issa.
+- Results-lista ei lyhennä hakemistopolkuja ViewModelissa. Lista saa rivittää polun enintään kahdelle riville, tooltip säilyttää koko tiedostopolun ja Preview näyttää valitun tiedoston koko polun ilman ellipsiä.
 
 ## Verifiointi
 

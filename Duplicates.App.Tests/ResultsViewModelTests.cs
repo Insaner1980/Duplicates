@@ -289,14 +289,18 @@ public sealed class ResultsViewModelTests
     }
 
     [Fact]
-    public void DuplicateFileDisplayDirectoryPathShortensLongPathsFromTheMiddle()
+    public void DuplicateFileDisplayDirectoryPathPreservesTheCompleteDirectory()
     {
-        var group = new DuplicateGroupViewModel(NewGroup(1, "a-very-long-folder-name-with-many-segments\\another-long-folder-name\\nested\\deeper\\deepest", "long-file-name.txt", "copy.txt"));
+        var group = new DuplicateGroupViewModel(
+            NewGroup(
+                1,
+                "a-very-long-folder-name-with-many-segments\\another-long-folder-name\\nested\\deeper\\deepest",
+                "long-file-name.txt",
+                "copy.txt"));
         DuplicateFileViewModel file = group.Files[0];
 
-        Assert.Contains("...", file.DisplayDirectoryPath);
-        Assert.EndsWith("deepest", file.DisplayDirectoryPath, StringComparison.Ordinal);
-        Assert.True(file.DisplayDirectoryPath.Length < file.DirectoryPath.Length);
+        Assert.Equal(file.DirectoryPath, file.DisplayDirectoryPath);
+        Assert.DoesNotContain("...", file.DisplayDirectoryPath, StringComparison.Ordinal);
     }
 
     [Fact]

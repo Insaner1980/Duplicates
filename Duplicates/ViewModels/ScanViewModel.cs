@@ -31,7 +31,7 @@ public sealed partial class ScanViewModel : ObservableObject
 
     public event EventHandler<ScanResult>? ScanCompleted;
 
-    public ObservableCollection<string> Folders { get; } = [];
+    public ObservableCollection<ScanFolderViewModel> Folders { get; } = [];
 
     [ObservableProperty]
     public partial bool IncludeSubfolders { get; set; } = true;
@@ -143,17 +143,18 @@ public sealed partial class ScanViewModel : ObservableObject
             return;
         }
 
-        string fullPath = Path.GetFullPath(folder);
-        if (Folders.Any(existing => string.Equals(existing, fullPath, StringComparison.OrdinalIgnoreCase)))
+        var item = new ScanFolderViewModel(folder);
+        if (Folders.Any(existing =>
+            string.Equals(existing.FullPath, item.FullPath, StringComparison.OrdinalIgnoreCase)))
         {
             return;
         }
 
-        Folders.Add(fullPath);
+        Folders.Add(item);
     }
 
     [RelayCommand]
-    private void RemoveFolder(string folder)
+    private void RemoveFolder(ScanFolderViewModel folder)
     {
         Folders.Remove(folder);
     }
@@ -233,7 +234,7 @@ public sealed partial class ScanViewModel : ObservableObject
 
         return new ScanOptions
         {
-            Folders = Folders.ToArray(),
+            Folders = Folders.Select(static folder => folder.FullPath).ToArray(),
             IncludeSubfolders = IncludeSubfolders,
             MinSizeBytes = minSize,
             MaxSizeBytes = maxSize,

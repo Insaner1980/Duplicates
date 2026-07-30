@@ -9,6 +9,69 @@ namespace Duplicates.App.Tests;
 public sealed class ScanViewModelTests
 {
     [Fact]
+    public void AddFolderCreatesReadablePresentationWithoutChangingCanonicalPath()
+    {
+        string root = Path.Combine(
+            Path.GetTempPath(),
+            $"Duplicates-{Guid.NewGuid():N}");
+        string folder = Path.Combine(root, "Documents", "ObsidianVault");
+        Directory.CreateDirectory(folder);
+
+        try
+        {
+            var viewModel = new ScanViewModel(
+                new DuplicateScanner(),
+                new FakeSettingsService(),
+                new ResultsStore());
+
+            viewModel.AddFolder(folder);
+
+            ScanFolderViewModel item = Assert.Single(viewModel.Folders);
+            Assert.Equal(Path.GetFullPath(folder), item.FullPath);
+            Assert.Equal("ObsidianVault", item.DisplayName);
+            Assert.Equal(Path.GetDirectoryName(Path.GetFullPath(folder)), item.ParentPath);
+            Assert.True(viewModel.HasFolders);
+            Assert.Equal(Visibility.Collapsed, viewModel.EmptyFoldersVisibility);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void FolderCommandsUseCanonicalFullPathAndKeepOneSelection()
+    {
+        string root = Path.Combine(
+            Path.GetTempPath(),
+            $"Duplicates-{Guid.NewGuid():N}");
+        string folder = Path.Combine(root, "ObsidianVault");
+        Directory.CreateDirectory(folder);
+
+        try
+        {
+            var viewModel = new ScanViewModel(
+                new DuplicateScanner(),
+                new FakeSettingsService(),
+                new ResultsStore());
+
+            viewModel.AddFolder(folder);
+            viewModel.AddFolder(folder + Path.DirectorySeparatorChar);
+
+            ScanFolderViewModel item = Assert.Single(viewModel.Folders);
+            viewModel.RemoveFolderCommand.Execute(item);
+
+            Assert.Empty(viewModel.Folders);
+            Assert.False(viewModel.HasFolders);
+            Assert.Equal(Visibility.Visible, viewModel.EmptyFoldersVisibility);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void SettingsChanged_UpdatesScanDefaultsWhenNotScanning()
     {
         var settings = new FakeSettingsService();

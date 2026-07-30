@@ -21,6 +21,7 @@
 
 ## App boundary
 
+- Scan-sivun valitut kansiot ovat `ScanFolderViewModel`-olioita: `FullPath` on kanoninen engineen välitettävä arvo, kun taas `DisplayName` ja `ParentPath` ovat vain UI-esitystä. Rinnakkaista string-kokoelmaa ei ylläpidetä.
 - Results state has one canonical `_allGroups` list and a filtered/sorted visible `Groups` collection. Selections, totals, delete guard, undo snapshots, exclude-from-group, and post-delete updates use the canonical list so search/sort does not reset state.
 - `IFileActionService.DeleteAsync` accepts `IProgress<DeleteProgress>?` and reports per-file delete progress. The Results ViewModel owns delete progress text/value and failure-detail display.
 - Scan defaults listen to `ISettingsService.SettingsChanged` when no scan is active. Skipped paths from `ScanResult.SkippedPaths` are surfaced on Results.
@@ -48,3 +49,4 @@
 - Settings uses Community Toolkit `SettingsCard` and `SettingsExpander` controls.
 - `Colors.xaml` owns exactly five locked palette colors; WinUI owns control templates and interaction-state visuals.
 - Results preview selection (`SelectedFile`) and delete selection (`DuplicateFileViewModel.IsSelected`) are separate data flows. The canonical duplicate groups remain in `ResultsViewModel`.
+- Results-lista ei lyhennä hakemistopolkuja ViewModelissa. Lista saa rivittää polun enintään kahdelle riville, tooltip säilyttää koko tiedostopolun ja Preview näyttää valitun tiedoston koko polun ilman ellipsiä.

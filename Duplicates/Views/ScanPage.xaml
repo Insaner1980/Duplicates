@@ -11,6 +11,10 @@
                     <VisualState.StateTriggers>
                         <AdaptiveTrigger MinWindowWidth="0" />
                     </VisualState.StateTriggers>
+                    <VisualState.Setters>
+                        <Setter Target="HeaderActionRail.(Grid.Row)" Value="1" />
+                        <Setter Target="FoldersActionRail.(Grid.Row)" Value="1" />
+                    </VisualState.Setters>
                 </VisualState>
                 <VisualState x:Name="Medium">
                     <VisualState.StateTriggers>
@@ -41,6 +45,10 @@
             Padding="{StaticResource PageHeaderPadding}"
             HorizontalAlignment="Stretch"
             ColumnSpacing="{StaticResource SpacingLarge}">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
@@ -55,18 +63,24 @@
                     Style="{StaticResource MutedTextBlockStyle}"
                     Text="Choose folders and compare files by exact byte content." />
             </StackPanel>
-            <Button
-                Grid.Column="1"
-                VerticalAlignment="Center"
-                AccessKey="S"
-                Command="{Binding StartScanCommand}"
-                Style="{StaticResource AccentButtonStyle}"
-                Visibility="{Binding SetupVisibility}">
-                <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpacingSmall}">
-                    <SymbolIcon Symbol="Play" />
-                    <TextBlock Text="Start scan" />
-                </StackPanel>
-            </Button>
+            <Grid
+                x:Name="HeaderActionRail"
+                Grid.ColumnSpan="2"
+                MaxWidth="{StaticResource ScanWorkAreaMaxWidth}"
+                HorizontalAlignment="Stretch">
+                <Button
+                    HorizontalAlignment="Right"
+                    VerticalAlignment="Center"
+                    AccessKey="S"
+                    Command="{Binding StartScanCommand}"
+                    Style="{StaticResource AccentButtonStyle}"
+                    Visibility="{Binding SetupVisibility}">
+                    <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpacingSmall}">
+                        <SymbolIcon Symbol="Play" />
+                        <TextBlock Text="Start scan" />
+                    </StackPanel>
+                </Button>
+            </Grid>
         </Grid>
 
         <ScrollViewer
@@ -95,6 +109,10 @@
                             Drop="FoldersRegion_Drop">
                             <StackPanel Spacing="{StaticResource SpacingLarge}">
                                 <Grid ColumnSpacing="{StaticResource SpacingMedium}">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="Auto" />
@@ -108,39 +126,69 @@
                                             Style="{StaticResource MutedTextBlockStyle}"
                                             Text="Drop folders here or choose one or more locations to scan." />
                                     </StackPanel>
-                                    <Button
-                                        Grid.Column="1"
-                                        VerticalAlignment="Center"
-                                        AccessKey="A"
-                                        Style="{StaticResource AccentButtonStyle}"
-                                        Click="AddFolder_Click">
-                                        <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpacingSmall}">
-                                            <SymbolIcon Symbol="Add" />
-                                            <TextBlock Text="Add folder" />
-                                        </StackPanel>
-                                    </Button>
+                                    <Grid
+                                        x:Name="FoldersActionRail"
+                                        Grid.ColumnSpan="2"
+                                        MaxWidth="{StaticResource ScanWorkAreaMaxWidth}"
+                                        HorizontalAlignment="Stretch">
+                                        <Button
+                                            HorizontalAlignment="Right"
+                                            VerticalAlignment="Center"
+                                            AccessKey="A"
+                                            Style="{StaticResource AccentButtonStyle}"
+                                            Click="AddFolder_Click">
+                                            <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpacingSmall}">
+                                                <SymbolIcon Symbol="Add" />
+                                                <TextBlock Text="Add folder" />
+                                            </StackPanel>
+                                        </Button>
+                                    </Grid>
                                 </Grid>
 
                                 <ListView
                                     x:Name="FoldersList"
                                     MaxHeight="{StaticResource FolderListMaxHeight}"
+                                    MaxWidth="{StaticResource ScanWorkAreaMaxWidth}"
+                                    HorizontalAlignment="Stretch"
                                     AutomationProperties.Name="Folders to scan"
                                     ItemsSource="{Binding Folders}"
                                     SelectionMode="None">
+                                    <ListView.ItemContainerStyle>
+                                        <Style TargetType="ListViewItem">
+                                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                        </Style>
+                                    </ListView.ItemContainerStyle>
                                     <ListView.ItemTemplate>
                                         <DataTemplate>
-                                            <Grid Padding="4" ColumnSpacing="{StaticResource SpacingMedium}">
+                                            <Grid
+                                                Padding="8,6"
+                                                ColumnSpacing="{StaticResource SpacingMedium}"
+                                                ToolTipService.ToolTip="{Binding FullPath}">
                                                 <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto" />
                                                     <ColumnDefinition Width="*" />
                                                     <ColumnDefinition Width="Auto" />
                                                 </Grid.ColumnDefinitions>
-                                                <TextBlock
+                                                <FontIcon
                                                     VerticalAlignment="Center"
-                                                    Style="{StaticResource PathTextBlockStyle}"
-                                                    Text="{Binding}"
-                                                    ToolTipService.ToolTip="{Binding}" />
-                                                <Button
+                                                    FontSize="20"
+                                                    Foreground="{ThemeResource TextPrimaryBrush}"
+                                                    Glyph="&#xE8B7;" />
+                                                <StackPanel
                                                     Grid.Column="1"
+                                                    VerticalAlignment="Center"
+                                                    Spacing="2">
+                                                    <TextBlock
+                                                        Style="{ThemeResource BodyStrongTextBlockStyle}"
+                                                        Foreground="{ThemeResource TextPrimaryBrush}"
+                                                        Text="{Binding DisplayName}" />
+                                                    <TextBlock
+                                                        Style="{StaticResource PathTextBlockStyle}"
+                                                        Text="{Binding ParentPath}" />
+                                                </StackPanel>
+                                                <Button
+                                                    Grid.Column="2"
+                                                    VerticalAlignment="Center"
                                                     AutomationProperties.Name="Remove folder"
                                                     Command="{Binding ViewModel.RemoveFolderCommand, ElementName=PageRoot}"
                                                     CommandParameter="{Binding}"
@@ -153,7 +201,9 @@
                                 </ListView>
 
                                 <StackPanel
-                                    HorizontalAlignment="Center"
+                                    x:Name="EmptyFoldersState"
+                                    MaxWidth="{StaticResource ScanWorkAreaMaxWidth}"
+                                    HorizontalAlignment="Stretch"
                                     Spacing="{StaticResource SpacingSmall}"
                                     Visibility="{Binding EmptyFoldersVisibility}">
                                     <FontIcon
@@ -175,9 +225,11 @@
                         </Grid>
 
                         <Expander
+                            x:Name="ScanOptions"
+                            MaxWidth="{StaticResource ScanWorkAreaMaxWidth}"
+                            HorizontalAlignment="Stretch"
                             Header="Scan options"
-                            IsExpanded="True"
-                            Width="{Binding ActualWidth, ElementName=FoldersRegion}">
+                            IsExpanded="True">
                             <StackPanel Padding="0,12,0,0" Spacing="{StaticResource SpacingLarge}">
                                 <Grid
                                     x:Name="OptionsGrid"

@@ -250,7 +250,10 @@
                                 Text="{Binding PreviewFileName}" />
                             <TextBlock
                                 Style="{StaticResource PathTextBlockStyle}"
-                                Text="{Binding PreviewPath}" />
+                                IsTextSelectionEnabled="True"
+                                Text="{Binding PreviewPath}"
+                                TextTrimming="None"
+                                TextWrapping="Wrap" />
                             <TextBlock
                                 Style="{StaticResource MutedTextBlockStyle}"
                                 Text="{Binding PreviewDetails}" />
@@ -346,7 +349,9 @@
                                         <TextBlock
                                             Style="{StaticResource PathTextBlockStyle}"
                                             Foreground="{ThemeResource TextSecondaryBrush}"
-                                            Text="{Binding DisplayDirectoryPath}" />
+                                            MaxLines="2"
+                                            Text="{Binding DisplayDirectoryPath}"
+                                            TextWrapping="Wrap" />
                                         <TextBlock
                                             Style="{ThemeResource CaptionTextBlockStyle}"
                                             Foreground="{ThemeResource TextSecondaryBrush}"
