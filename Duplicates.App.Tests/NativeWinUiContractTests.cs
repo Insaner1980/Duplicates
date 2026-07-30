@@ -85,6 +85,38 @@ public sealed class NativeWinUiContractTests
         Assert.Equal("640", (string?)root.Attribute("MinWidth"));
     }
 
+    [Fact]
+    public void ScanPage_UsesNativeControlsWithoutLegacyCards()
+    {
+        XDocument page = LoadXaml(@"Views\ScanPage.xaml");
+
+        Assert.Equal(2, page.Descendants(Presentation + "NumberBox").Count());
+        Assert.NotEmpty(page.Descendants(Presentation + "ListView"));
+        Assert.NotEmpty(page.Descendants(Presentation + "Expander"));
+        Assert.NotEmpty(page.Descendants(Presentation + "InfoBar"));
+        Assert.NotEmpty(page.Descendants(Presentation + "ProgressBar"));
+        Assert.DoesNotContain(
+            page.Descendants(),
+            element =>
+                (string?)element.Attribute("Style") ==
+                "{StaticResource CardBorderStyle}");
+    }
+
+    [Fact]
+    public void ScanPage_UsesWinUiAccentStyleOnlyForPrimaryActions()
+    {
+        XDocument page = LoadXaml(@"Views\ScanPage.xaml");
+        XElement[] accentButtons = page
+            .Descendants(Presentation + "Button")
+            .Where(
+                element =>
+                    (string?)element.Attribute("Style") ==
+                    "{StaticResource AccentButtonStyle}")
+            .ToArray();
+
+        Assert.Equal(2, accentButtons.Length);
+    }
+
     private static XDocument LoadXaml(string relativePath)
     {
         string path = Path.Combine(AppContext.BaseDirectory, "UiSource", relativePath);

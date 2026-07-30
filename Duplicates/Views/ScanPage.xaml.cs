@@ -49,11 +49,16 @@ public sealed partial class ScanPage : Page
         PickFolderResult? result = await picker.PickSingleFolderAsync();
         if (result is not null)
         {
+            int folderCount = ViewModel.Folders.Count;
             ViewModel.AddFolder(result.Path);
+            if (ViewModel.Folders.Count > folderCount)
+            {
+                FoldersList.Focus(FocusState.Programmatic);
+            }
         }
     }
 
-    private void FoldersCard_DragOver(object sender, DragEventArgs e)
+    private void FoldersRegion_DragOver(object sender, DragEventArgs e)
     {
         if (e.DataView.Contains(StandardDataFormats.StorageItems))
         {
@@ -61,17 +66,23 @@ public sealed partial class ScanPage : Page
         }
     }
 
-    private async void FoldersCard_Drop(object sender, DragEventArgs e)
+    private async void FoldersRegion_Drop(object sender, DragEventArgs e)
     {
         if (!e.DataView.Contains(StandardDataFormats.StorageItems))
         {
             return;
         }
 
+        int folderCount = ViewModel.Folders.Count;
         IReadOnlyList<IStorageItem> items = await e.DataView.GetStorageItemsAsync();
         foreach (StorageFolder folder in items.OfType<StorageFolder>())
         {
             ViewModel.AddFolder(folder.Path);
+        }
+
+        if (ViewModel.Folders.Count > folderCount)
+        {
+            FoldersList.Focus(FocusState.Programmatic);
         }
     }
 
