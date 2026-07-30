@@ -343,6 +343,32 @@ public sealed class NativeWinUiContractTests
                 .Attribute("ToolTipService.ToolTip"));
     }
 
+    [Fact]
+    public void ResultsPage_UsesFullWidthAndKeepsCompletePathAvailable()
+    {
+        XDocument page = LoadXaml(@"Views\ResultsPage.xaml");
+        XElement root = page.Root!
+            .Elements(Presentation + "Grid")
+            .Single();
+        Assert.Equal("24", (string?)root.Attribute("Padding"));
+        Assert.Null(root.Attribute("MaxWidth"));
+
+        XElement rowPath = page
+            .Descendants(Presentation + "TextBlock")
+            .Single(element =>
+                (string?)element.Attribute("Text") == "{Binding DisplayDirectoryPath}");
+        Assert.Equal("Wrap", (string?)rowPath.Attribute("TextWrapping"));
+        Assert.Equal("2", (string?)rowPath.Attribute("MaxLines"));
+
+        XElement previewPath = page
+            .Descendants(Presentation + "TextBlock")
+            .Single(element =>
+                (string?)element.Attribute("Text") == "{Binding PreviewPath}");
+        Assert.Equal("Wrap", (string?)previewPath.Attribute("TextWrapping"));
+        Assert.Equal("None", (string?)previewPath.Attribute("TextTrimming"));
+        Assert.Equal("True", (string?)previewPath.Attribute("IsTextSelectionEnabled"));
+    }
+
     private static XDocument LoadXaml(string relativePath)
     {
         string path = Path.Combine(AppContext.BaseDirectory, "UiSource", relativePath);

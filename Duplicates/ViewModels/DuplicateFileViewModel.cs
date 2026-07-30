@@ -20,7 +20,7 @@ public sealed class DuplicateFileViewModel : ObservableObject
 
     public string FullPath => File.FullPath;
 
-    public string DisplayDirectoryPath => ShortenMiddle(DirectoryPath);
+    public string DisplayDirectoryPath => DirectoryPath;
 
     public string FileName => File.FileName;
 
@@ -85,21 +85,5 @@ public sealed class DuplicateFileViewModel : ObservableObject
             OnPropertyChanged(nameof(KeptVisibility));
             OnPropertyChanged(nameof(DeleteVisibility));
         }
-    }
-
-    private static string ShortenMiddle(string path)
-    {
-        const int maxLength = 72;
-        const int headLength = 28;
-        const int tailLength = 36;
-
-        if (path.Length <= maxLength)
-        {
-            return path;
-        }
-
-        string fileName = Path.GetFileName(path);
-        int tailStart = Math.Max(path.Length - Math.Max(tailLength, fileName.Length), 0);
-        return string.Concat(path.AsSpan(0, headLength), "...", path.AsSpan(tailStart));
     }
 }

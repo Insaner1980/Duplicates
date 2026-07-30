@@ -42,6 +42,7 @@
 - Ala lisaa omaa `ControlTemplate`a tai yleisia Primary/Secondary/Card-jaljitelmatyyleja. Kayta WinUI:n `AccentButtonStyle`a ensisijaisiin toimintoihin ja oletustyylia muihin painikkeisiin.
 - Lukittu varipaletti on `Colors.xaml`-tiedoston viisi `Palette*`-resurssia. Kontrollien hover-, pressed-, disabled-, focus- ja high-contrast-tilat kuuluvat WinUI:lle.
 - Results kayttaa grouped `ListView` -valintaa preview-kohteelle; poistovalinta sailyy erillisena `DuplicateFileViewModel.IsSelected`-tilana ja kanoninen ryhmalista pysyy `ResultsViewModel`issa.
+- Results-lista ei lyhennä hakemistopolkuja ViewModelissa. Lista saa rivittää polun enintään kahdelle riville, tooltip säilyttää koko tiedostopolun ja Preview näyttää valitun tiedoston koko polun ilman ellipsiä.
 
 ## Verifiointi
 

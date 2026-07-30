@@ -49,3 +49,4 @@
 - Settings uses Community Toolkit `SettingsCard` and `SettingsExpander` controls.
 - `Colors.xaml` owns exactly five locked palette colors; WinUI owns control templates and interaction-state visuals.
 - Results preview selection (`SelectedFile`) and delete selection (`DuplicateFileViewModel.IsSelected`) are separate data flows. The canonical duplicate groups remain in `ResultsViewModel`.
+- Results-lista ei lyhennä hakemistopolkuja ViewModelissa. Lista saa rivittää polun enintään kahdelle riville, tooltip säilyttää koko tiedostopolun ja Preview näyttää valitun tiedoston koko polun ilman ellipsiä.
