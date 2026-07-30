@@ -35,8 +35,12 @@
 - UI-tekstit ovat englanniksi.
 - Valttamattomat koodikommentit pidetaan lyhyina; kayta suomea vain jos kommentti on agenttityon tai projektiohjeen kontekstia, ei kayttajalle nakyvaa UI-tekstia.
 - Kaikki varit ovat `Duplicates/Themes/Colors.xaml`-tokeneita. Ala kirjoita inline-hex-arvoja XAML-nakymiin tai ViewModel-koodiin.
-- Mint on ainoa turvallisen toiminnan accent-varina. Delete/destructive-toiminnot kayttavat danger-tokenia.
+- `#D72323` on sovelluksen yleinen accent-vari kaikissa interaktiivisissa kontrolleissa. Delete/destructive-toiminnot kayttavat samaa punaista danger-tokenin kautta.
 - Kayta WinUI:n natiiveja kontrolleja ja Community Toolkitin `SettingsCard`/`SettingsExpander`-kontrolleja, kun se sopii speksiin.
+- Interaktiiviset pinnat kayttavat WinUI 3:n tai Microsoftin WinUI Community Toolkitin tarkoitukseen suunniteltuja kontrolleja ja niiden oletustemplaatteja.
+- Ala lisaa omaa `ControlTemplate`a tai yleisia Primary/Secondary/Card-jaljitelmatyyleja. Kayta WinUI:n `AccentButtonStyle`a ensisijaisiin toimintoihin ja oletustyylia muihin painikkeisiin.
+- Lukittu varipaletti on `Colors.xaml`-tiedoston viisi `Palette*`-resurssia. Kontrollien hover-, pressed-, disabled-, focus- ja high-contrast-tilat kuuluvat WinUI:lle.
+- Results kayttaa grouped `ListView` -valintaa preview-kohteelle; poistovalinta sailyy erillisena `DuplicateFileViewModel.IsSelected`-tilana ja kanoninen ryhmalista pysyy `ResultsViewModel`issa.
 
 ## Verifiointi
 
@@ -46,5 +50,8 @@
 - App-buildin peruskomento: `dotnet build Duplicates\Duplicates.csproj -c Debug -p:Platform=x64 --no-restore`.
 - Koko restore: `dotnet restore Duplicates.slnx`.
 - Lopuksi aja `dotnet format Duplicates.slnx --verify-no-changes`, ellei se esty tunnettuun toolchain-ongelmaan.
-- Ala aja kayttajan `lc` / `sc` -skripteja. Tassa projektissa niita ei ole; jos ne lisataan myohemmin, kayttaja ajaa ne itse.
+- Paikalliset Windows-check-wrapperit ovat `tools/lc.ps1`, `tools/sc.ps1`, `tools/bc.ps1`, `tools/tc.ps1`, `tools/dc.ps1`, `tools/ss.ps1`, `tools/ql.ps1` ja `tools/db.ps1`.
+- Wrapperit delegoivat yhteiseen `C:\Dev\Windows-check`-runkoon ja lukevat projektikohtaiset polut `tools/windows-check.config.psd1`-tiedostosta.
+- Windows-check-runko on vain WinUI/.NET-projekteille; ala kayta Android-checkin Gradle-, ktlint-, detekt-, Compose- tai MobSF-polkuja tassa projektissa.
+- Wrapperiraportit kirjoitetaan `reports/`-kansioon, joka pysyy gitignoressa.
 - Packaged Debug -launch edellyttaa Windows App Runtime 1.8 -paketteja nykyiselle kayttajalle. Asennusapu on `tools\Install-WindowsAppRuntime1.8.ps1`.

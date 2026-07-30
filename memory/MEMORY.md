@@ -33,3 +33,18 @@
 - Current app build command: `dotnet build Duplicates\Duplicates.csproj -c Debug -p:Platform=x64 --no-restore`.
 - Packaged debug launch needs Windows App Runtime 1.8 installed for the current user. Use `tools\Install-WindowsAppRuntime1.8.ps1` if `REGDB_E_CLASSNOTREG` appears before app code starts.
 - A verified smoke path is: build Debug x64, register `Duplicates\bin\x64\Debug\net10.0-windows10.0.22621.0\win-x64\AppxManifest.xml`, then launch `shell:AppsFolder\D8D23102-5301-46E2-A506-C486B1E205FB_m8bfy0jvdgykw!App`.
+
+## Tooling notes
+
+- Project-local wrappers `tools/lc.ps1`, `tools/sc.ps1`, `tools/bc.ps1`, `tools/tc.ps1`, `tools/dc.ps1`, `tools/ss.ps1`, `tools/ql.ps1`, and `tools/db.ps1` delegate to the shared Windows/.NET checker at `C:\Dev\Windows-check`.
+- `tools/windows-check.config.psd1` records the repo-specific solution, Engine/App test projects, and Debug x64 app build command.
+- These wrappers are intentionally separate from Android-check tooling; do not route Duplicates checks through Gradle, ktlint, detekt, Compose, MobSF, or other Android-specific scripts.
+
+## 2026-07-30 - Native WinUI 3 interaction architecture
+
+- The shell remains one native `TitleBar` plus `NavigationView` and `Frame`.
+- Scan uses native `ListView`, `NumberBox`, `Expander`, `InfoBar`, and `ProgressBar` controls with responsive 640/1008 epx states.
+- Results uses a `CommandBar`, grouped single-selection `ListView`, row `MenuFlyout`, and responsive `SplitView` preview.
+- Settings uses Community Toolkit `SettingsCard` and `SettingsExpander` controls.
+- `Colors.xaml` owns exactly five locked palette colors; WinUI owns control templates and interaction-state visuals.
+- Results preview selection (`SelectedFile`) and delete selection (`DuplicateFileViewModel.IsSelected`) are separate data flows. The canonical duplicate groups remain in `ResultsViewModel`.
