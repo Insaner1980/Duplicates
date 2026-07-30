@@ -70,6 +70,21 @@ public sealed class NativeWinUiContractTests
                 key.StartsWith("RadioButton", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void MainWindow_UsesOneNativeTitleBarNavigationViewAndFrame()
+    {
+        XDocument main = LoadXaml("MainWindow.xaml");
+
+        Assert.Single(main.Descendants(Presentation + "TitleBar"));
+        Assert.Single(main.Descendants(Presentation + "NavigationView"));
+        Assert.Single(main.Descendants(Presentation + "Frame"));
+
+        XElement root = main
+            .Descendants(Presentation + "Grid")
+            .Single(element => (string?)element.Attribute(Xaml + "Name") == "Root");
+        Assert.Equal("640", (string?)root.Attribute("MinWidth"));
+    }
+
     private static XDocument LoadXaml(string relativePath)
     {
         string path = Path.Combine(AppContext.BaseDirectory, "UiSource", relativePath);

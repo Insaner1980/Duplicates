@@ -6,9 +6,9 @@
     Title="Duplicates">
     <Grid
         x:Name="Root"
-        MinWidth="960"
-        MinHeight="640"
-        Background="{ThemeResource BgBaseBrush}">
+        MinWidth="640"
+        MinHeight="480"
+        Background="Transparent">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
@@ -31,8 +31,11 @@
             AlwaysShowHeader="False"
             IsBackButtonVisible="Collapsed"
             IsPaneToggleButtonVisible="False"
+            IsSettingsVisible="True"
             OpenPaneLength="260"
             PaneDisplayMode="Auto"
+            AutomationProperties.LandmarkType="Navigation"
+            AutomationProperties.Name="Main navigation"
             SelectionChanged="RootNavigationView_SelectionChanged">
             <NavigationView.MenuItems>
                 <NavigationViewItem
@@ -53,14 +56,9 @@
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
             </NavigationView.MenuItems>
-            <NavigationView.FooterMenuItems>
-                <NavigationViewItem Content="Settings" Tag="Settings">
-                    <NavigationViewItem.Icon>
-                        <SymbolIcon Symbol="Setting" />
-                    </NavigationViewItem.Icon>
-                </NavigationViewItem>
-            </NavigationView.FooterMenuItems>
-            <Frame x:Name="RootFrame" />
+            <Frame
+                x:Name="RootFrame"
+                AutomationProperties.LandmarkType="Main" />
         </NavigationView>
     </Grid>
 </Window>

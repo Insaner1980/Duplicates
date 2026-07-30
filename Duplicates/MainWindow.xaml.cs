@@ -22,9 +22,16 @@ public sealed partial class MainWindow : Window
         _services.ThemeService.Apply(this, Root, _services.SettingsService.Current);
         _services.SettingsService.SettingsChanged += SettingsChanged;
         _services.ResultsStore.ResultChanged += ResultsChanged;
+        Closed += MainWindow_Closed;
 
         RootNavigationView.SelectedItem = ScanNavigationItem;
         RootFrame.Navigate(typeof(ScanPage));
+    }
+
+    private void MainWindow_Closed(object sender, WindowEventArgs args)
+    {
+        _services.SettingsService.SettingsChanged -= SettingsChanged;
+        _services.ResultsStore.ResultChanged -= ResultsChanged;
     }
 
     private void SettingsChanged(object? sender, Models.AppSettings settings)
@@ -44,6 +51,12 @@ public sealed partial class MainWindow : Window
 
     private void RootNavigationView_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
     {
+        if (args.IsSettingsSelected)
+        {
+            NavigateTo(typeof(SettingsPage));
+            return;
+        }
+
         if (args.SelectedItemContainer?.Tag is not string tag)
         {
             return;
@@ -52,10 +65,14 @@ public sealed partial class MainWindow : Window
         Type pageType = tag switch
         {
             "Results" => typeof(ResultsPage),
-            "Settings" => typeof(SettingsPage),
             _ => typeof(ScanPage),
         };
 
+        NavigateTo(pageType);
+    }
+
+    private void NavigateTo(Type pageType)
+    {
         if (RootFrame.CurrentSourcePageType != pageType)
         {
             RootFrame.Navigate(pageType);
