@@ -25,6 +25,7 @@
 
 - `Duplicates.Engine` ei saa viitata WinUI-, Windows App SDK- tai app-projektin tyyppeihin.
 - UI kutsuu enginea vain `DuplicateScanner.ScanAsync(ScanOptions, IProgress<ScanProgress>?, CancellationToken)` -rajapinnan kautta.
+- Scan-sivun valitut kansiot ovat `ScanFolderViewModel`-olioita: `FullPath` on kanoninen engineen välitettävä arvo, kun taas `DisplayName` ja `ParentPath` ovat vain UI-esitystä. Rinnakkaista string-kokoelmaa ei ylläpidetä.
 - Results-nakyma sailyttaa kanonisen duplicate-ryhmalistan erillaan nakyvasta search/sort-listasta. Valinnat, delete guard, delete-paivitykset ja totals lasketaan kanonisesta listasta.
 - Tiedostopoistot kulkevat `IFileActionService.DeleteAsync(files, IProgress<DeleteProgress>?, CancellationToken)` -rajapinnan kautta; progress ja failure-detailit ovat appin ViewModel-tilaa.
 - Skannaustuloksia, valintoja ja poistovirtaa ei tallenneta pysyvasti v1:ssa. Vain asetukset tallennetaan `%LOCALAPPDATA%\Duplicates\settings.json`.
