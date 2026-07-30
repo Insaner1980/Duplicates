@@ -276,18 +276,71 @@ public sealed class NativeWinUiContractTests
     }
 
     [Fact]
-    public void ScanPage_OptionsUseTheAvailableSectionWidth()
+    public void ScanPage_CentersActionsFoldersAndOptionsOnOneWorkArea()
     {
+        XDocument styles = LoadXaml(@"Themes\Styles.xaml");
+        XElement workAreaWidth = styles
+            .Descendants(Xaml + "Double")
+            .Single(element =>
+                (string?)element.Attribute(Xaml + "Key") == "ScanWorkAreaMaxWidth");
+        Assert.Equal("680", workAreaWidth.Value.Trim());
+
         XDocument page = LoadXaml(@"Views\ScanPage.xaml");
+        string[] centeredNames =
+        [
+            "HeaderActionRail",
+            "FoldersActionRail",
+            "FoldersList",
+            "EmptyFoldersState",
+            "ScanOptions",
+        ];
+
+        foreach (string name in centeredNames)
+        {
+            XElement element = page
+                .Descendants()
+                .Single(candidate =>
+                    (string?)candidate.Attribute(Xaml + "Name") == name);
+            Assert.Equal(
+                "{StaticResource ScanWorkAreaMaxWidth}",
+                (string?)element.Attribute("MaxWidth"));
+            Assert.Equal("Stretch", (string?)element.Attribute("HorizontalAlignment"));
+        }
+
         XElement scanOptions = page
             .Descendants(Presentation + "Expander")
-            .Single(
-                element =>
-                    (string?)element.Attribute("Header") == "Scan options");
+            .Single(element =>
+                (string?)element.Attribute(Xaml + "Name") == "ScanOptions");
+        Assert.Null(scanOptions.Attribute("Width"));
+    }
 
+    [Fact]
+    public void ScanPage_FolderRowsExposeNameParentPathAndNearbyRemoveAction()
+    {
+        XDocument page = LoadXaml(@"Views\ScanPage.xaml");
+        XElement foldersList = page
+            .Descendants(Presentation + "ListView")
+            .Single(element =>
+                (string?)element.Attribute(Xaml + "Name") == "FoldersList");
+        XElement template = Assert.Single(
+            foldersList.Descendants(Presentation + "DataTemplate"));
+
+        Assert.Contains(
+            template.Descendants(Presentation + "TextBlock"),
+            element => (string?)element.Attribute("Text") == "{Binding DisplayName}");
+        Assert.Contains(
+            template.Descendants(Presentation + "TextBlock"),
+            element => (string?)element.Attribute("Text") == "{Binding ParentPath}");
+
+        XElement removeButton = template
+            .Descendants(Presentation + "Button")
+            .Single(element =>
+                (string?)element.Attribute("AutomationProperties.Name") == "Remove folder");
+        Assert.Equal("{Binding}", (string?)removeButton.Attribute("CommandParameter"));
         Assert.Equal(
-            "{Binding ActualWidth, ElementName=FoldersRegion}",
-            (string?)scanOptions.Attribute("Width"));
+            "{Binding FullPath}",
+            (string?)template.Descendants(Presentation + "Grid").First()
+                .Attribute("ToolTipService.ToolTip"));
     }
 
     private static XDocument LoadXaml(string relativePath)
