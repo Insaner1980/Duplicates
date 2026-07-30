@@ -46,30 +46,71 @@ public sealed partial class ResultsPage : Page
             return;
         }
 
-        if (App.Current.Services.SettingsService.Current.ConfirmBeforeDelete)
+        if (!await ConfirmDeleteAsync(
+                ViewModel.SelectedFileCount,
+                ViewModel.SelectedGroupCount,
+                ViewModel.SelectedBytes))
         {
-            string targetText = App.Current.Services.SettingsService.Current.DeletionMode == DeletionMode.RecycleBin
-                ? "Files will be sent to the Recycle Bin."
-                : "Files will be permanently deleted. This cannot be undone.";
-
-            var dialog = new ContentDialog
-            {
-                XamlRoot = XamlRoot,
-                Title = $"Delete {ViewModel.SelectedFileCount:N0} files?",
-                Content = $"{ByteFormatter.Format(ViewModel.SelectedBytes)} selected. {targetText}",
-                PrimaryButtonText = "Delete",
-                CloseButtonText = "Cancel",
-                DefaultButton = ContentDialogButton.Close,
-            };
-
-            ContentDialogResult result = await dialog.ShowAsync();
-            if (result != ContentDialogResult.Primary)
-            {
-                return;
-            }
+            return;
         }
 
         await ViewModel.DeleteSelectedAsync(CancellationToken.None);
+    }
+
+    private async void DeleteFile_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not DuplicateFileViewModel file || ViewModel.IsDeleting)
+        {
+            return;
+        }
+
+        if (!await ConfirmDeleteAsync(1, 1, file.SizeBytes, file.FileName, file.FullPath))
+        {
+            return;
+        }
+
+        await ViewModel.DeleteFileAsync(file, CancellationToken.None);
+    }
+
+    private async Task<bool> ConfirmDeleteAsync(
+        int fileCount,
+        int groupCount,
+        long bytes,
+        string? fileName = null,
+        string? fullPath = null)
+    {
+        if (!App.Current.Services.SettingsService.Current.ConfirmBeforeDelete)
+        {
+            return true;
+        }
+
+        bool isSingleFile = fileCount == 1;
+        bool usesRecycleBin = App.Current.Services.SettingsService.Current.DeletionMode == DeletionMode.RecycleBin;
+        string targetText = (usesRecycleBin, isSingleFile) switch
+        {
+            (true, true) => "The file will be sent to the Recycle Bin.",
+            (true, false) => "Files will be sent to the Recycle Bin.",
+            (false, true) => "The file will be permanently deleted. This cannot be undone.",
+            (false, false) => "Files will be permanently deleted. This cannot be undone.",
+        };
+        string title = fileCount == 1 && fileName is not null
+            ? $"Delete {fileName}?"
+            : $"Delete {fileCount:N0} files from {groupCount:N0} groups?";
+        string selectionText = fileCount == 1 && fullPath is not null
+            ? $"{fullPath}\n\n{ByteFormatter.Format(bytes)} selected."
+            : $"{ByteFormatter.Format(bytes)} selected.";
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = title,
+            Content = $"{selectionText} {targetText}",
+            PrimaryButtonText = "Delete",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+        };
+
+        return await dialog.ShowAsync() == ContentDialogResult.Primary;
     }
 
     private void NewScan_Click(object sender, RoutedEventArgs e)
@@ -103,11 +144,4 @@ public sealed partial class ResultsPage : Page
         }
     }
 
-    private void FileRow_Tapped(object sender, Microsoft.UI.Xaml.Input.TappedRoutedEventArgs e)
-    {
-        if ((sender as FrameworkElement)?.DataContext is DuplicateFileViewModel file)
-        {
-            ViewModel.SelectedFile = file;
-        }
-    }
 }

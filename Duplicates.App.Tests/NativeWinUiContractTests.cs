@@ -129,6 +129,26 @@ public sealed class NativeWinUiContractTests
         Assert.Empty(page.Descendants(Presentation + "TextBox"));
     }
 
+    [Fact]
+    public void ResultsPage_UsesGroupedListViewInsteadOfTappedBorders()
+    {
+        XDocument page = LoadXaml(@"Views\ResultsPage.xaml");
+
+        XElement results = page
+            .Descendants(Presentation + "ListView")
+            .Single(
+                element =>
+                    (string?)element.Attribute(Xaml + "Name") == "ResultsList");
+
+        Assert.Equal("Single", (string?)results.Attribute("SelectionMode"));
+        Assert.Equal(
+            "{Binding SelectedFile, Mode=TwoWay}",
+            (string?)results.Attribute("SelectedItem"));
+        Assert.DoesNotContain(
+            page.Descendants(Presentation + "Border"),
+            element => element.Attribute("Tapped") is not null);
+    }
+
     private static XDocument LoadXaml(string relativePath)
     {
         string path = Path.Combine(AppContext.BaseDirectory, "UiSource", relativePath);
