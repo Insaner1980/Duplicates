@@ -19,18 +19,33 @@ public sealed class SettingsViewModelTests
     }
 
     [Fact]
-    public void MinimumSizePresetCommandsUpdateDefaultMinSizeText()
+    public void MinimumSizePresetCommandsUpdateDefaultMinSizeValue()
     {
         var viewModel = new SettingsViewModel(new FakeSettingsService());
 
         viewModel.UseAnySizeDefaultCommand.Execute(null);
-        Assert.Equal("0", viewModel.DefaultMinSizeText);
+        Assert.Equal(0d, viewModel.DefaultMinSizeValue);
 
         viewModel.UseOneKilobyteDefaultCommand.Execute(null);
-        Assert.Equal("1024", viewModel.DefaultMinSizeText);
+        Assert.Equal(1024d, viewModel.DefaultMinSizeValue);
 
         viewModel.UseOneMegabyteDefaultCommand.Execute(null);
-        Assert.Equal("1048576", viewModel.DefaultMinSizeText);
+        Assert.Equal(1_048_576d, viewModel.DefaultMinSizeValue);
+    }
+
+    [Theory]
+    [InlineData(2048d, 2048L)]
+    [InlineData(-1d, 0L)]
+    public void DefaultMinimumSizeValue_IsNormalizedBeforeSaving(
+        double input,
+        long expected)
+    {
+        var settings = new FakeSettingsService();
+        var viewModel = new SettingsViewModel(settings);
+
+        viewModel.DefaultMinSizeValue = input;
+
+        Assert.Equal(expected, settings.Current.DefaultMinSizeBytes);
     }
 
     [Fact]

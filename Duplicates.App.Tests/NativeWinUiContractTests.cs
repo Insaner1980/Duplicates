@@ -117,6 +117,18 @@ public sealed class NativeWinUiContractTests
         Assert.Equal(2, accentButtons.Length);
     }
 
+    [Fact]
+    public void SettingsPage_UsesRecommendedSettingsControlsAndNumberBox()
+    {
+        XDocument page = LoadXaml(@"Views\SettingsPage.xaml");
+        XNamespace toolkit = "using:CommunityToolkit.WinUI.Controls";
+
+        Assert.Equal(3, page.Descendants(toolkit + "SettingsExpander").Count());
+        Assert.NotEmpty(page.Descendants(toolkit + "SettingsCard"));
+        Assert.Single(page.Descendants(Presentation + "NumberBox"));
+        Assert.Empty(page.Descendants(Presentation + "TextBox"));
+    }
+
     private static XDocument LoadXaml(string relativePath)
     {
         string path = Path.Combine(AppContext.BaseDirectory, "UiSource", relativePath);

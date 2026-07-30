@@ -63,9 +63,12 @@
                                 Header="Default minimum file size"
                                 Description="Skip files smaller than this value.">
                                 <StackPanel Spacing="{StaticResource SpacingSmall}">
-                                    <TextBox
+                                    <NumberBox
                                         MinWidth="220"
-                                        Text="{Binding DefaultMinSizeText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                        Minimum="0"
+                                        SpinButtonPlacementMode="Compact"
+                                        ValidationMode="InvalidInputOverwritten"
+                                        Value="{Binding DefaultMinSizeValue, Mode=TwoWay}" />
                                     <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpacingSmall}">
                                         <Button
                                             Content="Any"

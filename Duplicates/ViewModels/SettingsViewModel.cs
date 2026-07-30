@@ -1,4 +1,3 @@
-using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Duplicates.Models;
@@ -35,7 +34,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     public partial BackdropMode SelectedBackdropMode { get; set; }
 
     [ObservableProperty]
-    public partial string DefaultMinSizeText { get; set; } = "1";
+    public partial double DefaultMinSizeValue { get; set; } = 1d;
 
     [ObservableProperty]
     public partial bool VerifyByteByByte { get; set; }
@@ -65,7 +64,7 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     partial void OnSelectedBackdropModeChanged(BackdropMode value) => QueueSave();
 
-    partial void OnDefaultMinSizeTextChanged(string value) => QueueSave();
+    partial void OnDefaultMinSizeValueChanged(double value) => QueueSave();
 
     partial void OnVerifyByteByByteChanged(bool value) => QueueSave();
 
@@ -82,19 +81,19 @@ public sealed partial class SettingsViewModel : ObservableObject
     [RelayCommand]
     private void UseAnySizeDefault()
     {
-        DefaultMinSizeText = "0";
+        DefaultMinSizeValue = 0d;
     }
 
     [RelayCommand]
     private void UseOneKilobyteDefault()
     {
-        DefaultMinSizeText = "1024";
+        DefaultMinSizeValue = 1024d;
     }
 
     [RelayCommand]
     private void UseOneMegabyteDefault()
     {
-        DefaultMinSizeText = "1048576";
+        DefaultMinSizeValue = 1_048_576d;
     }
 
     private void LoadFromSettings(AppSettings settings)
@@ -104,7 +103,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         {
             SelectedThemeMode = settings.ThemeMode;
             SelectedBackdropMode = settings.BackdropMode;
-            DefaultMinSizeText = settings.DefaultMinSizeBytes.ToString(CultureInfo.InvariantCulture);
+            DefaultMinSizeValue = ByteSizeInput.FromBytes(settings.DefaultMinSizeBytes);
             VerifyByteByByte = settings.VerifyByteByByte;
             IgnoreHiddenFiles = settings.IgnoreHiddenFiles;
             IgnoreSystemFiles = settings.IgnoreSystemFiles;
@@ -137,9 +136,9 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     private Task SaveAsync()
     {
-        long minSize = long.TryParse(DefaultMinSizeText, NumberStyles.Integer, CultureInfo.InvariantCulture, out long parsed)
-            ? Math.Max(0, parsed)
-            : _settingsService.Current.DefaultMinSizeBytes;
+        long minSize = ByteSizeInput.ToBytes(
+            DefaultMinSizeValue,
+            _settingsService.Current.DefaultMinSizeBytes);
 
         var settings = new AppSettings
         {
