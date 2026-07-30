@@ -69,7 +69,10 @@
             </Button>
         </Grid>
 
-        <ScrollViewer Grid.Row="1">
+        <ScrollViewer
+            Grid.Row="1"
+            HorizontalScrollBarVisibility="Disabled"
+            HorizontalScrollMode="Disabled">
             <Grid
                 MaxWidth="{StaticResource ContentMaxWidth}"
                 Padding="{StaticResource PageContentPadding}"
@@ -173,7 +176,8 @@
 
                         <Expander
                             Header="Scan options"
-                            IsExpanded="True">
+                            IsExpanded="True"
+                            Width="{Binding ActualWidth, ElementName=FoldersRegion}">
                             <StackPanel Padding="0,12,0,0" Spacing="{StaticResource SpacingLarge}">
                                 <Grid
                                     x:Name="OptionsGrid"

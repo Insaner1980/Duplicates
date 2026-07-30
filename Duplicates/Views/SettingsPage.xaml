@@ -25,7 +25,10 @@
                 Text="Defaults are saved locally. Scan folders and results are not stored." />
         </StackPanel>
 
-        <ScrollViewer Grid.Row="1">
+        <ScrollViewer
+            Grid.Row="1"
+            HorizontalScrollBarVisibility="Disabled"
+            HorizontalScrollMode="Disabled">
             <Grid
                 MaxWidth="{StaticResource SettingsContentMaxWidth}"
                 Padding="{StaticResource PageContentPadding}"

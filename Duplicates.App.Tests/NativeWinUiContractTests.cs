@@ -258,6 +258,38 @@ public sealed class NativeWinUiContractTests
         }
     }
 
+    [Theory]
+    [InlineData(@"Views\ScanPage.xaml")]
+    [InlineData(@"Views\SettingsPage.xaml")]
+    public void ResponsivePages_DoNotAllowHorizontalContentClipping(string relativePath)
+    {
+        XDocument page = LoadXaml(relativePath);
+        XElement scrollViewer = Assert.Single(
+            page.Descendants(Presentation + "ScrollViewer"));
+
+        Assert.Equal(
+            "Disabled",
+            (string?)scrollViewer.Attribute("HorizontalScrollMode"));
+        Assert.Equal(
+            "Disabled",
+            (string?)scrollViewer.Attribute("HorizontalScrollBarVisibility"));
+    }
+
+    [Fact]
+    public void ScanPage_OptionsUseTheAvailableSectionWidth()
+    {
+        XDocument page = LoadXaml(@"Views\ScanPage.xaml");
+        XElement scanOptions = page
+            .Descendants(Presentation + "Expander")
+            .Single(
+                element =>
+                    (string?)element.Attribute("Header") == "Scan options");
+
+        Assert.Equal(
+            "{Binding ActualWidth, ElementName=FoldersRegion}",
+            (string?)scanOptions.Attribute("Width"));
+    }
+
     private static XDocument LoadXaml(string relativePath)
     {
         string path = Path.Combine(AppContext.BaseDirectory, "UiSource", relativePath);
