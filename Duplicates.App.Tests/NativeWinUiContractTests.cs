@@ -344,6 +344,25 @@ public sealed class NativeWinUiContractTests
     }
 
     [Fact]
+    public void ScanPage_SmallMovesActionRailsBelowHeaderCopy()
+    {
+        XDocument page = LoadXaml(@"Views\ScanPage.xaml");
+        XElement small = page
+            .Descendants(Presentation + "VisualState")
+            .Single(element =>
+                (string?)element.Attribute(Xaml + "Name") == "Small");
+        Dictionary<string, string> setters = small
+            .Descendants(Presentation + "Setter")
+            .ToDictionary(
+                element => (string)element.Attribute("Target")!,
+                element => (string)element.Attribute("Value")!,
+                StringComparer.Ordinal);
+
+        Assert.Equal("1", setters["HeaderActionRail.(Grid.Row)"]);
+        Assert.Equal("1", setters["FoldersActionRail.(Grid.Row)"]);
+    }
+
+    [Fact]
     public void ResultsPage_UsesFullWidthAndKeepsCompletePathAvailable()
     {
         XDocument page = LoadXaml(@"Views\ResultsPage.xaml");

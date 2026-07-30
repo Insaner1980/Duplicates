@@ -11,6 +11,10 @@
                     <VisualState.StateTriggers>
                         <AdaptiveTrigger MinWindowWidth="0" />
                     </VisualState.StateTriggers>
+                    <VisualState.Setters>
+                        <Setter Target="HeaderActionRail.(Grid.Row)" Value="1" />
+                        <Setter Target="FoldersActionRail.(Grid.Row)" Value="1" />
+                    </VisualState.Setters>
                 </VisualState>
                 <VisualState x:Name="Medium">
                     <VisualState.StateTriggers>
@@ -41,6 +45,10 @@
             Padding="{StaticResource PageHeaderPadding}"
             HorizontalAlignment="Stretch"
             ColumnSpacing="{StaticResource SpacingLarge}">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
@@ -101,6 +109,10 @@
                             Drop="FoldersRegion_Drop">
                             <StackPanel Spacing="{StaticResource SpacingLarge}">
                                 <Grid ColumnSpacing="{StaticResource SpacingMedium}">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="Auto" />
