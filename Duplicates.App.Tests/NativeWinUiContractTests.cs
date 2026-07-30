@@ -29,6 +29,47 @@ public sealed class NativeWinUiContractTests
         Assert.Equal(5, palette.Count);
     }
 
+    [Fact]
+    public void Resources_DoNotDefineLegacyButtonOrCardEmulationStyles()
+    {
+        XDocument styles = LoadXaml(@"Themes\Styles.xaml");
+        HashSet<string> keys = styles
+            .Descendants()
+            .Attributes(Xaml + "Key")
+            .Select(attribute => attribute.Value)
+            .ToHashSet(StringComparer.Ordinal);
+
+        string[] forbidden =
+        [
+            "PrimaryButtonStyle",
+            "SecondaryButtonStyle",
+            "DangerButtonStyle",
+            "WhiteOutlineButtonStyle",
+            "RemoveFolderButtonStyle",
+        ];
+
+        Assert.DoesNotContain(forbidden, keys.Contains);
+    }
+
+    [Fact]
+    public void Colors_DoNotReplacePerControlDefaultStateResources()
+    {
+        XDocument colors = LoadXaml(@"Themes\Colors.xaml");
+        HashSet<string> keys = colors
+            .Descendants()
+            .Attributes(Xaml + "Key")
+            .Select(attribute => attribute.Value)
+            .ToHashSet(StringComparer.Ordinal);
+
+        Assert.DoesNotContain(
+            keys,
+            key =>
+                key.StartsWith("Button", StringComparison.Ordinal) ||
+                key.StartsWith("CheckBox", StringComparison.Ordinal) ||
+                key.StartsWith("ToggleSwitch", StringComparison.Ordinal) ||
+                key.StartsWith("RadioButton", StringComparison.Ordinal));
+    }
+
     private static XDocument LoadXaml(string relativePath)
     {
         string path = Path.Combine(AppContext.BaseDirectory, "UiSource", relativePath);

@@ -2,56 +2,70 @@
 <ResourceDictionary
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Color x:Key="PaletteBlack">#000000</Color>
+    <Color x:Key="PaletteBackground">#181818</Color>
+    <Color x:Key="PaletteSurface">#242424</Color>
+    <Color x:Key="PaletteAccentRed">#D72323</Color>
+    <Color x:Key="PaletteWarmWhite">#F5EDED</Color>
+
+    <SolidColorBrush x:Key="AccentRedBrush" Color="{StaticResource PaletteAccentRed}" />
+    <SolidColorBrush x:Key="AccentRedTextBrush" Color="{StaticResource PaletteAccentRed}" />
+    <SolidColorBrush x:Key="DangerBrush" Color="{StaticResource PaletteAccentRed}" />
+    <SolidColorBrush x:Key="SuccessBrush" Color="{StaticResource PaletteAccentRed}" />
+    <SolidColorBrush x:Key="OnAccentBrush" Color="{StaticResource PaletteWarmWhite}" />
+    <SolidColorBrush x:Key="OnDangerBrush" Color="{StaticResource PaletteWarmWhite}" />
+
+    <StaticResource x:Key="SystemAccentColor" ResourceKey="PaletteAccentRed" />
+    <StaticResource x:Key="SystemAccentColorLight1" ResourceKey="PaletteAccentRed" />
+    <StaticResource x:Key="SystemAccentColorLight2" ResourceKey="PaletteAccentRed" />
+    <StaticResource x:Key="SystemAccentColorLight3" ResourceKey="PaletteAccentRed" />
+    <StaticResource x:Key="SystemAccentColorDark1" ResourceKey="PaletteAccentRed" />
+    <StaticResource x:Key="SystemAccentColorDark2" ResourceKey="PaletteAccentRed" />
+    <StaticResource x:Key="SystemAccentColorDark3" ResourceKey="PaletteAccentRed" />
+
+    <SolidColorBrush x:Key="AccentFillColorDefaultBrush" Color="{StaticResource PaletteAccentRed}" />
+    <SolidColorBrush x:Key="AccentFillColorSecondaryBrush" Color="{StaticResource PaletteAccentRed}" Opacity="0.90" />
+    <SolidColorBrush x:Key="AccentFillColorTertiaryBrush" Color="{StaticResource PaletteAccentRed}" Opacity="0.80" />
+    <SolidColorBrush x:Key="AccentFillColorDisabledBrush" Color="{StaticResource PaletteAccentRed}" Opacity="0.40" />
+    <SolidColorBrush x:Key="AccentTextFillColorPrimaryBrush" Color="{StaticResource PaletteAccentRed}" />
+    <SolidColorBrush x:Key="AccentTextFillColorSecondaryBrush" Color="{StaticResource PaletteAccentRed}" Opacity="0.90" />
+    <SolidColorBrush x:Key="AccentTextFillColorTertiaryBrush" Color="{StaticResource PaletteAccentRed}" Opacity="0.80" />
+    <SolidColorBrush x:Key="TextOnAccentFillColorPrimaryBrush" Color="{StaticResource PaletteWarmWhite}" />
+    <SolidColorBrush x:Key="TextOnAccentFillColorSecondaryBrush" Color="{StaticResource PaletteWarmWhite}" Opacity="0.70" />
+    <SolidColorBrush x:Key="NavigationViewSelectionIndicatorForeground" Color="{StaticResource PaletteAccentRed}" />
+
     <ResourceDictionary.ThemeDictionaries>
         <ResourceDictionary x:Key="Default">
-            <SolidColorBrush x:Key="BgBaseBrush" Color="#0E0E11" />
-            <SolidColorBrush x:Key="BgSurfaceBrush" Color="#16161B" />
-            <SolidColorBrush x:Key="BgCardBrush" Color="#1C1C22" />
-            <SolidColorBrush x:Key="BgCardHoverBrush" Color="#232329" />
-            <SolidColorBrush x:Key="BgCardSelectedBrush" Color="#22332E" />
-            <SolidColorBrush x:Key="StrokeSubtleBrush" Color="#2A2A31" />
-            <SolidColorBrush x:Key="StrokeDefaultBrush" Color="#34343C" />
-            <SolidColorBrush x:Key="StrokeStrongBrush" Color="#43434C" />
-            <SolidColorBrush x:Key="TextPrimaryBrush" Color="#F4F4F6" />
-            <SolidColorBrush x:Key="TextSecondaryBrush" Color="#A6A6B0" />
-            <SolidColorBrush x:Key="TextTertiaryBrush" Color="#6E6E78" />
-            <SolidColorBrush x:Key="AccentMintBrush" Color="#2DD4A8" />
-            <SolidColorBrush x:Key="AccentMintHoverBrush" Color="#41DBB4" />
-            <SolidColorBrush x:Key="AccentMintPressedBrush" Color="#22B591" />
-            <SolidColorBrush x:Key="AccentMintTextBrush" Color="#5EEAD4" />
-            <SolidColorBrush x:Key="AccentMintSubtleBrush" Color="#1F2DD4A8" />
-            <SolidColorBrush x:Key="OnAccentBrush" Color="#0E0E11" />
-            <SolidColorBrush x:Key="FocusRingBrush" Color="#5EEAD4" />
-            <SolidColorBrush x:Key="SuccessBrush" Color="#34D399" />
-            <SolidColorBrush x:Key="WarningBrush" Color="#FBBF24" />
-            <SolidColorBrush x:Key="DangerBrush" Color="#F87171" />
-            <SolidColorBrush x:Key="DangerHoverBrush" Color="#FCA5A5" />
-            <SolidColorBrush x:Key="OnDangerBrush" Color="#FFFFFF" />
+            <SolidColorBrush x:Key="BgBaseBrush" Color="{StaticResource PaletteBackground}" />
+            <SolidColorBrush x:Key="BgSurfaceBrush" Color="{StaticResource PaletteBackground}" />
+            <SolidColorBrush x:Key="BgCardBrush" Color="{StaticResource PaletteSurface}" />
+            <SolidColorBrush x:Key="BgCardHoverBrush" Color="{StaticResource PaletteSurface}" />
+            <SolidColorBrush x:Key="BgCardSelectedBrush" Color="{StaticResource PaletteSurface}" />
+            <SolidColorBrush x:Key="StrokeSubtleBrush" Color="{StaticResource PaletteBlack}" />
+            <SolidColorBrush x:Key="StrokeDefaultBrush" Color="{StaticResource PaletteAccentRed}" />
+            <SolidColorBrush x:Key="StrokeStrongBrush" Color="{StaticResource PaletteWarmWhite}" />
+            <SolidColorBrush x:Key="TextPrimaryBrush" Color="{StaticResource PaletteWarmWhite}" />
+            <SolidColorBrush x:Key="TextSecondaryBrush" Color="{StaticResource PaletteWarmWhite}" />
+            <SolidColorBrush x:Key="TextTertiaryBrush" Color="{StaticResource PaletteWarmWhite}" />
+            <SolidColorBrush x:Key="NavigationViewDefaultPaneBackground" Color="{StaticResource PaletteBackground}" />
+            <SolidColorBrush x:Key="NavigationViewExpandedPaneBackground" Color="{StaticResource PaletteBackground}" />
+            <SolidColorBrush x:Key="NavigationViewContentBackground" Color="{StaticResource PaletteBackground}" />
         </ResourceDictionary>
         <ResourceDictionary x:Key="Light">
-            <SolidColorBrush x:Key="BgBaseBrush" Color="#F6F6F8" />
-            <SolidColorBrush x:Key="BgSurfaceBrush" Color="#FFFFFF" />
-            <SolidColorBrush x:Key="BgCardBrush" Color="#FFFFFF" />
-            <SolidColorBrush x:Key="BgCardHoverBrush" Color="#F2F2F4" />
-            <SolidColorBrush x:Key="BgCardSelectedBrush" Color="#E6F7F1" />
-            <SolidColorBrush x:Key="StrokeSubtleBrush" Color="#ECECEF" />
-            <SolidColorBrush x:Key="StrokeDefaultBrush" Color="#E0E0E4" />
-            <SolidColorBrush x:Key="StrokeStrongBrush" Color="#CFCFD6" />
-            <SolidColorBrush x:Key="TextPrimaryBrush" Color="#16161A" />
-            <SolidColorBrush x:Key="TextSecondaryBrush" Color="#55555F" />
-            <SolidColorBrush x:Key="TextTertiaryBrush" Color="#87878F" />
-            <SolidColorBrush x:Key="AccentMintBrush" Color="#14C0A0" />
-            <SolidColorBrush x:Key="AccentMintHoverBrush" Color="#0FA98C" />
-            <SolidColorBrush x:Key="AccentMintPressedBrush" Color="#0C8A71" />
-            <SolidColorBrush x:Key="AccentMintTextBrush" Color="#0C8E73" />
-            <SolidColorBrush x:Key="AccentMintSubtleBrush" Color="#1F12B89A" />
-            <SolidColorBrush x:Key="OnAccentBrush" Color="#0E0E11" />
-            <SolidColorBrush x:Key="FocusRingBrush" Color="#0C8E73" />
-            <SolidColorBrush x:Key="SuccessBrush" Color="#10B981" />
-            <SolidColorBrush x:Key="WarningBrush" Color="#D97706" />
-            <SolidColorBrush x:Key="DangerBrush" Color="#DC2626" />
-            <SolidColorBrush x:Key="DangerHoverBrush" Color="#B91C1C" />
-            <SolidColorBrush x:Key="OnDangerBrush" Color="#FFFFFF" />
+            <SolidColorBrush x:Key="BgBaseBrush" Color="{StaticResource PaletteWarmWhite}" />
+            <SolidColorBrush x:Key="BgSurfaceBrush" Color="{StaticResource PaletteWarmWhite}" />
+            <SolidColorBrush x:Key="BgCardBrush" Color="{StaticResource PaletteWarmWhite}" />
+            <SolidColorBrush x:Key="BgCardHoverBrush" Color="{StaticResource PaletteWarmWhite}" />
+            <SolidColorBrush x:Key="BgCardSelectedBrush" Color="{StaticResource PaletteWarmWhite}" />
+            <SolidColorBrush x:Key="StrokeSubtleBrush" Color="{StaticResource PaletteSurface}" />
+            <SolidColorBrush x:Key="StrokeDefaultBrush" Color="{StaticResource PaletteAccentRed}" />
+            <SolidColorBrush x:Key="StrokeStrongBrush" Color="{StaticResource PaletteBlack}" />
+            <SolidColorBrush x:Key="TextPrimaryBrush" Color="{StaticResource PaletteBlack}" />
+            <SolidColorBrush x:Key="TextSecondaryBrush" Color="{StaticResource PaletteSurface}" />
+            <SolidColorBrush x:Key="TextTertiaryBrush" Color="{StaticResource PaletteSurface}" />
+            <SolidColorBrush x:Key="NavigationViewDefaultPaneBackground" Color="{StaticResource PaletteWarmWhite}" />
+            <SolidColorBrush x:Key="NavigationViewExpandedPaneBackground" Color="{StaticResource PaletteWarmWhite}" />
+            <SolidColorBrush x:Key="NavigationViewContentBackground" Color="{StaticResource PaletteWarmWhite}" />
         </ResourceDictionary>
     </ResourceDictionary.ThemeDictionaries>
 </ResourceDictionary>
