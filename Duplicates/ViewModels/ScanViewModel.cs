@@ -37,10 +37,10 @@ public sealed partial class ScanViewModel : ObservableObject
     public partial bool IncludeSubfolders { get; set; } = true;
 
     [ObservableProperty]
-    public partial string MinSizeText { get; set; } = "1";
+    public partial double MinSizeValue { get; set; } = 1d;
 
     [ObservableProperty]
-    public partial string MaxSizeText { get; set; } = string.Empty;
+    public partial double MaxSizeValue { get; set; } = ByteSizeInput.NoMaximum;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(CategoryFiltersVisibility))]
@@ -130,7 +130,7 @@ public sealed partial class ScanViewModel : ObservableObject
     public void ResetFromSettings()
     {
         AppSettings settings = _settingsService.Current;
-        MinSizeText = settings.DefaultMinSizeBytes.ToString(CultureInfo.InvariantCulture);
+        MinSizeValue = ByteSizeInput.FromBytes(settings.DefaultMinSizeBytes);
         IgnoreHiddenFiles = settings.IgnoreHiddenFiles;
         IgnoreSystemFiles = settings.IgnoreSystemFiles;
         VerifyByteByByte = settings.VerifyByteByByte;
@@ -200,20 +200,20 @@ public sealed partial class ScanViewModel : ObservableObject
     [RelayCommand]
     private void UseAnySize()
     {
-        MinSizeText = "0";
-        MaxSizeText = string.Empty;
+        MinSizeValue = 0d;
+        MaxSizeValue = ByteSizeInput.NoMaximum;
     }
 
     [RelayCommand]
     private void UseOneKilobyteMinimum()
     {
-        MinSizeText = "1024";
+        MinSizeValue = 1024d;
     }
 
     [RelayCommand]
     private void UseOneMegabyteMinimum()
     {
-        MinSizeText = "1048576";
+        MinSizeValue = 1_048_576d;
     }
 
     private bool CanStartScan()
@@ -223,10 +223,13 @@ public sealed partial class ScanViewModel : ObservableObject
 
     private ScanOptions BuildScanOptions()
     {
-        long minSize = ParseSize(MinSizeText, _settingsService.Current.DefaultMinSizeBytes);
-        long maxSize = string.IsNullOrWhiteSpace(MaxSizeText)
-            ? long.MaxValue
-            : ParseSize(MaxSizeText, long.MaxValue);
+        long minSize = ByteSizeInput.ToBytes(
+            MinSizeValue,
+            _settingsService.Current.DefaultMinSizeBytes);
+        long maxSize = ByteSizeInput.ToBytes(
+            MaxSizeValue,
+            long.MaxValue,
+            noValueMeansMaximum: true);
 
         return new ScanOptions
         {
@@ -322,13 +325,6 @@ public sealed partial class ScanViewModel : ObservableObject
         double remainingRatio = (progress.TotalBytesToProcess - progress.BytesProcessed) / (double)progress.BytesProcessed;
         TimeSpan remaining = TimeSpan.FromTicks((long)(elapsed.Ticks * remainingRatio));
         return remaining.TotalSeconds < 1 ? "<1s" : $"{Math.Ceiling(remaining.TotalSeconds):N0}s";
-    }
-
-    private static long ParseSize(string text, long fallback)
-    {
-        return long.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out long value)
-            ? Math.Max(0, value)
-            : fallback;
     }
 
     partial void OnIsScanningChanged(bool value)

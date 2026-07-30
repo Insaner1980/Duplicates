@@ -22,7 +22,7 @@ public sealed class ScanViewModelTests
             VerifyByteByByte = false,
         });
 
-        Assert.Equal("2048", viewModel.MinSizeText);
+        Assert.Equal(2048d, viewModel.MinSizeValue);
         Assert.False(viewModel.IgnoreHiddenFiles);
         Assert.False(viewModel.IgnoreSystemFiles);
         Assert.False(viewModel.VerifyByteByByte);
@@ -35,12 +35,52 @@ public sealed class ScanViewModelTests
         var viewModel = new ScanViewModel(new DuplicateScanner(), settings, new ResultsStore())
         {
             IsScanning = true,
-            MinSizeText = "99",
+            MinSizeValue = 99d,
         };
 
         settings.SetCurrent(new AppSettings { DefaultMinSizeBytes = 2048 });
 
-        Assert.Equal("99", viewModel.MinSizeText);
+        Assert.Equal(99d, viewModel.MinSizeValue);
+    }
+
+    [Fact]
+    public void SizePresets_SetNumberBoxValuesAndNoMaximum()
+    {
+        var viewModel = new ScanViewModel(
+            new DuplicateScanner(),
+            new FakeSettingsService(),
+            new ResultsStore());
+
+        viewModel.UseOneKilobyteMinimumCommand.Execute(null);
+        Assert.Equal(1024d, viewModel.MinSizeValue);
+
+        viewModel.UseOneMegabyteMinimumCommand.Execute(null);
+        Assert.Equal(1_048_576d, viewModel.MinSizeValue);
+
+        viewModel.UseAnySizeCommand.Execute(null);
+        Assert.Equal(0d, viewModel.MinSizeValue);
+        Assert.True(double.IsNaN(viewModel.MaxSizeValue));
+    }
+
+    [Theory]
+    [InlineData(-1d, 0L)]
+    [InlineData(123.9d, 123L)]
+    [InlineData(double.PositiveInfinity, 7L)]
+    public void ByteSizeInput_NormalizesNumberBoxValues(double value, long expected)
+    {
+        Assert.Equal(expected, ByteSizeInput.ToBytes(value, fallback: 7L));
+    }
+
+    [Fact]
+    public void ByteSizeInput_TreatsEmptyMaximumAsUnbounded()
+    {
+        Assert.Equal(
+            long.MaxValue,
+            ByteSizeInput.ToBytes(
+                ByteSizeInput.NoMaximum,
+                fallback: 7L,
+                noValueMeansMaximum: true));
+        Assert.True(double.IsNaN(ByteSizeInput.FromBytes(long.MaxValue)));
     }
 
     [Fact]

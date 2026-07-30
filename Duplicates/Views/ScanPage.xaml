@@ -187,14 +187,20 @@
                                                 <ColumnDefinition Width="*" />
                                                 <ColumnDefinition Width="*" />
                                             </Grid.ColumnDefinitions>
-                                            <TextBox
+                                            <NumberBox
                                                 Header="Minimum size, bytes"
-                                                Text="{Binding MinSizeText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                                            <TextBox
+                                                Minimum="0"
+                                                SpinButtonPlacementMode="Compact"
+                                                ValidationMode="InvalidInputOverwritten"
+                                                Value="{Binding MinSizeValue, Mode=TwoWay}" />
+                                            <NumberBox
                                                 Grid.Column="1"
                                                 Header="Maximum size, bytes"
+                                                Minimum="0"
                                                 PlaceholderText="No cap"
-                                                Text="{Binding MaxSizeText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                                SpinButtonPlacementMode="Compact"
+                                                ValidationMode="InvalidInputOverwritten"
+                                                Value="{Binding MaxSizeValue, Mode=TwoWay}" />
                                         </Grid>
                                         <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpacingSmall}">
                                             <Button
