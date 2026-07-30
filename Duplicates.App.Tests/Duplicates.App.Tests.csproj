@@ -30,6 +30,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None
+      Include="..\Duplicates\**\*.xaml"
+      Link="UiSource\%(RecursiveDir)%(Filename)%(Extension)"
+      CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference
       Include="..\Duplicates\Duplicates.csproj"
       ReferenceOutputAssembly="false"
