@@ -17,6 +17,7 @@ public sealed partial class ResultsViewModel : ObservableObject
     private readonly ISettingsService _settingsService;
     private readonly List<DuplicateGroupViewModel> _allGroups = [];
     private IReadOnlyDictionary<string, bool>? _selectionSnapshot;
+    private bool _isApplyingSelectionRule;
 
     public ResultsViewModel(ResultsStore resultsStore, IFileActionService fileActionService, ISettingsService settingsService)
     {
@@ -47,7 +48,10 @@ public sealed partial class ResultsViewModel : ObservableObject
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(PreviewPaneVisibility))]
-    public partial bool IsPreviewPaneOpen { get; set; } = true;
+    public partial bool IsPreviewPaneOpen { get; set; }
+
+    [ObservableProperty]
+    public partial string SelectionRuleText { get; set; } = "Keep newest";
 
     [ObservableProperty]
     public partial string DeleteProgressText { get; set; } = string.Empty;
@@ -96,9 +100,11 @@ public sealed partial class ResultsViewModel : ObservableObject
 
     public long TotalReclaimableBytes => _allGroups.Sum(static group => group.Source.SizeBytes * Math.Max(0, group.Files.Count - 1));
 
-    public string SummaryText => $"{GroupCount:N0} groups - {TotalDuplicateFiles:N0} duplicate files - {ByteFormatter.Format(TotalReclaimableBytes)} reclaimable total";
+    public string SummaryText => $"{GroupCount:N0} groups, {TotalDuplicateFiles:N0} duplicate files, {ByteFormatter.Format(TotalReclaimableBytes)} reclaimable total";
 
     public int SelectedFileCount => _allGroups.Sum(static group => group.SelectedCount);
+
+    public int SelectedGroupCount => _allGroups.Count(static group => group.SelectedCount > 0);
 
     public long SelectedBytes => _allGroups.Sum(static group => group.SelectedBytes);
 
@@ -126,7 +132,7 @@ public sealed partial class ResultsViewModel : ObservableObject
 
     public string PreviewDetails => SelectedFile is null
         ? string.Empty
-        : $"{SelectedFile.SizeText} - created {SelectedFile.CreatedText} - modified {SelectedFile.ModifiedText}{BuildPreviewGroupDetails()}";
+        : $"{SelectedFile.SizeText}, Created {SelectedFile.CreatedText}, Modified {SelectedFile.ModifiedText}{BuildPreviewGroupDetails()}";
 
     public ImageSource? PreviewImage => SelectedFile is not null && IsImageExtension(SelectedFile.Extension)
         ? CreatePreviewImage(SelectedFile.FullPath)
@@ -139,72 +145,30 @@ public sealed partial class ResultsViewModel : ObservableObject
     [RelayCommand]
     private void AutoSelectKeepNewest()
     {
-        CaptureSelectionSnapshot();
-        foreach (DuplicateGroupViewModel group in _allGroups)
-        {
-            group.ApplyKeepNewest();
-        }
-
-        RefreshSelectionTotals();
+        ApplySelectionRule("Keep newest", static group => group.ApplyKeepNewest());
     }
 
     [RelayCommand]
     private void AutoSelectKeepOldest()
     {
-        CaptureSelectionSnapshot();
-        foreach (DuplicateGroupViewModel group in _allGroups)
-        {
-            group.ApplyKeepOldest();
-        }
-
-        RefreshSelectionTotals();
+        ApplySelectionRule("Keep oldest", static group => group.ApplyKeepOldest());
     }
 
     [RelayCommand]
     private void AutoSelectKeepShortestPath()
     {
-        CaptureSelectionSnapshot();
-        foreach (DuplicateGroupViewModel group in _allGroups)
-        {
-            group.ApplyKeepShortestPath();
-        }
-
-        RefreshSelectionTotals();
+        ApplySelectionRule("Keep shortest path", static group => group.ApplyKeepShortestPath());
     }
 
     public void AutoSelectKeepPreferredFolder(string preferredFolder)
     {
-        CaptureSelectionSnapshot();
-        foreach (DuplicateGroupViewModel group in _allGroups)
-        {
-            group.ApplyKeepPreferredFolder(preferredFolder);
-        }
-
-        RefreshSelectionTotals();
-    }
-
-    [RelayCommand]
-    private void SelectAll()
-    {
-        CaptureSelectionSnapshot();
-        foreach (DuplicateGroupViewModel group in _allGroups)
-        {
-            group.SelectAllButNewest();
-        }
-
-        RefreshSelectionTotals();
+        ApplySelectionRule("Keep preferred folder", group => group.ApplyKeepPreferredFolder(preferredFolder));
     }
 
     [RelayCommand]
     private void ClearSelection()
     {
-        CaptureSelectionSnapshot();
-        foreach (DuplicateGroupViewModel group in _allGroups)
-        {
-            group.ClearSelection();
-        }
-
-        RefreshSelectionTotals();
+        ApplySelectionRule("Manual selection", static group => group.ClearSelection());
     }
 
     [RelayCommand(CanExecute = nameof(CanUndoSelection))]
@@ -227,6 +191,7 @@ public sealed partial class ResultsViewModel : ObservableObject
         }
 
         _selectionSnapshot = null;
+        SelectionRuleText = "Manual selection";
         OnPropertyChanged(nameof(CanUndoSelection));
         UndoSelectionCommand.NotifyCanExecuteChanged();
         RefreshSelectionTotals();
@@ -269,22 +234,44 @@ public sealed partial class ResultsViewModel : ObservableObject
             throw new InvalidOperationException("At least one file must remain in every duplicate group.");
         }
 
+        return await DeleteFilesAsync(SelectedFiles, cancellationToken);
+    }
+
+    public async Task<DeleteSummary> DeleteFileAsync(DuplicateFileViewModel file, CancellationToken cancellationToken)
+    {
+        DuplicateGroupViewModel? group = _allGroups.FirstOrDefault(group => group.Files.Contains(file));
+        if (IsDeleting || group is null || group.Files.Count <= 1)
+        {
+            throw new InvalidOperationException("The file must belong to a duplicate group with another remaining copy.");
+        }
+
+        return await DeleteFilesAsync([file], cancellationToken);
+    }
+
+    private async Task<DeleteSummary> DeleteFilesAsync(
+        IReadOnlyList<DuplicateFileViewModel> files,
+        CancellationToken cancellationToken)
+    {
         IsDeleting = true;
-        DeleteStatusMessage = "Deleting selected files...";
+        DeleteStatusMessage = files.Count == 1 ? "Deleting file..." : "Deleting selected files...";
         DeleteFailureDetailsText = string.Empty;
         try
         {
-            IReadOnlyList<DuplicateFileViewModel> selectedFiles = SelectedFiles;
-            DeleteProgressText = $"0 of {selectedFiles.Count:N0} files processed";
+            DeleteProgressText = $"0 of {files.Count:N0} files processed";
             DeleteProgressValue = 0;
             DeleteSummary summary = await _fileActionService.DeleteAsync(
-                selectedFiles,
+                files,
                 new InlineProgress<DeleteProgress>(UpdateDeleteProgress),
                 cancellationToken);
-            var deletedPaths = selectedFiles
+            var deletedPaths = files
                 .Where(file => !summary.Failures.Any(failure => string.Equals(failure.Path, file.FullPath, StringComparison.OrdinalIgnoreCase)))
                 .Select(static file => file.FullPath)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            if (SelectedFile is not null && deletedPaths.Contains(SelectedFile.FullPath))
+            {
+                SelectedFile = null;
+            }
 
             for (int index = _allGroups.Count - 1; index >= 0; index--)
             {
@@ -296,7 +283,7 @@ public sealed partial class ResultsViewModel : ObservableObject
             }
 
             DeleteStatusMessage = summary.Failures.Count == 0
-                ? $"{summary.DeletedCount:N0} files deleted."
+                ? summary.DeletedCount == 1 ? "1 file deleted." : $"{summary.DeletedCount:N0} files deleted."
                 : $"{summary.DeletedCount:N0} files deleted, {summary.Failures.Count:N0} could not be deleted.";
             DeleteFailureDetailsText = BuildFailureDetailsText(summary.Failures);
             ApplySearchAndSort();
@@ -312,6 +299,7 @@ public sealed partial class ResultsViewModel : ObservableObject
     public void RefreshSelectionTotals()
     {
         OnPropertyChanged(nameof(SelectedFileCount));
+        OnPropertyChanged(nameof(SelectedGroupCount));
         OnPropertyChanged(nameof(SelectedBytes));
         OnPropertyChanged(nameof(DeleteButtonText));
         OnPropertyChanged(nameof(CanDelete));
@@ -349,6 +337,14 @@ public sealed partial class ResultsViewModel : ObservableObject
         ApplySearchAndSort();
     }
 
+    partial void OnSelectedFileChanged(DuplicateFileViewModel? value)
+    {
+        if (value is not null)
+        {
+            IsPreviewPaneOpen = true;
+        }
+    }
+
     private void ResultsChanged(object? sender, ScanResult? result)
     {
         ReloadFromCurrentResult();
@@ -360,6 +356,7 @@ public sealed partial class ResultsViewModel : ObservableObject
         _allGroups.Clear();
         _selectionSnapshot = null;
         SelectedFile = null;
+        IsPreviewPaneOpen = false;
         ScanResult? result = _resultsStore.CurrentResult;
         if (result is null)
         {
@@ -377,6 +374,11 @@ public sealed partial class ResultsViewModel : ObservableObject
                 {
                     if (args.PropertyName == nameof(DuplicateFileViewModel.IsSelected))
                     {
+                        if (!_isApplyingSelectionRule)
+                        {
+                            SelectionRuleText = "Manual selection";
+                        }
+
                         RefreshSelectionTotals();
                     }
                 };
@@ -385,6 +387,10 @@ public sealed partial class ResultsViewModel : ObservableObject
             _allGroups.Add(groupViewModel);
         }
 
+        if (_allGroups.Count > 0)
+        {
+            ApplySelectionRule("Keep newest", static group => group.ApplyKeepNewest());
+        }
         ApplySearchAndSort();
         StatusMessage = result.Groups.Count == 0
             ? "Every file in the scanned folders is unique."
@@ -399,6 +405,26 @@ public sealed partial class ResultsViewModel : ObservableObject
             .ToDictionary(static file => file.FullPath, static file => file.IsSelected, StringComparer.OrdinalIgnoreCase);
         OnPropertyChanged(nameof(CanUndoSelection));
         UndoSelectionCommand.NotifyCanExecuteChanged();
+    }
+
+    private void ApplySelectionRule(string ruleText, Action<DuplicateGroupViewModel> applyRule)
+    {
+        CaptureSelectionSnapshot();
+        _isApplyingSelectionRule = true;
+        try
+        {
+            foreach (DuplicateGroupViewModel group in _allGroups)
+            {
+                applyRule(group);
+            }
+        }
+        finally
+        {
+            _isApplyingSelectionRule = false;
+        }
+
+        SelectionRuleText = ruleText;
+        RefreshSelectionTotals();
     }
 
     private void UpdateDeleteProgress(DeleteProgress progress)
@@ -422,7 +448,7 @@ public sealed partial class ResultsViewModel : ObservableObject
             ? null
             : _allGroups.FirstOrDefault(group => group.Files.Contains(SelectedFile));
 
-        return group is null ? string.Empty : $" - group reclaimable {ByteFormatter.Format(group.Source.WastedBytes)}";
+        return group is null ? string.Empty : $", Group reclaimable {ByteFormatter.Format(group.Source.WastedBytes)}";
     }
 
     private static BitmapImage CreatePreviewImage(string path)

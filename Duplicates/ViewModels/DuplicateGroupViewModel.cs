@@ -6,8 +6,6 @@ namespace Duplicates.ViewModels;
 
 public sealed class DuplicateGroupViewModel : ObservableObject
 {
-    private bool _isExpanded;
-
     public DuplicateGroupViewModel(DuplicateGroup group)
     {
         Source = group;
@@ -19,35 +17,17 @@ public sealed class DuplicateGroupViewModel : ObservableObject
 
     public ObservableCollection<DuplicateFileViewModel> Files { get; }
 
-    public ObservableCollection<DuplicateFileViewModel> VisibleFiles { get; } = [];
-
-    public bool IsExpanded
-    {
-        get => _isExpanded;
-        set
-        {
-            if (SetProperty(ref _isExpanded, value))
-            {
-                RefreshVisibleFiles();
-            }
-        }
-    }
-
     public string DisplayName => Files.FirstOrDefault()?.FileName ?? "Duplicate group";
-
-    public string CountText => $"x{Files.Count}";
-
-    public string SizeText => ByteFormatter.Format(Source.SizeBytes);
 
     public string WastedText => ByteFormatter.Format(Source.WastedBytes);
 
-    public string SelectedSummaryText => $"{SelectedCount} selected - {ByteFormatter.Format(SelectedBytes)}";
+    public string FilesSummaryText => $"{Files.Count:N0} identical files, {WastedText} reclaimable";
+
+    public string SelectedSummaryText => $"{SelectedCount:N0} selected, {ByteFormatter.Format(SelectedBytes)}";
 
     public int SelectedCount => Files.Count(static file => file.IsSelected);
 
     public long SelectedBytes => Files.Where(static file => file.IsSelected).Sum(static file => file.SizeBytes);
-
-    public bool HasVisibleFiles => Files.Count > 1;
 
     public bool CanSelectForDeletion(DuplicateFileViewModel candidate)
     {
@@ -56,12 +36,12 @@ public sealed class DuplicateGroupViewModel : ObservableObject
 
     public void ApplyKeepNewest()
     {
-        ApplySurvivor(Files.OrderByDescending(static file => file.File.ModifiedUtc).First());
+        ApplySurvivor(OrderByNewest(Files).First());
     }
 
     public void ApplyKeepOldest()
     {
-        ApplySurvivor(Files.OrderBy(static file => file.File.ModifiedUtc).First());
+        ApplySurvivor(OrderByOldest(Files).First());
     }
 
     public void ApplyKeepShortestPath()
@@ -72,12 +52,11 @@ public sealed class DuplicateGroupViewModel : ObservableObject
     public void ApplyKeepPreferredFolder(string preferredFolder)
     {
         string normalizedFolder = Path.TrimEndingDirectorySeparator(Path.GetFullPath(preferredFolder));
-        DuplicateFileViewModel? preferred = Files
-            .Where(file => IsUnderFolder(file.FullPath, normalizedFolder))
-            .OrderByDescending(static file => file.File.ModifiedUtc)
-            .FirstOrDefault();
+        IEnumerable<DuplicateFileViewModel> preferredCandidates = Files
+            .Where(file => IsUnderFolder(file.FullPath, normalizedFolder));
+        DuplicateFileViewModel? preferred = OrderByNewest(preferredCandidates).FirstOrDefault();
 
-        ApplySurvivor(preferred ?? Files.OrderByDescending(static file => file.File.ModifiedUtc).First());
+        ApplySurvivor(preferred ?? OrderByNewest(Files).First());
     }
 
     public void ClearSelection()
@@ -88,11 +67,6 @@ public sealed class DuplicateGroupViewModel : ObservableObject
         }
 
         NotifySelectionChanged();
-    }
-
-    public void SelectAllButNewest()
-    {
-        ApplyKeepNewest();
     }
 
     public void RemoveDeleted(IReadOnlySet<string> deletedPaths)
@@ -106,9 +80,7 @@ public sealed class DuplicateGroupViewModel : ObservableObject
         }
 
         NotifySelectionChanged();
-        OnPropertyChanged(nameof(CountText));
-        OnPropertyChanged(nameof(HasVisibleFiles));
-        RefreshVisibleFiles();
+        OnPropertyChanged(nameof(FilesSummaryText));
     }
 
     public bool RemoveFile(DuplicateFileViewModel file)
@@ -117,9 +89,7 @@ public sealed class DuplicateGroupViewModel : ObservableObject
         if (removed)
         {
             NotifySelectionChanged();
-            OnPropertyChanged(nameof(CountText));
-            OnPropertyChanged(nameof(HasVisibleFiles));
-            RefreshVisibleFiles();
+            OnPropertyChanged(nameof(FilesSummaryText));
         }
 
         return removed;
@@ -151,18 +121,20 @@ public sealed class DuplicateGroupViewModel : ObservableObject
         NotifySelectionChanged();
     }
 
-    private void RefreshVisibleFiles()
+    private static IOrderedEnumerable<DuplicateFileViewModel> OrderByNewest(IEnumerable<DuplicateFileViewModel> files)
     {
-        VisibleFiles.Clear();
-        if (!IsExpanded)
-        {
-            return;
-        }
+        return files
+            .OrderByDescending(static file => file.File.ModifiedUtc)
+            .ThenBy(static file => file.FullPath.Length)
+            .ThenBy(static file => file.FullPath, StringComparer.OrdinalIgnoreCase);
+    }
 
-        foreach (DuplicateFileViewModel file in Files)
-        {
-            VisibleFiles.Add(file);
-        }
+    private static IOrderedEnumerable<DuplicateFileViewModel> OrderByOldest(IEnumerable<DuplicateFileViewModel> files)
+    {
+        return files
+            .OrderBy(static file => file.File.ModifiedUtc)
+            .ThenBy(static file => file.FullPath.Length)
+            .ThenBy(static file => file.FullPath, StringComparer.OrdinalIgnoreCase);
     }
 
     private static bool IsUnderFolder(string filePath, string folderPath)

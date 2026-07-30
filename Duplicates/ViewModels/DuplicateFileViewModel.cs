@@ -20,7 +20,7 @@ public sealed class DuplicateFileViewModel : ObservableObject
 
     public string FullPath => File.FullPath;
 
-    public string DisplayPath => ShortenMiddle(FullPath);
+    public string DisplayDirectoryPath => ShortenMiddle(DirectoryPath);
 
     public string FileName => File.FileName;
 
@@ -36,9 +36,13 @@ public sealed class DuplicateFileViewModel : ObservableObject
 
     public string CreatedText => File.CreatedUtc.ToLocalTime().ToString("g", CultureInfo.CurrentCulture);
 
+    public string MetadataText => $"Modified {ModifiedText}, Created {CreatedText}, {SizeText}";
+
     public bool IsKept => !IsSelected;
 
     public Visibility KeptVisibility => IsKept ? Visibility.Visible : Visibility.Collapsed;
+
+    public Visibility DeleteVisibility => IsSelected ? Visibility.Visible : Visibility.Collapsed;
 
     public bool IsSelected
     {
@@ -70,6 +74,7 @@ public sealed class DuplicateFileViewModel : ObservableObject
     {
         OnPropertyChanged(nameof(IsKept));
         OnPropertyChanged(nameof(KeptVisibility));
+        OnPropertyChanged(nameof(DeleteVisibility));
     }
 
     private void SetSelectedCore(bool value)
@@ -78,6 +83,7 @@ public sealed class DuplicateFileViewModel : ObservableObject
         {
             OnPropertyChanged(nameof(IsKept));
             OnPropertyChanged(nameof(KeptVisibility));
+            OnPropertyChanged(nameof(DeleteVisibility));
         }
     }
 

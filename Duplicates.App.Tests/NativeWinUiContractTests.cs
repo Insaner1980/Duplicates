@@ -149,6 +149,22 @@ public sealed class NativeWinUiContractTests
             element => element.Attribute("Tapped") is not null);
     }
 
+    [Fact]
+    public void ResultsPage_UsesNativeCommandBarAndSplitView()
+    {
+        XDocument page = LoadXaml(@"Views\ResultsPage.xaml");
+
+        Assert.Single(page.Descendants(Presentation + "CommandBar"));
+        Assert.NotEmpty(page.Descendants(Presentation + "AppBarButton"));
+        Assert.Single(page.Descendants(Presentation + "SplitView"));
+        Assert.NotEmpty(page.Descendants(Presentation + "MenuFlyout"));
+
+        XDocument styles = LoadXaml(@"Themes\Styles.xaml");
+        Assert.DoesNotContain(
+            styles.Descendants().Attributes(Xaml + "Key"),
+            attribute => attribute.Value == "CardBorderStyle");
+    }
+
     private static XDocument LoadXaml(string relativePath)
     {
         string path = Path.Combine(AppContext.BaseDirectory, "UiSource", relativePath);

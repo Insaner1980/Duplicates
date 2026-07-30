@@ -13,14 +13,6 @@
     <Thickness x:Key="PageHeaderPadding">32,24,32,20</Thickness>
     <Thickness x:Key="PageContentPadding">32,0,32,32</Thickness>
 
-    <Style x:Key="CardBorderStyle" TargetType="Border">
-        <Setter Property="Background" Value="{ThemeResource BgCardBrush}" />
-        <Setter Property="BorderBrush" Value="{ThemeResource StrokeSubtleBrush}" />
-        <Setter Property="BorderThickness" Value="1" />
-        <Setter Property="CornerRadius" Value="{StaticResource CardCornerRadius}" />
-        <Setter Property="Padding" Value="20" />
-    </Style>
-
     <Style
         x:Key="SectionHeaderTextBlockStyle"
         BasedOn="{StaticResource BodyStrongTextBlockStyle}"
