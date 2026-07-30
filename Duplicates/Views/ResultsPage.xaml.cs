@@ -2,6 +2,7 @@ using Duplicates.Models;
 using Duplicates.ViewModels;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.Windows.Storage.Pickers;
 using Windows.ApplicationModel.DataTransfer;
 
@@ -9,6 +10,8 @@ namespace Duplicates.Views;
 
 public sealed partial class ResultsPage : Page
 {
+    private bool _isDeleteDialogOpen;
+
     public ResultsPage()
     {
         InitializeComponent();
@@ -84,6 +87,11 @@ public sealed partial class ResultsPage : Page
             return true;
         }
 
+        if (_isDeleteDialogOpen)
+        {
+            return false;
+        }
+
         bool isSingleFile = fileCount == 1;
         bool usesRecycleBin = App.Current.Services.SettingsService.Current.DeletionMode == DeletionMode.RecycleBin;
         string targetText = (usesRecycleBin, isSingleFile) switch
@@ -110,7 +118,15 @@ public sealed partial class ResultsPage : Page
             DefaultButton = ContentDialogButton.Close,
         };
 
-        return await dialog.ShowAsync() == ContentDialogResult.Primary;
+        _isDeleteDialogOpen = true;
+        try
+        {
+            return await dialog.ShowAsync() == ContentDialogResult.Primary;
+        }
+        finally
+        {
+            _isDeleteDialogOpen = false;
+        }
     }
 
     private void NewScan_Click(object sender, RoutedEventArgs e)
@@ -141,6 +157,24 @@ public sealed partial class ResultsPage : Page
             var package = new DataPackage();
             package.SetText(file.FullPath);
             Clipboard.SetContent(package);
+        }
+    }
+
+    private void FocusSearch_Invoked(
+        KeyboardAccelerator sender,
+        KeyboardAcceleratorInvokedEventArgs args)
+    {
+        args.Handled = SearchBox.Focus(FocusState.Keyboard);
+    }
+
+    private void UndoSelection_Invoked(
+        KeyboardAccelerator sender,
+        KeyboardAcceleratorInvokedEventArgs args)
+    {
+        if (ViewModel.UndoSelectionCommand.CanExecute(null))
+        {
+            ViewModel.UndoSelectionCommand.Execute(null);
+            args.Handled = true;
         }
     }
 

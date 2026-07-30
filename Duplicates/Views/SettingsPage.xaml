@@ -16,6 +16,7 @@
             HorizontalAlignment="Stretch"
             Spacing="6">
             <TextBlock
+                AutomationProperties.HeadingLevel="Level1"
                 Style="{ThemeResource TitleTextBlockStyle}"
                 Foreground="{ThemeResource TextPrimaryBrush}"
                 Text="Settings" />
@@ -138,13 +139,17 @@
                     </toolkit:SettingsExpander>
 
                     <InfoBar
+                        AutomationProperties.Name="Permanent deletion warning"
                         IsOpen="True"
                         Message="Permanent delete bypasses the Recycle Bin and cannot be undone."
                         Severity="Warning"
                         Visibility="{Binding PermanentDeleteWarningVisibility}" />
 
                     <StackPanel Margin="4,12,4,0" Spacing="4">
-                        <TextBlock Style="{StaticResource SectionHeaderTextBlockStyle}" Text="About" />
+                        <TextBlock
+                            AutomationProperties.HeadingLevel="Level2"
+                            Style="{StaticResource SectionHeaderTextBlockStyle}"
+                            Text="About" />
                         <TextBlock Style="{StaticResource MutedTextBlockStyle}" Text="{Binding AboutText}" />
                     </StackPanel>
                 </StackPanel>

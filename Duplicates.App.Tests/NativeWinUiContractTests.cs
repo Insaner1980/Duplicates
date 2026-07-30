@@ -165,6 +165,99 @@ public sealed class NativeWinUiContractTests
             attribute => attribute.Value == "CardBorderStyle");
     }
 
+    [Fact]
+    public void InteractiveImagesAndIconOnlyButtonsHaveAccessibleNames()
+    {
+        foreach ((string path, XDocument document) in AllProductionXaml())
+        {
+            foreach (XElement button in document.Descendants(Presentation + "Button"))
+            {
+                bool hasText = button
+                    .Descendants(Presentation + "TextBlock")
+                    .Any(text => text.Attribute("Text") is not null);
+                bool hasContent = button.Attribute("Content") is not null;
+                bool hasAccessibleName = button
+                    .Attributes()
+                    .Any(
+                        attribute =>
+                            attribute.Name.LocalName ==
+                            "AutomationProperties.Name");
+
+                Assert.True(
+                    hasText || hasContent || hasAccessibleName,
+                    Location(path, button));
+            }
+        }
+    }
+
+    [Fact]
+    public void ProductionXaml_DoesNotHandleTapOnLayoutElements()
+    {
+        foreach ((string path, XDocument document) in AllProductionXaml())
+        {
+            foreach (XElement element in document.Descendants())
+            {
+                if (element.Name.LocalName is "Border" or "Grid" or "StackPanel")
+                {
+                    Assert.False(
+                        element.Attribute("Tapped") is not null,
+                        Location(path, element));
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public void PrimaryCommandsExposeAccessKeysAndResultsAccelerators()
+    {
+        XDocument scan = LoadXaml(@"Views\ScanPage.xaml");
+        Assert.Contains(
+            scan.Descendants(Presentation + "Button"),
+            button => (string?)button.Attribute("AccessKey") == "A");
+        Assert.Contains(
+            scan.Descendants(Presentation + "Button"),
+            button => (string?)button.Attribute("AccessKey") == "S");
+
+        XDocument results = LoadXaml(@"Views\ResultsPage.xaml");
+        string[] accessKeys = results
+            .Descendants()
+            .Attributes("AccessKey")
+            .Select(attribute => attribute.Value)
+            .ToArray();
+        Assert.Contains("R", accessKeys);
+        Assert.Contains("D", accessKeys);
+        Assert.Contains("P", accessKeys);
+
+        string[] accelerators = results
+            .Descendants(Presentation + "KeyboardAccelerator")
+            .Select(
+                accelerator =>
+                    $"{(string?)accelerator.Attribute("Modifiers")}+" +
+                    $"{(string?)accelerator.Attribute("Key")}")
+            .ToArray();
+        Assert.Contains("Control+F", accelerators);
+        Assert.Contains("Control+Z", accelerators);
+    }
+
+    [Fact]
+    public void Resources_DoNotOverrideNativeFocusVisuals()
+    {
+        string[] forbidden =
+        [
+            "FocusVisualPrimaryBrush",
+            "FocusVisualSecondaryBrush",
+            "SystemControlFocusVisualPrimaryBrush",
+            "FocusStrokeColorOuterBrush",
+        ];
+
+        foreach ((string path, XDocument document) in AllProductionXaml())
+        {
+            Assert.DoesNotContain(
+                document.Descendants().Attributes(Xaml + "Key"),
+                attribute => forbidden.Contains(attribute.Value, StringComparer.Ordinal));
+        }
+    }
+
     private static XDocument LoadXaml(string relativePath)
     {
         string path = Path.Combine(AppContext.BaseDirectory, "UiSource", relativePath);

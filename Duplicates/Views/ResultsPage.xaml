@@ -11,6 +11,16 @@
             ItemsPath="Files"
             Source="{Binding Groups}" />
     </Page.Resources>
+    <Page.KeyboardAccelerators>
+        <KeyboardAccelerator
+            Key="F"
+            Modifiers="Control"
+            Invoked="FocusSearch_Invoked" />
+        <KeyboardAccelerator
+            Key="Z"
+            Modifiers="Control"
+            Invoked="UndoSelection_Invoked" />
+    </Page.KeyboardAccelerators>
 
     <Grid Padding="24" Background="{ThemeResource BgBaseBrush}">
         <VisualStateManager.VisualStateGroups>
@@ -118,6 +128,7 @@
                 DefaultLabelPosition="Right"
                 IsDynamicOverflowEnabled="True">
                 <AppBarButton
+                    AccessKey="R"
                     Icon="Filter"
                     Label="Selection rule">
                     <AppBarButton.Flyout>
@@ -139,11 +150,13 @@
                     Command="{Binding UndoSelectionCommand}"
                     IsEnabled="{Binding CanUndoSelection}" />
                 <AppBarToggleButton
+                    AccessKey="P"
                     Icon="View"
                     Label="Preview"
                     IsChecked="{Binding IsPreviewPaneOpen, Mode=TwoWay}" />
                 <AppBarSeparator />
                 <AppBarButton
+                    AccessKey="D"
                     Icon="Delete"
                     Label="{Binding DeleteButtonText}"
                     Foreground="{ThemeResource DangerBrush}"
