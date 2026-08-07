@@ -19,19 +19,22 @@ public sealed class ScanViewModelTests
 
         try
         {
+            var scope = new PathScopeViewModel();
             var viewModel = new ScanViewModel(
                 new DuplicateScanner(),
                 new FakeSettingsService(),
-                new ResultsStore());
+                new ResultsStore(),
+                scope);
+            Assert.Same(scope, viewModel.PathScope);
 
-            viewModel.AddFolder(folder);
+            scope.AddFolder(folder);
 
-            ScanFolderViewModel item = Assert.Single(viewModel.Folders);
+            ScopePathViewModel item = Assert.Single(scope.IncludedPaths);
             Assert.Equal(Path.GetFullPath(folder), item.FullPath);
             Assert.Equal("ObsidianVault", item.DisplayName);
             Assert.Equal(Path.GetDirectoryName(Path.GetFullPath(folder)), item.ParentPath);
-            Assert.True(viewModel.HasFolders);
-            Assert.Equal(Visibility.Collapsed, viewModel.EmptyFoldersVisibility);
+            Assert.True(scope.HasIncludedPaths);
+            Assert.Equal(Visibility.Collapsed, scope.EmptyIncludedPathsVisibility);
         }
         finally
         {
@@ -50,20 +53,23 @@ public sealed class ScanViewModelTests
 
         try
         {
+            var scope = new PathScopeViewModel();
             var viewModel = new ScanViewModel(
                 new DuplicateScanner(),
                 new FakeSettingsService(),
-                new ResultsStore());
+                new ResultsStore(),
+                scope);
+            Assert.Same(scope, viewModel.PathScope);
 
-            viewModel.AddFolder(folder);
-            viewModel.AddFolder(folder + Path.DirectorySeparatorChar);
+            scope.AddFolder(folder);
+            scope.AddFolder(folder + Path.DirectorySeparatorChar);
 
-            ScanFolderViewModel item = Assert.Single(viewModel.Folders);
-            viewModel.RemoveFolderCommand.Execute(item);
+            ScopePathViewModel item = Assert.Single(scope.IncludedPaths);
+            scope.RemoveIncludedPathCommand.Execute(item);
 
-            Assert.Empty(viewModel.Folders);
-            Assert.False(viewModel.HasFolders);
-            Assert.Equal(Visibility.Visible, viewModel.EmptyFoldersVisibility);
+            Assert.Empty(scope.IncludedPaths);
+            Assert.False(scope.HasIncludedPaths);
+            Assert.Equal(Visibility.Visible, scope.EmptyIncludedPathsVisibility);
         }
         finally
         {
@@ -75,7 +81,7 @@ public sealed class ScanViewModelTests
     public void SettingsChanged_UpdatesScanDefaultsWhenNotScanning()
     {
         var settings = new FakeSettingsService();
-        var viewModel = new ScanViewModel(new DuplicateScanner(), settings, new ResultsStore());
+        var viewModel = new ScanViewModel(new DuplicateScanner(), settings, new ResultsStore(), new PathScopeViewModel());
 
         settings.SetCurrent(new AppSettings
         {
@@ -95,7 +101,7 @@ public sealed class ScanViewModelTests
     public void SettingsChanged_DoesNotOverwriteActiveScanOptions()
     {
         var settings = new FakeSettingsService();
-        var viewModel = new ScanViewModel(new DuplicateScanner(), settings, new ResultsStore())
+        var viewModel = new ScanViewModel(new DuplicateScanner(), settings, new ResultsStore(), new PathScopeViewModel())
         {
             IsScanning = true,
             MinSizeValue = 99d,
@@ -112,7 +118,8 @@ public sealed class ScanViewModelTests
         var viewModel = new ScanViewModel(
             new DuplicateScanner(),
             new FakeSettingsService(),
-            new ResultsStore());
+            new ResultsStore(),
+            new PathScopeViewModel());
 
         viewModel.UseOneKilobyteMinimumCommand.Execute(null);
         Assert.Equal(1024d, viewModel.MinSizeValue);
@@ -149,7 +156,11 @@ public sealed class ScanViewModelTests
     [Fact]
     public void FilterOptionVisibilityTracksSelectedMode()
     {
-        var viewModel = new ScanViewModel(new DuplicateScanner(), new FakeSettingsService(), new ResultsStore());
+        var viewModel = new ScanViewModel(
+            new DuplicateScanner(),
+            new FakeSettingsService(),
+            new ResultsStore(),
+            new PathScopeViewModel());
 
         Assert.Equal(Visibility.Collapsed, viewModel.CategoryFiltersVisibility);
         Assert.Equal(Visibility.Collapsed, viewModel.CustomExtensionsVisibility);

@@ -12,8 +12,9 @@ public sealed class AppServices
         ThemeService = new ThemeService();
         ResultsStore = new ResultsStore();
         FileActionService = new FileActionService(SettingsService);
+        PathScopeViewModel = new PathScopeViewModel();
 
-        ScanViewModel = new ScanViewModel(new DuplicateScanner(), SettingsService, ResultsStore);
+        ScanViewModel = new ScanViewModel(new DuplicateScanner(), SettingsService, ResultsStore, PathScopeViewModel);
         ResultsViewModel = new ResultsViewModel(ResultsStore, FileActionService, SettingsService);
         SettingsViewModel = new SettingsViewModel(SettingsService);
     }
@@ -25,6 +26,8 @@ public sealed class AppServices
     public ResultsStore ResultsStore { get; }
 
     public IFileActionService FileActionService { get; }
+
+    public PathScopeViewModel PathScopeViewModel { get; }
 
     public ScanViewModel ScanViewModel { get; }
 

@@ -9,6 +9,7 @@ internal sealed class FileWalker
         var files = new List<FileEntry>();
         var skipped = new List<SkippedPath>();
         var seenPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        IReadOnlyList<ExcludedPath> excludedPaths = BuildExcludedPaths(options.ExcludedPaths);
 
         foreach (string folder in options.Folders.Where(static folder => !string.IsNullOrWhiteSpace(folder)))
         {
@@ -52,7 +53,7 @@ internal sealed class FileWalker
             foreach (string path in paths)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                TryAddFile(path, options, files, skipped, seenPaths);
+                TryAddFile(path, options, excludedPaths, files, skipped, seenPaths);
 
                 progress.Report(new ScanProgress
                 {
@@ -61,6 +62,19 @@ internal sealed class FileWalker
                     CurrentFilePath = path,
                 });
             }
+        }
+
+        foreach (string file in options.Files.Where(static file => !string.IsNullOrWhiteSpace(file)))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            TryAddFile(file, options, excludedPaths, files, skipped, seenPaths);
+
+            progress.Report(new ScanProgress
+            {
+                Phase = ScanPhase.Enumerating,
+                FilesDiscovered = files.Count,
+                CurrentFilePath = file,
+            });
         }
 
         return new FileWalkResult(files, skipped);
@@ -91,6 +105,7 @@ internal sealed class FileWalker
     private static void TryAddFile(
         string path,
         ScanOptions options,
+        IReadOnlyList<ExcludedPath> excludedPaths,
         List<FileEntry> files,
         List<SkippedPath> skipped,
         HashSet<string> seenPaths)
@@ -98,6 +113,12 @@ internal sealed class FileWalker
         try
         {
             string fullPath = Path.GetFullPath(path);
+
+            if (IsExcluded(fullPath, excludedPaths) || !File.Exists(fullPath))
+            {
+                return;
+            }
+
             if (!seenPaths.Add(fullPath))
             {
                 return;
@@ -149,8 +170,69 @@ internal sealed class FileWalker
         }
     }
 
+    private static IReadOnlyList<ExcludedPath> BuildExcludedPaths(IReadOnlyList<string> paths)
+    {
+        var excludedPaths = new List<ExcludedPath>();
+
+        foreach (string path in paths.Where(static path => !string.IsNullOrWhiteSpace(path)))
+        {
+            try
+            {
+                string fullPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+                if (excludedPaths.Any(existing => string.Equals(existing.FullPath, fullPath, StringComparison.OrdinalIgnoreCase)))
+                {
+                    continue;
+                }
+
+                excludedPaths.Add(new ExcludedPath(fullPath, Directory.Exists(fullPath)));
+            }
+            catch (Exception ex) when (IsSkippable(ex))
+            {
+            }
+        }
+
+        return excludedPaths;
+    }
+
+    private static bool IsExcluded(string fullPath, IReadOnlyList<ExcludedPath> excludedPaths)
+    {
+        foreach (ExcludedPath excludedPath in excludedPaths)
+        {
+            if (string.Equals(fullPath, excludedPath.FullPath, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (excludedPath.IsDirectory && IsDescendantOf(fullPath, excludedPath.FullPath))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsDescendantOf(string path, string ancestor)
+    {
+        if (!path.StartsWith(ancestor, StringComparison.OrdinalIgnoreCase) || path.Length <= ancestor.Length)
+        {
+            return false;
+        }
+
+        string? root = Path.GetPathRoot(ancestor);
+        if (string.Equals(root, ancestor, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        char separator = path[ancestor.Length];
+        return separator == Path.DirectorySeparatorChar || separator == Path.AltDirectorySeparatorChar;
+    }
+
     private static bool IsSkippable(Exception ex)
     {
         return ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or PathTooLongException;
     }
+
+    private sealed record ExcludedPath(string FullPath, bool IsDirectory);
 }

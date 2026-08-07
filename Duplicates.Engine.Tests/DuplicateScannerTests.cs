@@ -245,6 +245,70 @@ public sealed class DuplicateScannerTests : IDisposable
     }
 
     [Fact]
+    public async Task ScanAsync_ExplicitIncludedFiles_AreCompared()
+    {
+        string first = WriteFile("explicit/first.bin", "same explicit bytes");
+        string second = WriteFile("explicit/second.bin", "same explicit bytes");
+
+        var scanner = new DuplicateScanner();
+        ScanResult result = await scanner.ScanAsync(
+            NewOptions() with { Folders = [], Files = [first, second] },
+            progress: null,
+            CancellationToken.None);
+
+        DuplicateGroup group = Assert.Single(result.Groups);
+        Assert.Equal(2, result.TotalFilesScanned);
+        Assert.Contains(group.Files, file => file.FullPath == first);
+        Assert.Contains(group.Files, file => file.FullPath == second);
+    }
+
+    [Fact]
+    public async Task ScanAsync_ExcludedDirectory_RemovesAllDescendants()
+    {
+        string includedFirst = WriteFile("included/first.bin", "same bytes");
+        string includedSecond = WriteFile("included/second.bin", "same bytes");
+        string excludedFirst = WriteFile("excluded/first.bin", "same bytes");
+        string excludedSecond = WriteFile("excluded/nested/second.bin", "same bytes");
+        string prefixSiblingFirst = WriteFile("excluded-more/first.bin", "different matching bytes");
+        string prefixSiblingSecond = WriteFile("excluded-more/second.bin", "different matching bytes");
+        string excludedDirectory = Path.Combine(_root, "excluded");
+
+        var scanner = new DuplicateScanner();
+        ScanResult result = await scanner.ScanAsync(
+            NewOptions() with { ExcludedPaths = [excludedDirectory] },
+            progress: null,
+            CancellationToken.None);
+
+        Assert.Equal(2, result.Groups.Count);
+        Assert.Equal(4, result.TotalFilesScanned);
+        Assert.Contains(result.Groups, group =>
+            group.Files.Any(file => file.FullPath == includedFirst) &&
+            group.Files.Any(file => file.FullPath == includedSecond));
+        Assert.Contains(result.Groups, group =>
+            group.Files.Any(file => file.FullPath == prefixSiblingFirst) &&
+            group.Files.Any(file => file.FullPath == prefixSiblingSecond));
+        Assert.DoesNotContain(result.Groups.SelectMany(group => group.Files), file => file.FullPath == excludedFirst);
+        Assert.DoesNotContain(result.Groups.SelectMany(group => group.Files), file => file.FullPath == excludedSecond);
+    }
+
+    [Fact]
+    public async Task ScanAsync_ExcludedFile_DoesNotRemoveItsSibling()
+    {
+        string excluded = WriteFile("one.bin", "same bytes");
+        string sibling = WriteFile("two.bin", "same bytes");
+
+        var scanner = new DuplicateScanner();
+        ScanResult result = await scanner.ScanAsync(
+            NewOptions() with { ExcludedPaths = [excluded] },
+            progress: null,
+            CancellationToken.None);
+
+        Assert.Empty(result.Groups);
+        Assert.Equal(1, result.TotalFilesScanned);
+        Assert.DoesNotContain(result.SkippedPaths, path => path.Path == sibling);
+    }
+
+    [Fact]
     public async Task ScanAsync_AlreadyCancelled_ThrowsOperationCanceledException()
     {
         WriteFile("one.bin", 80_000, 1);

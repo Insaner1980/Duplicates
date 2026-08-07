@@ -134,9 +134,11 @@ public sealed class NativeWinUiContractTests
     public void ScanPage_UsesNativeControlsWithoutLegacyCards()
     {
         XDocument page = LoadXaml(@"Views\ScanPage.xaml");
+        XDocument scopeEditor = LoadXaml(@"Views\Controls\PathScopeEditor.xaml");
 
         Assert.Equal(2, page.Descendants(Presentation + "NumberBox").Count());
-        Assert.NotEmpty(page.Descendants(Presentation + "ListView"));
+        Assert.Single(page.Descendants(), element => element.Name.LocalName == "PathScopeEditor");
+        Assert.NotEmpty(scopeEditor.Descendants(Presentation + "ListView"));
         Assert.NotEmpty(page.Descendants(Presentation + "Expander"));
         Assert.NotEmpty(page.Descendants(Presentation + "InfoBar"));
         Assert.NotEmpty(page.Descendants(Presentation + "ProgressBar"));
@@ -159,7 +161,7 @@ public sealed class NativeWinUiContractTests
                     "{StaticResource AccentButtonStyle}")
             .ToArray();
 
-        Assert.Equal(2, accentButtons.Length);
+        Assert.Single(accentButtons);
     }
 
     [Fact]
@@ -256,9 +258,13 @@ public sealed class NativeWinUiContractTests
     public void PrimaryCommandsExposeAccessKeysAndResultsAccelerators()
     {
         XDocument scan = LoadXaml(@"Views\ScanPage.xaml");
+        XDocument scopeEditor = LoadXaml(@"Views\Controls\PathScopeEditor.xaml");
         Assert.Contains(
-            scan.Descendants(Presentation + "Button"),
-            button => (string?)button.Attribute("AccessKey") == "A");
+            scopeEditor.Descendants(Presentation + "Button"),
+            button => (string?)button.Attribute("AccessKey") == "F");
+        Assert.Contains(
+            scopeEditor.Descendants(Presentation + "Button"),
+            button => (string?)button.Attribute("AccessKey") == "I");
         Assert.Contains(
             scan.Descendants(Presentation + "Button"),
             button => (string?)button.Attribute("AccessKey") == "S");
@@ -321,7 +327,7 @@ public sealed class NativeWinUiContractTests
     }
 
     [Fact]
-    public void ScanPage_CentersActionsFoldersAndOptionsOnOneWorkArea()
+    public void ScanPage_CentersActionsScopeAndOptionsOnOneWorkArea()
     {
         XDocument styles = LoadXaml(@"Themes\Styles.xaml");
         XElement workAreaWidth = styles
@@ -334,9 +340,7 @@ public sealed class NativeWinUiContractTests
         string[] centeredNames =
         [
             "HeaderActionRail",
-            "FoldersActionRail",
-            "FoldersList",
-            "EmptyFoldersState",
+            "PathScopeEditor",
             "ScanOptions",
         ];
 
@@ -360,15 +364,18 @@ public sealed class NativeWinUiContractTests
     }
 
     [Fact]
-    public void ScanPage_FolderRowsExposeNameParentPathAndNearbyRemoveAction()
+    public void PathScopeEditor_ExposesCanonicalPathPresentationAndNativeActions()
     {
-        XDocument page = LoadXaml(@"Views\ScanPage.xaml");
-        XElement foldersList = page
+        XDocument editor = LoadXaml(@"Views\Controls\PathScopeEditor.xaml");
+        XElement pathsList = editor
             .Descendants(Presentation + "ListView")
             .Single(element =>
-                (string?)element.Attribute(Xaml + "Name") == "FoldersList");
-        XElement template = Assert.Single(
-            foldersList.Descendants(Presentation + "DataTemplate"));
+                (string?)element.Attribute(Xaml + "Name") == "IncludedPathsList");
+        Assert.Equal("{Binding IncludedPaths}", (string?)pathsList.Attribute("ItemsSource"));
+
+        XElement template = editor
+            .Descendants(Presentation + "DataTemplate")
+            .Single(element => (string?)element.Attribute(Xaml + "Key") == "PathItemTemplate");
 
         Assert.Contains(
             template.Descendants(Presentation + "TextBlock"),
@@ -380,12 +387,15 @@ public sealed class NativeWinUiContractTests
         XElement removeButton = template
             .Descendants(Presentation + "Button")
             .Single(element =>
-                (string?)element.Attribute("AutomationProperties.Name") == "Remove folder");
+                (string?)element.Attribute("AutomationProperties.Name") == "Remove path");
         Assert.Equal("{Binding}", (string?)removeButton.Attribute("CommandParameter"));
         Assert.Equal(
             "{Binding FullPath}",
             (string?)template.Descendants(Presentation + "Grid").First()
                 .Attribute("ToolTipService.ToolTip"));
+        Assert.Contains(
+            template.Descendants(Presentation + "MenuFlyoutItem"),
+            item => (string?)item.Attribute("Text") == "Prefer copies in this folder");
     }
 
     [Fact]
@@ -404,7 +414,6 @@ public sealed class NativeWinUiContractTests
                 StringComparer.Ordinal);
 
         Assert.Equal("1", setters["HeaderActionRail.(Grid.Row)"]);
-        Assert.Equal("1", setters["FoldersActionRail.(Grid.Row)"]);
     }
 
     [Fact]
