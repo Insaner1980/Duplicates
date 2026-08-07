@@ -96,12 +96,37 @@
                             MaxWidth="{StaticResource ScanWorkAreaMaxWidth}"
                             HorizontalAlignment="Stretch"
                             Header="Analysis options"
-                            IsExpanded="True">
-                            <TextBlock
-                                Padding="0,12,0,0"
-                                Style="{StaticResource MutedTextBlockStyle}"
-                                Text="{Binding OptionsSummary}"
-                                TextWrapping="Wrap" />
+                            IsExpanded="True"
+                            Visibility="{Binding OptionsVisibility}">
+                            <StackPanel Padding="0,12,0,0" Spacing="{StaticResource SpacingMedium}">
+                                <StackPanel
+                                    Visibility="{Binding LargeFileOptionsVisibility}"
+                                    Spacing="{StaticResource SpacingSmall}">
+                                    <NumberBox
+                                        Header="Minimum size, bytes"
+                                        Minimum="0"
+                                        ValidationMode="InvalidInputOverwritten"
+                                        Value="{Binding LargeFileMinimumSizeValue, Mode=TwoWay}" />
+                                    <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpacingSmall}">
+                                        <Button
+                                            Command="{Binding SetLargeFileMinimumSizeToAnyCommand}"
+                                            Content="Any" />
+                                        <Button
+                                            Command="{Binding SetLargeFileMinimumSizeTo100MbCommand}"
+                                            Content="100 MB" />
+                                        <Button
+                                            Command="{Binding SetLargeFileMinimumSizeTo1GbCommand}"
+                                            Content="1 GB" />
+                                        <Button
+                                            Command="{Binding SetLargeFileMinimumSizeTo10GbCommand}"
+                                            Content="10 GB" />
+                                    </StackPanel>
+                                </StackPanel>
+                                <TextBlock
+                                    Style="{StaticResource MutedTextBlockStyle}"
+                                    Text="{Binding OptionsSummary}"
+                                    TextWrapping="Wrap" />
+                            </StackPanel>
                         </Expander>
                     </StackPanel>
 

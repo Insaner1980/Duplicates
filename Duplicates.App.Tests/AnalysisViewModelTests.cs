@@ -196,6 +196,130 @@ public sealed class AnalysisViewModelTests
         Assert.Equal("Access denied", skipped.Reason);
     }
 
+    [Fact]
+    public async Task BigFiles_NormalizesOptionsOnceAndStoresTheExactRunSnapshot()
+    {
+        ToolOptions? requestedOptions = null;
+        var service = new FakeAnalysisService
+        {
+            Run = (_, _, options, _, _) =>
+            {
+                requestedOptions = options;
+                return Task.FromResult(NewResult());
+            },
+        };
+        var store = new AnalysisSessionStore();
+        var viewModel = new AnalysisViewModel(service, store, NewScope());
+        viewModel.SelectTool(ToolKind.BigFiles);
+
+        Assert.Equal(1_073_741_824d, viewModel.LargeFileMinimumSizeValue);
+        Assert.Equal("Files at least 1 GB are included.", viewModel.OptionsSummary);
+        Assert.Equal(Visibility.Visible, viewModel.OptionsVisibility);
+        Assert.Equal(Visibility.Visible, viewModel.LargeFileOptionsVisibility);
+
+        viewModel.LargeFileMinimumSizeValue = double.NaN;
+        Assert.Equal("Files at least 1 GB are included.", viewModel.OptionsSummary);
+        viewModel.LargeFileMinimumSizeValue = 104_857_600.9d;
+
+        Assert.Equal("Files at least 100 MB are included.", viewModel.OptionsSummary);
+        await viewModel.StartAnalysisCommand.ExecuteAsync(null);
+
+        var options = Assert.IsType<LargeFileToolOptions>(requestedOptions);
+        Assert.Equal(104_857_600, options.MinimumSizeBytes);
+        Assert.Same(options, Assert.IsType<AnalysisSession>(store.CurrentSession).ToolOptions);
+    }
+
+    [Fact]
+    public void BigFiles_PresetsUseExactByteValuesAndEmptyFilesHideOptions()
+    {
+        var viewModel = new AnalysisViewModel(
+            new FakeAnalysisService(),
+            new AnalysisSessionStore(),
+            NewScope());
+        viewModel.SelectTool(ToolKind.BigFiles);
+
+        viewModel.SetLargeFileMinimumSizeToAnyCommand.Execute(null);
+        Assert.Equal(0d, viewModel.LargeFileMinimumSizeValue);
+        viewModel.SetLargeFileMinimumSizeTo100MbCommand.Execute(null);
+        Assert.Equal(104_857_600d, viewModel.LargeFileMinimumSizeValue);
+        viewModel.SetLargeFileMinimumSizeTo1GbCommand.Execute(null);
+        Assert.Equal(1_073_741_824d, viewModel.LargeFileMinimumSizeValue);
+        viewModel.SetLargeFileMinimumSizeTo10GbCommand.Execute(null);
+        Assert.Equal(10_737_418_240d, viewModel.LargeFileMinimumSizeValue);
+
+        viewModel.SelectTool(ToolKind.EmptyFiles);
+
+        Assert.Equal(Visibility.Collapsed, viewModel.OptionsVisibility);
+        Assert.Equal(Visibility.Collapsed, viewModel.LargeFileOptionsVisibility);
+    }
+
+    [Fact]
+    public async Task AnalysisService_BuildsInventoryOffCallerThreadAndRoutesStorageTools()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string largePath = Path.Combine(root, "large.bin");
+        string emptyPath = Path.Combine(root, "empty.txt");
+        await File.WriteAllBytesAsync(largePath, [1, 2, 3]);
+        await File.WriteAllBytesAsync(emptyPath, []);
+
+        try
+        {
+            var service = new AnalysisService();
+            int callerThread = Environment.CurrentManagedThreadId;
+            var reportThreads = new List<int>();
+            var progress = new CapturingProgress<AnalysisProgress>(
+                _ => reportThreads.Add(Environment.CurrentManagedThreadId));
+            AnalysisScope scope = new() { IncludedFiles = [largePath, emptyPath] };
+
+            AnalysisResult largeResult = await service.RunAsync(
+                ToolKind.BigFiles,
+                scope,
+                new LargeFileToolOptions(3),
+                progress,
+                CancellationToken.None);
+            AnalysisResult emptyResult = await service.RunAsync(
+                ToolKind.EmptyFiles,
+                scope,
+                new NoToolOptions(),
+                progress: null,
+                CancellationToken.None);
+
+            Assert.Equal(largePath, Assert.Single(largeResult.Findings).FullPath);
+            Assert.Equal(emptyPath, Assert.Single(emptyResult.Findings).FullPath);
+            Assert.NotEmpty(reportThreads);
+            Assert.DoesNotContain(callerThread, reportThreads);
+            Assert.True(largeResult.Elapsed >= TimeSpan.Zero);
+            Assert.True(emptyResult.Elapsed >= TimeSpan.Zero);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task AnalysisService_ValidatesOptionsBeforeInventoryAndKeepsLaterToolsUnavailable()
+    {
+        var reports = new List<AnalysisProgress>();
+        var service = new AnalysisService();
+
+        await Assert.ThrowsAsync<ArgumentException>(() => service.RunAsync(
+            ToolKind.BigFiles,
+            new AnalysisScope { IncludedFolders = [@"C:\missing"] },
+            new NoToolOptions(),
+            new CapturingProgress<AnalysisProgress>(reports.Add),
+            CancellationToken.None));
+        await Assert.ThrowsAsync<NotSupportedException>(() => service.RunAsync(
+            ToolKind.TemporaryFiles,
+            new AnalysisScope(),
+            new TemporaryFileToolOptions(TimeSpan.FromDays(7), DateTime.UtcNow),
+            progress: null,
+            CancellationToken.None));
+
+        Assert.Empty(reports);
+    }
+
     private static PathScopeViewModel NewScope()
     {
         var scope = new PathScopeViewModel
@@ -252,5 +376,10 @@ public sealed class AnalysisViewModelTests
             CallCount++;
             return Run(tool, scope, toolOptions, progress, cancellationToken);
         }
+    }
+
+    private sealed class CapturingProgress<T>(Action<T> report) : IProgress<T>
+    {
+        public void Report(T value) => report(value);
     }
 }

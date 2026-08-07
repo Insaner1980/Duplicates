@@ -11,6 +11,8 @@ namespace Duplicates.ViewModels;
 
 public sealed partial class AnalysisViewModel : ObservableObject
 {
+    private const long DefaultLargeFileMinimumSizeBytes = 1_073_741_824;
+
     private readonly IAnalysisService _analysisService;
     private readonly AnalysisSessionStore _sessionStore;
     private readonly PathScopeViewModel _pathScope;
@@ -40,12 +42,24 @@ public sealed partial class AnalysisViewModel : ObservableObject
 
     public string OptionsSummary => Tool switch
     {
-        ToolKind.BigFiles => "Files at least 100 MB are included.",
+        ToolKind.BigFiles => $"Files at least {ByteFormatter.Format(GetLargeFileMinimumSizeBytes())} are included.",
         ToolKind.TemporaryFiles => "Files at least 7 days old are included.",
         ToolKind.SimilarImages or ToolKind.SimilarVideos => "Balanced similarity matching is used.",
         ToolKind.MusicDuplicates => "Track durations may differ by up to 2 seconds.",
         _ => "No additional options are required.",
     };
+
+    public Visibility OptionsVisibility => Tool == ToolKind.EmptyFiles
+        ? Visibility.Collapsed
+        : Visibility.Visible;
+
+    public Visibility LargeFileOptionsVisibility => Tool == ToolKind.BigFiles
+        ? Visibility.Visible
+        : Visibility.Collapsed;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(OptionsSummary))]
+    public partial double LargeFileMinimumSizeValue { get; set; } = DefaultLargeFileMinimumSizeBytes;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(SetupVisibility))]
@@ -99,6 +113,8 @@ public sealed partial class AnalysisViewModel : ObservableObject
         OnPropertyChanged(nameof(Title));
         OnPropertyChanged(nameof(Subtitle));
         OnPropertyChanged(nameof(OptionsSummary));
+        OnPropertyChanged(nameof(OptionsVisibility));
+        OnPropertyChanged(nameof(LargeFileOptionsVisibility));
     }
 
     [RelayCommand(CanExecute = nameof(CanStartAnalysis))]
@@ -115,6 +131,7 @@ public sealed partial class AnalysisViewModel : ObservableObject
         CancellationToken cancellationToken = _analysisCancellation.Token;
         ToolKind tool = Tool;
         AnalysisScope scope = BuildScope();
+        ToolOptions toolOptions = BuildToolOptions(tool);
 
         try
         {
@@ -122,11 +139,11 @@ public sealed partial class AnalysisViewModel : ObservableObject
             AnalysisResult result = await _analysisService.RunAsync(
                 tool,
                 scope,
-                BuildToolOptions(tool),
+                toolOptions,
                 progress,
                 cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
-            _sessionStore.SetCompleted(tool, scope, result);
+            _sessionStore.SetCompleted(tool, scope, toolOptions, result);
             AnalysisCompleted?.Invoke(this, _sessionStore.CurrentSession!);
         }
         catch (OperationCanceledException)
@@ -151,6 +168,18 @@ public sealed partial class AnalysisViewModel : ObservableObject
     [RelayCommand]
     private void CancelAnalysis() => _analysisCancellation?.Cancel();
 
+    [RelayCommand]
+    private void SetLargeFileMinimumSizeToAny() => LargeFileMinimumSizeValue = 0;
+
+    [RelayCommand]
+    private void SetLargeFileMinimumSizeTo100Mb() => LargeFileMinimumSizeValue = 104_857_600;
+
+    [RelayCommand]
+    private void SetLargeFileMinimumSizeTo1Gb() => LargeFileMinimumSizeValue = DefaultLargeFileMinimumSizeBytes;
+
+    [RelayCommand]
+    private void SetLargeFileMinimumSizeTo10Gb() => LargeFileMinimumSizeValue = 10_737_418_240;
+
     private bool CanStartAnalysis() => !IsAnalyzing && PathScope.HasIncludedPaths;
 
     private AnalysisScope BuildScope() => new()
@@ -169,9 +198,9 @@ public sealed partial class AnalysisViewModel : ObservableObject
         IgnoreSystemFiles = PathScope.IgnoreSystemFiles,
     };
 
-    private static ToolOptions BuildToolOptions(ToolKind tool) => tool switch
+    private ToolOptions BuildToolOptions(ToolKind tool) => tool switch
     {
-        ToolKind.BigFiles => new LargeFileToolOptions(100L * 1024 * 1024),
+        ToolKind.BigFiles => new LargeFileToolOptions(GetLargeFileMinimumSizeBytes()),
         ToolKind.TemporaryFiles => new TemporaryFileToolOptions(TimeSpan.FromDays(7), DateTime.UtcNow),
         ToolKind.SimilarImages => new SimilarImageToolOptions(10),
         ToolKind.SimilarVideos => new SimilarVideoToolOptions(10),
@@ -180,6 +209,10 @@ public sealed partial class AnalysisViewModel : ObservableObject
             ToolKind.BrokenFiles or ToolKind.BadExtensions or ToolKind.BadNames => new NoToolOptions(),
         _ => throw new ArgumentException($"{tool} is not a read-only analysis tool.", nameof(tool)),
     };
+
+    private long GetLargeFileMinimumSizeBytes() => ByteSizeInput.ToBytes(
+        LargeFileMinimumSizeValue,
+        DefaultLargeFileMinimumSizeBytes);
 
     private void UpdateProgress(AnalysisProgress progress)
     {

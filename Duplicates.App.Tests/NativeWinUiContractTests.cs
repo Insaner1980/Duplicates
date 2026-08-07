@@ -144,6 +144,7 @@ public sealed class NativeWinUiContractTests
         var session = new AnalysisSession(
             ToolKind.BigFiles,
             new AnalysisScope(),
+            new LargeFileToolOptions(1_073_741_824),
             new AnalysisResult
             {
                 Findings = [],
@@ -214,6 +215,39 @@ public sealed class NativeWinUiContractTests
         XElement scrollViewer = Assert.Single(page.Descendants(Presentation + "ScrollViewer"));
         Assert.Equal("Disabled", (string?)scrollViewer.Attribute("HorizontalScrollMode"));
         Assert.Equal("Disabled", (string?)scrollViewer.Attribute("HorizontalScrollBarVisibility"));
+    }
+
+    [Fact]
+    public void AnalysisPage_UsesNativeBigFileInputAndExactPresets()
+    {
+        XDocument page = LoadXaml(@"Views\AnalysisPage.xaml");
+        XElement options = page
+            .Descendants(Presentation + "Expander")
+            .Single(element => (string?)element.Attribute(Xaml + "Name") == "AnalysisOptions");
+        XElement numberBox = Assert.Single(options.Descendants(Presentation + "NumberBox"));
+
+        Assert.Equal("{Binding OptionsVisibility}", (string?)options.Attribute("Visibility"));
+        Assert.Equal("Minimum size, bytes", (string?)numberBox.Attribute("Header"));
+        Assert.Equal("0", (string?)numberBox.Attribute("Minimum"));
+        Assert.Equal("InvalidInputOverwritten", (string?)numberBox.Attribute("ValidationMode"));
+        Assert.Equal(
+            "{Binding LargeFileMinimumSizeValue, Mode=TwoWay}",
+            (string?)numberBox.Attribute("Value"));
+        Assert.Equal(
+            new[] { "Any", "100 MB", "1 GB", "10 GB" },
+            options.Descendants(Presentation + "Button")
+                .Select(button => (string?)button.Attribute("Content"))
+                .Where(static content => content is not null));
+        Assert.Equal(
+            new[]
+            {
+                "{Binding SetLargeFileMinimumSizeToAnyCommand}",
+                "{Binding SetLargeFileMinimumSizeTo100MbCommand}",
+                "{Binding SetLargeFileMinimumSizeTo1GbCommand}",
+                "{Binding SetLargeFileMinimumSizeTo10GbCommand}",
+            },
+            options.Descendants(Presentation + "Button")
+                .Select(button => (string?)button.Attribute("Command")));
     }
 
     [Fact]

@@ -1,5 +1,4 @@
 using System.Collections.ObjectModel;
-using System.Globalization;
 using System.Security;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -556,13 +555,14 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         try
         {
             FileActionTargetKind kind = ReadTargetKind(finding.FullPath);
-            if (!FindingKindMatches(finding.Source.Kind, kind) || !FindingPredicateStillMatches(finding, kind))
+            long sizeBytes = kind == FileActionTargetKind.File ? new FileInfo(finding.FullPath).Length : 0;
+            if (!FindingKindMatches(finding.Source.Kind, kind) ||
+                !FindingPredicateStillMatches(finding, kind, sizeBytes))
             {
                 failure = ChangedFailure(finding.FullPath);
                 return false;
             }
 
-            long sizeBytes = kind == FileActionTargetKind.File ? finding.Source.SizeBytes ?? 0 : 0;
             target = new FileActionTarget(finding.FullPath, sizeBytes, kind);
             return true;
         }
@@ -599,25 +599,21 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         }
     }
 
-    private bool FindingPredicateStillMatches(PathFindingViewModel finding, FileActionTargetKind kind)
+    private bool FindingPredicateStillMatches(
+        PathFindingViewModel finding,
+        FileActionTargetKind kind,
+        long currentSizeBytes)
     {
-        ToolKind tool = _sessionStore.CurrentSession?.Tool ?? ToolKind.EmptyFiles;
-        return tool switch
+        AnalysisSession? session = _sessionStore.CurrentSession;
+        return session?.Tool switch
         {
-            ToolKind.EmptyFiles => kind == FileActionTargetKind.File && new FileInfo(finding.FullPath).Length == 0,
+            ToolKind.EmptyFiles => kind == FileActionTargetKind.File && currentSizeBytes == 0,
             ToolKind.EmptyFolders => kind == FileActionTargetKind.Directory && !Directory.EnumerateFileSystemEntries(finding.FullPath).Any(),
             ToolKind.BigFiles => kind == FileActionTargetKind.File &&
-                new FileInfo(finding.FullPath).Length >= GetMinimumSize(finding.Source),
+                session.ToolOptions is LargeFileToolOptions options &&
+                currentSizeBytes >= options.MinimumSizeBytes,
             _ => false,
         };
-    }
-
-    private static long GetMinimumSize(PathFinding finding)
-    {
-        return finding.Metadata.TryGetValue("MinimumSizeBytes", out string? value) &&
-            long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out long minimum)
-                ? minimum
-                : finding.SizeBytes ?? 0;
     }
 
     private void RemoveSuccessfulPaths(IReadOnlySet<string> successfulPaths)

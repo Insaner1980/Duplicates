@@ -230,6 +230,128 @@ public sealed class AnalysisResultsViewModelTests
         Assert.Equal(Visibility.Visible, viewModel.BeforeFirstAnalysisVisibility);
     }
 
+    [Fact]
+    public async Task BigFileDelete_UsesStoredRunThresholdAndCurrentLengthForTarget()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string path = Path.Combine(root, "large.bin");
+        await File.WriteAllBytesAsync(path, new byte[12]);
+
+        try
+        {
+            var store = new AnalysisSessionStore();
+            var fileActions = new FakeFileActionService
+            {
+                NextSummary = new DeleteSummary(1, 12, []),
+            };
+            var viewModel = new AnalysisResultsViewModel(store, fileActions, new FakeResultExportService());
+            var options = new LargeFileToolOptions(10);
+            store.SetCompleted(
+                ToolKind.BigFiles,
+                new AnalysisScope { IncludedFolders = [root] },
+                options,
+                NewResult([NewFinding(path, 100)]));
+            PathFindingViewModel finding = Assert.Single(viewModel.Findings);
+            finding.IsSelected = true;
+            IReadOnlyList<FileActionTarget>? requestedTargets = null;
+            fileActions.OnDelete = (targets, _) => requestedTargets = targets;
+
+            DeleteSummary summary = await viewModel.DeleteSelectedAsync(CancellationToken.None);
+
+            Assert.Same(options, Assert.IsType<AnalysisSession>(store.CurrentSession).ToolOptions);
+            Assert.Equal(
+                [new FileActionTarget(path, 12, FileActionTargetKind.File)],
+                requestedTargets);
+            Assert.Equal(1, summary.DeletedCount);
+            Assert.Empty(viewModel.Findings);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task BigFileDelete_RejectsFileBelowStoredThresholdAndKeepsCanonicalSelection()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string path = Path.Combine(root, "changed.bin");
+        await File.WriteAllBytesAsync(path, new byte[9]);
+
+        try
+        {
+            var store = new AnalysisSessionStore();
+            var fileActions = new FakeFileActionService();
+            var viewModel = new AnalysisResultsViewModel(store, fileActions, new FakeResultExportService());
+            PathFinding finding = NewFinding(path, 100) with
+            {
+                Metadata = new Dictionary<string, string> { ["MinimumSizeBytes"] = "1" },
+            };
+            store.SetCompleted(
+                ToolKind.BigFiles,
+                new AnalysisScope { IncludedFolders = [root] },
+                new LargeFileToolOptions(10),
+                NewResult([finding]));
+            PathFindingViewModel selected = Assert.Single(viewModel.Findings);
+            selected.IsSelected = true;
+
+            DeleteSummary summary = await viewModel.DeleteSelectedAsync(CancellationToken.None);
+
+            FileActionFailure failure = Assert.Single(summary.Failures);
+            Assert.Equal(path, failure.Path);
+            Assert.Equal("File changed since scan.", failure.Reason);
+            Assert.Equal(0, fileActions.DeleteCallCount);
+            Assert.Same(selected, Assert.Single(viewModel.Findings));
+            Assert.True(selected.IsSelected);
+            Assert.Contains(selected, viewModel.SelectedFindings);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task EmptyFileDelete_RejectsChangedAndMissingFilesWithoutCallingService()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string changedPath = Path.Combine(root, "changed.txt");
+        string missingPath = Path.Combine(root, "missing.txt");
+        await File.WriteAllBytesAsync(changedPath, [1]);
+
+        try
+        {
+            var store = new AnalysisSessionStore();
+            var fileActions = new FakeFileActionService();
+            var viewModel = new AnalysisResultsViewModel(store, fileActions, new FakeResultExportService());
+            store.SetCompleted(
+                ToolKind.EmptyFiles,
+                new AnalysisScope { IncludedFolders = [root] },
+                new NoToolOptions(),
+                NewResult([NewFinding(changedPath, 0), NewFinding(missingPath, 0)]));
+            foreach (PathFindingViewModel finding in viewModel.Findings)
+            {
+                finding.IsSelected = true;
+            }
+
+            DeleteSummary summary = await viewModel.DeleteSelectedAsync(CancellationToken.None);
+
+            Assert.Equal(2, summary.Failures.Count);
+            Assert.All(summary.Failures, static failure => Assert.Equal("File changed since scan.", failure.Reason));
+            Assert.Equal(0, fileActions.DeleteCallCount);
+            Assert.Equal(2, viewModel.Findings.Count);
+            Assert.All(viewModel.Findings, static finding => Assert.True(finding.IsSelected));
+            Assert.Equal(2, viewModel.SelectedFindings.Count);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     private static AnalysisResult NewResult(
         IReadOnlyList<PathFinding>? findings = null,
         IReadOnlyList<SimilarityGroup>? groups = null,
