@@ -1,3 +1,4 @@
+using Duplicates.Models;
 using Duplicates.Views;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -21,7 +22,6 @@ public sealed partial class MainWindow : Window
 
         _services.ThemeService.Apply(this, Root, _services.SettingsService.Current);
         _services.SettingsService.SettingsChanged += SettingsChanged;
-        _services.ResultsStore.ResultChanged += ResultsChanged;
         Closed += MainWindow_Closed;
 
         RootNavigationView.SelectedItem = ScanNavigationItem;
@@ -31,17 +31,11 @@ public sealed partial class MainWindow : Window
     private void MainWindow_Closed(object sender, WindowEventArgs args)
     {
         _services.SettingsService.SettingsChanged -= SettingsChanged;
-        _services.ResultsStore.ResultChanged -= ResultsChanged;
     }
 
-    private void SettingsChanged(object? sender, Models.AppSettings settings)
+    private void SettingsChanged(object? sender, AppSettings settings)
     {
         _services.ThemeService.Apply(this, Root, settings);
-    }
-
-    private void ResultsChanged(object? sender, Engine.Models.ScanResult? result)
-    {
-        ResultsNavigationItem.IsEnabled = result is not null;
     }
 
     private void AppTitleBar_PaneToggleRequested(TitleBar sender, object args)
@@ -62,13 +56,18 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        Type pageType = tag switch
+        if (!Enum.TryParse(tag, out ToolKind kind) || !Enum.IsDefined(kind))
         {
-            "Results" => typeof(ResultsPage),
-            _ => typeof(ScanPage),
-        };
+            return;
+        }
 
-        NavigateTo(pageType);
+        if (kind == ToolKind.DuplicateFiles)
+        {
+            NavigateTo(typeof(ScanPage));
+            return;
+        }
+
+        _ = ShowToolNotInstalledDialogAsync(ToolDescriptor.For(kind));
     }
 
     private void NavigateTo(Type pageType)
@@ -81,8 +80,6 @@ public sealed partial class MainWindow : Window
 
     public void ShowResultsPage()
     {
-        ResultsNavigationItem.IsEnabled = true;
-        RootNavigationView.SelectedItem = ResultsNavigationItem;
         if (RootFrame.CurrentSourcePageType != typeof(ResultsPage))
         {
             RootFrame.Navigate(typeof(ResultsPage));
@@ -96,5 +93,19 @@ public sealed partial class MainWindow : Window
         {
             RootFrame.Navigate(typeof(ScanPage));
         }
+    }
+
+    private async Task ShowToolNotInstalledDialogAsync(ToolDescriptor descriptor)
+    {
+        var dialog = new ContentDialog
+        {
+            XamlRoot = Root.XamlRoot,
+            Title = descriptor.Title,
+            Content = "This tool is not installed in the current build.",
+            CloseButtonText = "Close",
+            DefaultButton = ContentDialogButton.Close,
+        };
+
+        await dialog.ShowAsync();
     }
 }

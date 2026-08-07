@@ -75,9 +75,26 @@ public sealed class NativeWinUiContractTests
     {
         XDocument main = LoadXaml("MainWindow.xaml");
 
+        string[] expectedTags =
+        [
+            "DuplicateFiles", "SimilarImages", "SimilarVideos", "MusicDuplicates",
+            "EmptyFolders", "BigFiles", "EmptyFiles", "TemporaryFiles",
+            "InvalidLinks", "BrokenFiles", "BadExtensions", "BadNames",
+            "ExifRemover", "VideoOptimizer",
+        ];
+
         Assert.Single(main.Descendants(Presentation + "TitleBar"));
         Assert.Single(main.Descendants(Presentation + "NavigationView"));
         Assert.Single(main.Descendants(Presentation + "Frame"));
+        Assert.Equal(expectedTags, NavigationTags(main));
+        Assert.Equal(3, main.Descendants(Presentation + "NavigationViewItemHeader").Count());
+        Assert.DoesNotContain(NavigationTags(main), tag => tag == "Results");
+
+        foreach (XElement item in main.Descendants(Presentation + "NavigationViewItem"))
+        {
+            Assert.NotEmpty(item.Descendants(Presentation + "FontIcon"));
+            Assert.False(string.IsNullOrWhiteSpace((string?)item.Attribute("Content")));
+        }
 
         XElement root = main
             .Descendants(Presentation + "Grid")
@@ -393,6 +410,13 @@ public sealed class NativeWinUiContractTests
         string path = Path.Combine(AppContext.BaseDirectory, "UiSource", relativePath);
         return XDocument.Load(path, LoadOptions.SetLineInfo);
     }
+
+    private static string[] NavigationTags(XDocument main) => main
+        .Descendants(Presentation + "NavigationViewItem")
+        .Select(item => (string?)item.Attribute("Tag"))
+        .Where(tag => tag is not null)
+        .Cast<string>()
+        .ToArray();
 
     private static IEnumerable<(string Path, XDocument Document)> AllProductionXaml()
     {
