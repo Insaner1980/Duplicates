@@ -126,6 +126,10 @@
                 Style="{ThemeResource TitleTextBlockStyle}"
                 Text="Analysis results" />
             <TextBlock Style="{StaticResource MutedTextBlockStyle}" Text="{Binding SummaryText}" />
+            <TextBlock
+                AutomationProperties.LiveSetting="Polite"
+                Style="{StaticResource MutedTextBlockStyle}"
+                Text="{Binding ActionStatusMessage}" />
         </StackPanel>
 
         <CommandBar Grid.Row="1" DefaultLabelPosition="Right">
@@ -147,6 +151,27 @@
                 Command="{Binding TogglePreviewPaneCommand}"
                 Icon="View"
                 Label="Preview" />
+            <AppBarButton
+                AccessKey="D"
+                AutomationProperties.Name="Delete selected analysis results"
+                Foreground="{ThemeResource DangerBrush}"
+                Icon="Delete"
+                IsEnabled="{Binding CanActOnSelection}"
+                Label="Delete selected"
+                Click="DeleteSelected_Click" />
+            <AppBarButton
+                AccessKey="M"
+                AutomationProperties.Name="Move selected analysis results"
+                Icon="Folder"
+                IsEnabled="{Binding CanActOnSelection}"
+                Label="Move selected"
+                Click="MoveSelected_Click" />
+            <AppBarButton
+                AccessKey="E"
+                AutomationProperties.Name="Export analysis results"
+                Icon="Save"
+                Label="Export"
+                Click="Export_Click" />
             <CommandBar.Content>
                 <Grid ColumnSpacing="12">
                     <Grid.ColumnDefinitions>

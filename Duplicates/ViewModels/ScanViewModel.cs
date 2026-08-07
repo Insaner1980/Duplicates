@@ -2,6 +2,7 @@ using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Duplicates.Engine;
+using Duplicates.Engine.Analysis;
 using Duplicates.Engine.Models;
 using Duplicates.Models;
 using Duplicates.Services;
@@ -150,7 +151,7 @@ public sealed partial class ScanViewModel : ObservableObject
     {
         IsScanning = true;
         StatusMessage = string.Empty;
-        _scanStartedAt = DateTimeOffset.Now;
+        _scanStartedAt = DateTimeOffset.UtcNow;
         _scanCancellation = new CancellationTokenSource();
 
         try
@@ -158,7 +159,7 @@ public sealed partial class ScanViewModel : ObservableObject
             ScanOptions options = BuildScanOptions();
             var progress = new Progress<ScanProgress>(UpdateProgress);
             ScanResult result = await _scanner.ScanAsync(options, progress, _scanCancellation.Token);
-            _resultsStore.SetResult(result);
+            _resultsStore.SetResult(result, BuildResultScope(options), DateTimeOffset.UtcNow);
             ScanCompleted?.Invoke(this, result);
         }
         catch (OperationCanceledException)
@@ -250,6 +251,16 @@ public sealed partial class ScanViewModel : ObservableObject
         };
     }
 
+    private static AnalysisScope BuildResultScope(ScanOptions options) => new()
+    {
+        IncludedFolders = options.Folders.ToArray(),
+        IncludedFiles = options.Files.ToArray(),
+        ExcludedPaths = options.ExcludedPaths.ToArray(),
+        IncludeSubfolders = options.IncludeSubfolders,
+        IgnoreHiddenFiles = options.IgnoreHiddenFiles,
+        IgnoreSystemFiles = options.IgnoreSystemFiles,
+    };
+
     private IEnumerable<FileTypeCategory> GetSelectedCategories()
     {
         if (ImagesSelected)
@@ -300,7 +311,7 @@ public sealed partial class ScanViewModel : ObservableObject
         FilesProcessedText = progress.FilesProcessed.ToString("N0", CultureInfo.InvariantCulture);
         BytesProcessedText = ByteFormatter.Format(progress.BytesProcessed);
         CurrentFilePath = progress.CurrentFilePath ?? string.Empty;
-        TimeSpan elapsed = DateTimeOffset.Now - _scanStartedAt;
+        TimeSpan elapsed = DateTimeOffset.UtcNow - _scanStartedAt;
         ElapsedText = elapsed.TotalSeconds < 1 ? "<1s" : $"{Math.Floor(elapsed.TotalSeconds):N0}s";
 
         IsProgressIndeterminate = progress.TotalBytesToProcess <= 0 || progress.Phase is ScanPhase.Enumerating or ScanPhase.GroupingBySize;

@@ -1,7 +1,10 @@
 using System.Collections.ObjectModel;
+using System.Globalization;
+using System.Security;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Duplicates.Engine.Analysis;
+using Duplicates.Engine.Models;
 using Duplicates.Models;
 using Duplicates.Services;
 using Microsoft.UI.Xaml;
@@ -11,12 +14,24 @@ namespace Duplicates.ViewModels;
 public sealed partial class AnalysisResultsViewModel : ObservableObject
 {
     private readonly AnalysisSessionStore _sessionStore;
+    private readonly IFileActionService? _fileActionService;
+    private readonly IResultExportService? _resultExportService;
     private readonly List<PathFindingViewModel> _allFindings = [];
     private readonly List<SimilarityGroupViewModel> _allGroups = [];
 
     public AnalysisResultsViewModel(AnalysisSessionStore sessionStore)
+        : this(sessionStore, null, null)
+    {
+    }
+
+    public AnalysisResultsViewModel(
+        AnalysisSessionStore sessionStore,
+        IFileActionService? fileActionService,
+        IResultExportService? resultExportService)
     {
         _sessionStore = sessionStore;
+        _fileActionService = fileActionService;
+        _resultExportService = resultExportService;
         _sessionStore.ResultChanged += ResultsChanged;
     }
 
@@ -43,6 +58,13 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
 
     [ObservableProperty]
     public partial bool IsPreviewPaneOpen { get; set; }
+
+    [ObservableProperty]
+    public partial string ActionStatusMessage { get; set; } = string.Empty;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanActOnSelection))]
+    public partial bool IsActionRunning { get; set; }
 
     public Visibility BeforeFirstAnalysisVisibility => _sessionStore.CurrentSession is null
         ? Visibility.Visible
@@ -88,6 +110,8 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
 
     public long SelectedBytes => SelectedFindings.Sum(static item => item.SizeBytes) +
         SelectedSimilarityItems.Sum(static item => item.SizeBytes);
+
+    public bool CanActOnSelection => !IsActionRunning && SelectedItemCount > 0;
 
     public IReadOnlyList<PathFindingViewModel> SelectedFindings =>
         _allFindings.Where(static item => item.IsSelected).ToArray();
@@ -151,6 +175,159 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
 
     [RelayCommand]
     private void TogglePreviewPane() => IsPreviewPaneOpen = !IsPreviewPaneOpen;
+
+    public async Task<DeleteSummary> DeleteSelectedAsync(CancellationToken cancellationToken)
+    {
+        IFileActionService fileActions = _fileActionService ??
+            throw new InvalidOperationException("File actions are not configured.");
+        SelectionTargets selection = BuildValidatedSelection();
+        if (selection.SelectedCount == 0)
+        {
+            throw new InvalidOperationException("Select at least one result first.");
+        }
+
+        IsActionRunning = true;
+        ActionStatusMessage = "Deleting selected items...";
+        try
+        {
+            DeleteSummary serviceSummary = selection.Targets.Count == 0
+                ? new DeleteSummary(0, 0, [])
+                : await fileActions.DeleteAsync(selection.Targets, null, cancellationToken);
+            FileActionFailure[] failures = selection.Failures.Concat(serviceSummary.Failures).ToArray();
+            HashSet<string> successfulPaths = selection.Targets
+                .Where(target => !serviceSummary.Failures.Any(failure =>
+                    string.Equals(failure.Path, target.FullPath, StringComparison.OrdinalIgnoreCase)))
+                .Select(static target => target.FullPath)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            RemoveSuccessfulPaths(successfulPaths);
+            ActionStatusMessage = failures.Length == 0
+                ? serviceSummary.DeletedCount == 1 ? "1 item deleted." : $"{serviceSummary.DeletedCount:N0} items deleted."
+                : $"{serviceSummary.DeletedCount:N0} items deleted, {failures.Length:N0} could not be deleted.";
+            return new DeleteSummary(serviceSummary.DeletedCount, serviceSummary.DeletedBytes, failures);
+        }
+        finally
+        {
+            IsActionRunning = false;
+        }
+    }
+
+    public async Task<FileOperationSummary> MoveSelectedAsync(
+        string destinationFolder,
+        MoveCollisionBehavior collisionBehavior,
+        CancellationToken cancellationToken)
+    {
+        IFileActionService fileActions = _fileActionService ??
+            throw new InvalidOperationException("File actions are not configured.");
+        SelectionTargets selection = BuildValidatedSelection();
+        if (selection.SelectedCount == 0)
+        {
+            throw new InvalidOperationException("Select at least one result first.");
+        }
+
+        IsActionRunning = true;
+        ActionStatusMessage = "Moving selected items...";
+        try
+        {
+            FileOperationSummary serviceSummary = selection.Targets.Count == 0
+                ? new FileOperationSummary([], 0)
+                : await fileActions.MoveAsync(
+                    selection.Targets,
+                    destinationFolder,
+                    collisionBehavior,
+                    null,
+                    cancellationToken);
+            FileOperationResult[] localFailures = selection.Failures
+                .Select(static failure => new FileOperationResult(failure.Path, null, failure))
+                .ToArray();
+            FileOperationResult[] results = [.. localFailures, .. serviceSummary.Results];
+            HashSet<string> successfulPaths = results
+                .Where(static result => result.Succeeded)
+                .Select(static result => result.SourcePath)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            RemoveSuccessfulPaths(successfulPaths);
+            int succeeded = results.Count(static result => result.Succeeded);
+            int failed = results.Length - succeeded;
+            ActionStatusMessage = failed == 0
+                ? succeeded == 1 ? "1 item moved." : $"{succeeded:N0} items moved."
+                : $"{succeeded:N0} items moved, {failed:N0} could not be moved.";
+            return new FileOperationSummary(results, serviceSummary.SucceededBytes);
+        }
+        finally
+        {
+            IsActionRunning = false;
+        }
+    }
+
+    public async Task<FileOperationResult> RenameFindingAsync(
+        PathFindingViewModel finding,
+        string newName,
+        CancellationToken cancellationToken)
+    {
+        IFileActionService fileActions = _fileActionService ??
+            throw new InvalidOperationException("File actions are not configured.");
+        if (!TryMapFinding(finding, out FileActionTarget? target, out FileActionFailure? failure))
+        {
+            return new FileOperationResult(finding.FullPath, null, failure);
+        }
+
+        FileOperationResult result = await fileActions.RenameAsync(target!, newName, cancellationToken);
+        if (result.Succeeded)
+        {
+            RemoveSuccessfulPaths(new HashSet<string>([result.SourcePath], StringComparer.OrdinalIgnoreCase));
+        }
+
+        return result;
+    }
+
+    public Task ExportAsync(
+        ResultExportFormat format,
+        string destinationPath,
+        CancellationToken cancellationToken)
+    {
+        IResultExportService exporter = _resultExportService ??
+            throw new InvalidOperationException("Result export is not configured.");
+        AnalysisSession session = _sessionStore.CurrentSession ??
+            throw new InvalidOperationException("Run an analysis before exporting results.");
+        ResultExportItem[] findingItems = _allFindings.Select(static finding => new ResultExportItem(
+            finding.FullPath,
+            MapFindingKind(finding.Source),
+            finding.Source.Reason,
+            finding.Source.Suggestion,
+            null,
+            null,
+            finding.Source.SizeBytes,
+            finding.Source.CreatedUtc,
+            finding.Source.ModifiedUtc,
+            finding.Source.Metadata.ToDictionary(
+                static pair => pair.Key,
+                static pair => pair.Value,
+                StringComparer.Ordinal)))
+            .ToArray();
+        ResultExportItem[] similarityItems = _allGroups.SelectMany(group => group.Items.Select(item => new ResultExportItem(
+            item.FullPath,
+            FileActionTargetKind.File,
+            "Similarity match",
+            "Review manually",
+            group.Id,
+            item.Source.SimilarityPercent,
+            item.SizeBytes,
+            null,
+            item.ModifiedUtc,
+            MergeMetadata(group.Source.Metadata, item.Source.Metadata))))
+            .ToArray();
+        SkippedPath[] skippedPaths = session.Result.SkippedPaths.Select(static skipped => new SkippedPath
+        {
+            Path = skipped.Path,
+            Reason = skipped.Reason,
+        }).ToArray();
+        var snapshot = new ResultExportSnapshot(
+            session.Tool,
+            session.CompletedAtUtc,
+            BuildScopeSummary(session.Scope),
+            [.. findingItems, .. similarityItems],
+            skippedPaths);
+        return exporter.ExportAsync(snapshot, format, destinationPath, cancellationToken);
+    }
 
     partial void OnSearchTextChanged(string value) => ApplyFilterAndSort();
 
@@ -279,6 +456,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedBytes));
         OnPropertyChanged(nameof(SelectedFindings));
         OnPropertyChanged(nameof(SelectedSimilarityItems));
+        OnPropertyChanged(nameof(CanActOnSelection));
     }
 
     private void NotifyResultStateChanged()
@@ -293,4 +471,211 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         OnPropertyChanged(nameof(SummaryText));
         SelectionChanged();
     }
+
+    private SelectionTargets BuildValidatedSelection()
+    {
+        var targets = new List<FileActionTarget>();
+        var failures = new List<FileActionFailure>();
+        int selectedCount = SelectedFindings.Count + SelectedSimilarityItems.Count;
+        foreach (PathFindingViewModel finding in SelectedFindings)
+        {
+            if (TryMapFinding(finding, out FileActionTarget? target, out FileActionFailure? failure))
+            {
+                targets.Add(target!);
+            }
+            else
+            {
+                failures.Add(failure!);
+            }
+        }
+
+        foreach (SimilarityItemViewModel item in SelectedSimilarityItems)
+        {
+            if (TryMapSimilarityItem(item, out FileActionTarget? target, out FileActionFailure? failure))
+            {
+                targets.Add(target!);
+            }
+            else
+            {
+                failures.Add(failure!);
+            }
+        }
+
+        return new SelectionTargets(targets, failures, selectedCount);
+    }
+
+    private bool TryMapFinding(
+        PathFindingViewModel finding,
+        out FileActionTarget? target,
+        out FileActionFailure? failure)
+    {
+        target = null;
+        failure = null;
+        try
+        {
+            FileActionTargetKind kind = ReadTargetKind(finding.FullPath);
+            if (!FindingKindMatches(finding.Source.Kind, kind) || !FindingPredicateStillMatches(finding, kind))
+            {
+                failure = ChangedFailure(finding.FullPath);
+                return false;
+            }
+
+            long sizeBytes = kind == FileActionTargetKind.File ? finding.Source.SizeBytes ?? 0 : 0;
+            target = new FileActionTarget(finding.FullPath, sizeBytes, kind);
+            return true;
+        }
+        catch (Exception ex) when (IsFileSystemFailure(ex))
+        {
+            failure = ChangedFailure(finding.FullPath);
+            return false;
+        }
+    }
+
+    private static bool TryMapSimilarityItem(
+        SimilarityItemViewModel item,
+        out FileActionTarget? target,
+        out FileActionFailure? failure)
+    {
+        target = null;
+        failure = null;
+        try
+        {
+            if (ReadTargetKind(item.FullPath) != FileActionTargetKind.File ||
+                new FileInfo(item.FullPath).Length != item.SizeBytes)
+            {
+                failure = ChangedFailure(item.FullPath);
+                return false;
+            }
+
+            target = new FileActionTarget(item.FullPath, item.SizeBytes, FileActionTargetKind.File);
+            return true;
+        }
+        catch (Exception ex) when (IsFileSystemFailure(ex))
+        {
+            failure = ChangedFailure(item.FullPath);
+            return false;
+        }
+    }
+
+    private bool FindingPredicateStillMatches(PathFindingViewModel finding, FileActionTargetKind kind)
+    {
+        ToolKind tool = _sessionStore.CurrentSession?.Tool ?? ToolKind.EmptyFiles;
+        return tool switch
+        {
+            ToolKind.EmptyFiles => kind == FileActionTargetKind.File && new FileInfo(finding.FullPath).Length == 0,
+            ToolKind.EmptyFolders => kind == FileActionTargetKind.Directory && !Directory.EnumerateFileSystemEntries(finding.FullPath).Any(),
+            ToolKind.BigFiles => kind == FileActionTargetKind.File &&
+                new FileInfo(finding.FullPath).Length >= GetMinimumSize(finding.Source),
+            _ => kind != FileActionTargetKind.File ||
+                finding.Source.SizeBytes is null ||
+                new FileInfo(finding.FullPath).Length == finding.Source.SizeBytes.Value,
+        };
+    }
+
+    private static long GetMinimumSize(PathFinding finding)
+    {
+        return finding.Metadata.TryGetValue("MinimumSizeBytes", out string? value) &&
+            long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out long minimum)
+                ? minimum
+                : finding.SizeBytes ?? 0;
+    }
+
+    private void RemoveSuccessfulPaths(IReadOnlySet<string> successfulPaths)
+    {
+        if (successfulPaths.Count == 0)
+        {
+            return;
+        }
+
+        _allFindings.RemoveAll(finding => successfulPaths.Contains(finding.FullPath));
+        for (int groupIndex = _allGroups.Count - 1; groupIndex >= 0; groupIndex--)
+        {
+            SimilarityGroupViewModel group = _allGroups[groupIndex];
+            for (int itemIndex = group.Items.Count - 1; itemIndex >= 0; itemIndex--)
+            {
+                if (successfulPaths.Contains(group.Items[itemIndex].FullPath))
+                {
+                    group.Items.RemoveAt(itemIndex);
+                }
+            }
+
+            if (group.Items.Count < 2)
+            {
+                _allGroups.RemoveAt(groupIndex);
+            }
+        }
+
+        if (SelectedResult is PathFindingViewModel finding && successfulPaths.Contains(finding.FullPath) ||
+            SelectedResult is SimilarityGroupViewModel groupResult && !_allGroups.Contains(groupResult))
+        {
+            SelectedResult = null;
+        }
+
+        ApplyFilterAndSort();
+        NotifyResultStateChanged();
+    }
+
+    private static FileActionTargetKind ReadTargetKind(string path)
+    {
+        FileAttributes attributes = File.GetAttributes(path);
+        return (attributes.HasFlag(FileAttributes.Directory), attributes.HasFlag(FileAttributes.ReparsePoint)) switch
+        {
+            (false, false) => FileActionTargetKind.File,
+            (true, false) => FileActionTargetKind.Directory,
+            (false, true) => FileActionTargetKind.FileLink,
+            (true, true) => FileActionTargetKind.DirectoryLink,
+        };
+    }
+
+    private static FileActionTargetKind MapFindingKind(PathFinding finding) => finding.Kind switch
+    {
+        PathFindingKind.File => FileActionTargetKind.File,
+        PathFindingKind.Directory => FileActionTargetKind.Directory,
+        PathFindingKind.Link => finding.Metadata.TryGetValue("LinkKind", out string? kind) &&
+            string.Equals(kind, "Directory", StringComparison.OrdinalIgnoreCase)
+                ? FileActionTargetKind.DirectoryLink
+                : FileActionTargetKind.FileLink,
+        _ => FileActionTargetKind.File,
+    };
+
+    private static bool FindingKindMatches(PathFindingKind findingKind, FileActionTargetKind targetKind) => findingKind switch
+    {
+        PathFindingKind.File => targetKind == FileActionTargetKind.File,
+        PathFindingKind.Directory => targetKind == FileActionTargetKind.Directory,
+        PathFindingKind.Link => targetKind is FileActionTargetKind.FileLink or FileActionTargetKind.DirectoryLink,
+        _ => false,
+    };
+
+    private static FileActionFailure ChangedFailure(string path) => new(path, "File changed since scan.");
+
+    private static bool IsFileSystemFailure(Exception ex) =>
+        ex is IOException or UnauthorizedAccessException or SecurityException or NotSupportedException;
+
+    private static IReadOnlyDictionary<string, string> MergeMetadata(
+        IReadOnlyDictionary<string, string> groupMetadata,
+        IReadOnlyDictionary<string, string> itemMetadata)
+    {
+        var metadata = new Dictionary<string, string>(groupMetadata, StringComparer.Ordinal);
+        foreach ((string key, string value) in itemMetadata)
+        {
+            metadata[key] = value;
+        }
+
+        return metadata;
+    }
+
+    private static string BuildScopeSummary(AnalysisScope scope)
+    {
+        int folderCount = scope.IncludedFolders.Count;
+        int fileCount = scope.IncludedFiles.Count;
+        int excludedCount = scope.ExcludedPaths.Count;
+        return $"{folderCount:N0} {(folderCount == 1 ? "folder" : "folders")}, " +
+            $"{fileCount:N0} {(fileCount == 1 ? "file" : "files")}, " +
+            $"{excludedCount:N0} excluded; subfolders {(scope.IncludeSubfolders ? "included" : "excluded")}";
+    }
+
+    private sealed record SelectionTargets(
+        IReadOnlyList<FileActionTarget> Targets,
+        IReadOnlyList<FileActionFailure> Failures,
+        int SelectedCount);
 }

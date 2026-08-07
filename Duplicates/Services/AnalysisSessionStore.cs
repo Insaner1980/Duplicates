@@ -7,7 +7,7 @@ public sealed record AnalysisSession(
     ToolKind Tool,
     AnalysisScope Scope,
     AnalysisResult Result,
-    DateTimeOffset CompletedAt);
+    DateTimeOffset CompletedAtUtc);
 
 public sealed class AnalysisSessionStore
 {
@@ -17,7 +17,7 @@ public sealed class AnalysisSessionStore
 
     public void SetCompleted(ToolKind tool, AnalysisScope scope, AnalysisResult result)
     {
-        CurrentSession = new AnalysisSession(tool, scope, result, DateTimeOffset.Now);
+        CurrentSession = new AnalysisSession(tool, CopyScope(scope), result, DateTimeOffset.UtcNow);
         ResultChanged?.Invoke(this, CurrentSession);
     }
 
@@ -26,4 +26,14 @@ public sealed class AnalysisSessionStore
         CurrentSession = null;
         ResultChanged?.Invoke(this, null);
     }
+
+    private static AnalysisScope CopyScope(AnalysisScope scope) => new()
+    {
+        IncludedFolders = scope.IncludedFolders.ToArray(),
+        IncludedFiles = scope.IncludedFiles.ToArray(),
+        ExcludedPaths = scope.ExcludedPaths.ToArray(),
+        IncludeSubfolders = scope.IncludeSubfolders,
+        IgnoreHiddenFiles = scope.IgnoreHiddenFiles,
+        IgnoreSystemFiles = scope.IgnoreSystemFiles,
+    };
 }

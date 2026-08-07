@@ -339,6 +339,39 @@ public sealed class NativeWinUiContractTests
     }
 
     [Fact]
+    public void ResultPages_ExposeNativeMoveAndExportCommands()
+    {
+        XDocument exactResults = LoadXaml(@"Views\ResultsPage.xaml");
+        Assert.Contains(
+            exactResults.Descendants(Presentation + "AppBarButton"),
+            button =>
+                (string?)button.Attribute("Label") == "Move selected" &&
+                (string?)button.Attribute("Click") == "MoveSelected_Click");
+        Assert.Contains(
+            exactResults.Descendants(Presentation + "AppBarButton"),
+            button =>
+                (string?)button.Attribute("Label") == "Export" &&
+                (string?)button.Attribute("Click") == "Export_Click");
+
+        XDocument analysisResults = LoadXaml(@"Views\AnalysisResultsPage.xaml");
+        Assert.Contains(
+            analysisResults.Descendants(Presentation + "AppBarButton"),
+            button =>
+                (string?)button.Attribute("Label") == "Delete selected" &&
+                (string?)button.Attribute("Click") == "DeleteSelected_Click");
+        Assert.Contains(
+            analysisResults.Descendants(Presentation + "AppBarButton"),
+            button =>
+                (string?)button.Attribute("Label") == "Move selected" &&
+                (string?)button.Attribute("Click") == "MoveSelected_Click");
+        Assert.Contains(
+            analysisResults.Descendants(Presentation + "AppBarButton"),
+            button =>
+                (string?)button.Attribute("Label") == "Export" &&
+                (string?)button.Attribute("Click") == "Export_Click");
+    }
+
+    [Fact]
     public void InteractiveImagesAndIconOnlyButtonsHaveAccessibleNames()
     {
         foreach ((string path, XDocument document) in AllProductionXaml())

@@ -1,6 +1,8 @@
 using System.Collections.ObjectModel;
+using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Duplicates.Engine.Analysis;
 using Duplicates.Engine.Models;
 using Duplicates.Models;
 using Duplicates.Services;
@@ -15,15 +17,21 @@ public sealed partial class ResultsViewModel : ObservableObject
     private readonly ResultsStore _resultsStore;
     private readonly IFileActionService _fileActionService;
     private readonly ISettingsService _settingsService;
+    private readonly IResultExportService _resultExportService;
     private readonly List<DuplicateGroupViewModel> _allGroups = [];
     private IReadOnlyDictionary<string, bool>? _selectionSnapshot;
     private bool _isApplyingSelectionRule;
 
-    public ResultsViewModel(ResultsStore resultsStore, IFileActionService fileActionService, ISettingsService settingsService)
+    public ResultsViewModel(
+        ResultsStore resultsStore,
+        IFileActionService fileActionService,
+        ISettingsService settingsService,
+        IResultExportService resultExportService)
     {
         _resultsStore = resultsStore;
         _fileActionService = fileActionService;
         _settingsService = settingsService;
+        _resultExportService = resultExportService;
         _resultsStore.ResultChanged += ResultsChanged;
     }
 
@@ -111,6 +119,8 @@ public sealed partial class ResultsViewModel : ObservableObject
     public string DeleteButtonText => $"Delete {SelectedFileCount:N0} files ({ByteFormatter.Format(SelectedBytes)})";
 
     public bool CanDelete => !IsDeleting && SelectedFileCount > 0 && _allGroups.All(static group => group.SelectedCount < group.Files.Count);
+
+    public bool CanMove => CanDelete;
 
     public bool IsDeleteStatusOpen => !string.IsNullOrWhiteSpace(DeleteStatusMessage);
 
@@ -248,10 +258,88 @@ public sealed partial class ResultsViewModel : ObservableObject
         return await DeleteFilesAsync([file], cancellationToken);
     }
 
+    public async Task<FileOperationSummary> MoveSelectedAsync(
+        string destinationFolder,
+        MoveCollisionBehavior collisionBehavior,
+        CancellationToken cancellationToken)
+    {
+        IReadOnlyList<DuplicateFileViewModel> files = SelectedFiles;
+        EnsureSurvivorInvariant(files);
+        IsDeleting = true;
+        DeleteStatusMessage = files.Count == 1 ? "Moving file..." : "Moving selected files...";
+        DeleteFailureDetailsText = string.Empty;
+        try
+        {
+            DeleteProgressText = $"0 of {files.Count:N0} files processed";
+            DeleteProgressValue = 0;
+            FileOperationSummary summary = await _fileActionService.MoveAsync(
+                MapTargets(files),
+                destinationFolder,
+                collisionBehavior,
+                new InlineProgress<FileOperationProgress>(UpdateFileOperationProgress),
+                cancellationToken);
+            HashSet<string> movedPaths = summary.Results
+                .Where(static result => result.Succeeded)
+                .Select(static result => result.SourcePath)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            RemoveSuccessfulPaths(movedPaths);
+            FileActionFailure[] failures = summary.Results
+                .Where(static result => !result.Succeeded)
+                .Select(static result => result.Failure!)
+                .ToArray();
+            int movedCount = summary.Results.Count(static result => result.Succeeded);
+            DeleteStatusMessage = failures.Length == 0
+                ? movedCount == 1 ? "1 file moved." : $"{movedCount:N0} files moved."
+                : $"{movedCount:N0} files moved, {failures.Length:N0} could not be moved.";
+            DeleteFailureDetailsText = BuildFailureDetailsText(failures);
+            ApplySearchAndSort();
+            RefreshAllComputedProperties();
+            return summary;
+        }
+        finally
+        {
+            IsDeleting = false;
+        }
+    }
+
+    public Task ExportAsync(
+        ResultExportFormat format,
+        string destinationPath,
+        CancellationToken cancellationToken)
+    {
+        ExactResultsSession session = _resultsStore.CurrentSession ??
+            throw new InvalidOperationException("Run a scan before exporting results.");
+        ResultExportItem[] items = _allGroups.SelectMany(group => group.Files.Select(file => new ResultExportItem(
+            file.FullPath,
+            FileActionTargetKind.File,
+            "Byte-identical duplicate",
+            null,
+            group.Source.ContentHash.ToString("X16", CultureInfo.InvariantCulture),
+            null,
+            file.SizeBytes,
+            file.File.CreatedUtc,
+            file.File.ModifiedUtc,
+            new Dictionary<string, string>(StringComparer.Ordinal))))
+            .ToArray();
+        SkippedPath[] skippedPaths = session.Result.SkippedPaths.Select(static skipped => new SkippedPath
+        {
+            Path = skipped.Path,
+            Reason = skipped.Reason,
+        }).ToArray();
+        var snapshot = new ResultExportSnapshot(
+            ToolKind.DuplicateFiles,
+            session.CompletedAtUtc,
+            BuildScopeSummary(session.Scope),
+            items,
+            skippedPaths);
+        return _resultExportService.ExportAsync(snapshot, format, destinationPath, cancellationToken);
+    }
+
     private async Task<DeleteSummary> DeleteFilesAsync(
         IReadOnlyList<DuplicateFileViewModel> files,
         CancellationToken cancellationToken)
     {
+        EnsureSurvivorInvariant(files);
         IsDeleting = true;
         DeleteStatusMessage = files.Count == 1 ? "Deleting file..." : "Deleting selected files...";
         DeleteFailureDetailsText = string.Empty;
@@ -260,7 +348,7 @@ public sealed partial class ResultsViewModel : ObservableObject
             DeleteProgressText = $"0 of {files.Count:N0} files processed";
             DeleteProgressValue = 0;
             DeleteSummary summary = await _fileActionService.DeleteAsync(
-                files,
+                MapTargets(files),
                 new InlineProgress<DeleteProgress>(UpdateDeleteProgress),
                 cancellationToken);
             var deletedPaths = files
@@ -268,19 +356,7 @@ public sealed partial class ResultsViewModel : ObservableObject
                 .Select(static file => file.FullPath)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-            if (SelectedFile is not null && deletedPaths.Contains(SelectedFile.FullPath))
-            {
-                SelectedFile = null;
-            }
-
-            for (int index = _allGroups.Count - 1; index >= 0; index--)
-            {
-                _allGroups[index].RemoveDeleted(deletedPaths);
-                if (_allGroups[index].Files.Count < 2)
-                {
-                    _allGroups.RemoveAt(index);
-                }
-            }
+            RemoveSuccessfulPaths(deletedPaths);
 
             DeleteStatusMessage = summary.Failures.Count == 0
                 ? summary.DeletedCount == 1 ? "1 file deleted." : $"{summary.DeletedCount:N0} files deleted."
@@ -303,6 +379,7 @@ public sealed partial class ResultsViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedBytes));
         OnPropertyChanged(nameof(DeleteButtonText));
         OnPropertyChanged(nameof(CanDelete));
+        OnPropertyChanged(nameof(CanMove));
         OnPropertyChanged(nameof(CanUndoSelection));
         UndoSelectionCommand.NotifyCanExecuteChanged();
     }
@@ -433,6 +510,57 @@ public sealed partial class ResultsViewModel : ObservableObject
         DeleteProgressValue = progress.TotalCount <= 0
             ? 0
             : Math.Clamp(progress.ProcessedCount * 100d / progress.TotalCount, 0, 100);
+    }
+
+    private void UpdateFileOperationProgress(FileOperationProgress progress)
+    {
+        DeleteProgressText = $"{progress.ProcessedCount:N0} of {progress.TotalCount:N0} files processed";
+        DeleteProgressValue = progress.TotalCount <= 0
+            ? 0
+            : Math.Clamp(progress.ProcessedCount * 100d / progress.TotalCount, 0, 100);
+    }
+
+    private void EnsureSurvivorInvariant(IReadOnlyList<DuplicateFileViewModel> files)
+    {
+        if (files.Count == 0 || _allGroups.Any(group =>
+                group.Files.Count(file => files.Contains(file)) >= group.Files.Count))
+        {
+            throw new InvalidOperationException("At least one file must remain in every duplicate group.");
+        }
+    }
+
+    private static FileActionTarget[] MapTargets(IReadOnlyList<DuplicateFileViewModel> files) =>
+        files.Select(static file => new FileActionTarget(
+            file.FullPath,
+            file.SizeBytes,
+            FileActionTargetKind.File))
+            .ToArray();
+
+    private void RemoveSuccessfulPaths(IReadOnlySet<string> paths)
+    {
+        if (SelectedFile is not null && paths.Contains(SelectedFile.FullPath))
+        {
+            SelectedFile = null;
+        }
+
+        for (int index = _allGroups.Count - 1; index >= 0; index--)
+        {
+            _allGroups[index].RemoveDeleted(paths);
+            if (_allGroups[index].Files.Count < 2)
+            {
+                _allGroups.RemoveAt(index);
+            }
+        }
+    }
+
+    private static string BuildScopeSummary(AnalysisScope scope)
+    {
+        int folderCount = scope.IncludedFolders.Count;
+        int fileCount = scope.IncludedFiles.Count;
+        int excludedCount = scope.ExcludedPaths.Count;
+        return $"{folderCount:N0} {(folderCount == 1 ? "folder" : "folders")}, " +
+            $"{fileCount:N0} {(fileCount == 1 ? "file" : "files")}, " +
+            $"{excludedCount:N0} excluded; subfolders {(scope.IncludeSubfolders ? "included" : "excluded")}";
     }
 
     private static string BuildFailureDetailsText(IReadOnlyList<FileActionFailure> failures)

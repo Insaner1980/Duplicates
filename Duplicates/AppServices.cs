@@ -14,12 +14,13 @@ public sealed class AppServices
         AnalysisSessionStore = new AnalysisSessionStore();
         AnalysisService = new AnalysisService();
         FileActionService = new FileActionService(SettingsService);
+        ResultExportService = new ResultExportService();
         PathScopeViewModel = new PathScopeViewModel();
 
         ScanViewModel = new ScanViewModel(new DuplicateScanner(), SettingsService, ResultsStore, PathScopeViewModel);
-        ResultsViewModel = new ResultsViewModel(ResultsStore, FileActionService, SettingsService);
+        ResultsViewModel = new ResultsViewModel(ResultsStore, FileActionService, SettingsService, ResultExportService);
         AnalysisViewModel = new AnalysisViewModel(AnalysisService, AnalysisSessionStore, PathScopeViewModel);
-        AnalysisResultsViewModel = new AnalysisResultsViewModel(AnalysisSessionStore);
+        AnalysisResultsViewModel = new AnalysisResultsViewModel(AnalysisSessionStore, FileActionService, ResultExportService);
         SettingsViewModel = new SettingsViewModel(SettingsService);
     }
 
@@ -34,6 +35,8 @@ public sealed class AppServices
     public IAnalysisService AnalysisService { get; }
 
     public IFileActionService FileActionService { get; }
+
+    public IResultExportService ResultExportService { get; }
 
     public PathScopeViewModel PathScopeViewModel { get; }
 

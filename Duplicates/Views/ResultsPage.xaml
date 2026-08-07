@@ -156,6 +156,17 @@
                     IsChecked="{Binding IsPreviewPaneOpen, Mode=TwoWay}" />
                 <AppBarSeparator />
                 <AppBarButton
+                    AccessKey="M"
+                    Icon="Folder"
+                    Label="Move selected"
+                    IsEnabled="{Binding CanMove}"
+                    Click="MoveSelected_Click" />
+                <AppBarButton
+                    AccessKey="E"
+                    Icon="Save"
+                    Label="Export"
+                    Click="Export_Click" />
+                <AppBarButton
                     AccessKey="D"
                     Icon="Delete"
                     Label="{Binding DeleteButtonText}"
