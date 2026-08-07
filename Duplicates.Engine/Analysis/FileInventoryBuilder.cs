@@ -68,8 +68,9 @@ public sealed class FileInventoryBuilder
 
             if (seenDirectories.Add(fullPath))
             {
+                int directoryIndex = directories.Count;
                 directories.Add(CreateDirectory(fullPath, depth: 0, attributes));
-                pendingDirectories.Push(new DirectoryWorkItem(fullPath, 0));
+                pendingDirectories.Push(new DirectoryWorkItem(fullPath, 0, directoryIndex));
             }
         }
 
@@ -88,6 +89,11 @@ public sealed class FileInventoryBuilder
                 skippedPaths.Add(new SkippedPath { Path = currentDirectory.FullPath, Reason = ex.Message });
                 continue;
             }
+
+            directories[currentDirectory.InventoryIndex] = directories[currentDirectory.InventoryIndex] with
+            {
+                PhysicalChildCount = paths.Length,
+            };
 
             foreach (string path in paths)
             {
@@ -110,8 +116,9 @@ public sealed class FileInventoryBuilder
                     if (scope.IncludeSubfolders && !ShouldIgnore(attributes, scope) && seenDirectories.Add(path))
                     {
                         int depth = currentDirectory.Depth + 1;
+                        int directoryIndex = directories.Count;
                         directories.Add(CreateDirectory(path, depth, attributes));
-                        pendingDirectories.Push(new DirectoryWorkItem(path, depth));
+                        pendingDirectories.Push(new DirectoryWorkItem(path, depth, directoryIndex));
                     }
                 }
                 else if (!ShouldIgnore(attributes, scope))
@@ -257,6 +264,7 @@ public sealed class FileInventoryBuilder
             directory.Name,
             directory.Parent?.FullName ?? string.Empty,
             depth,
+            -1,
             attributes);
     }
 
@@ -316,7 +324,7 @@ public sealed class FileInventoryBuilder
 
     private sealed record ExcludedPath(string FullPath, bool IsDirectory);
 
-    private sealed record DirectoryWorkItem(string FullPath, int Depth);
+    private sealed record DirectoryWorkItem(string FullPath, int Depth, int InventoryIndex);
 
     private sealed class ProgressReporter
     {

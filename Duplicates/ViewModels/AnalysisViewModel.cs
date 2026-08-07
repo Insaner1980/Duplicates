@@ -12,6 +12,7 @@ namespace Duplicates.ViewModels;
 public sealed partial class AnalysisViewModel : ObservableObject
 {
     private const long DefaultLargeFileMinimumSizeBytes = 1_073_741_824;
+    private const double DefaultTemporaryFileMinimumAgeDays = 7;
 
     private readonly IAnalysisService _analysisService;
     private readonly AnalysisSessionStore _sessionStore;
@@ -43,13 +44,16 @@ public sealed partial class AnalysisViewModel : ObservableObject
     public string OptionsSummary => Tool switch
     {
         ToolKind.BigFiles => $"Files at least {ByteFormatter.Format(GetLargeFileMinimumSizeBytes())} are included.",
-        ToolKind.TemporaryFiles => "Files at least 7 days old are included.",
+        ToolKind.TemporaryFiles => string.Format(
+            CultureInfo.InvariantCulture,
+            "Files at least {0:N0} days old are included.",
+            GetTemporaryFileMinimumAgeDays()),
         ToolKind.SimilarImages or ToolKind.SimilarVideos => "Balanced similarity matching is used.",
         ToolKind.MusicDuplicates => "Track durations may differ by up to 2 seconds.",
         _ => "No additional options are required.",
     };
 
-    public Visibility OptionsVisibility => Tool == ToolKind.EmptyFiles
+    public Visibility OptionsVisibility => Tool is ToolKind.EmptyFolders or ToolKind.EmptyFiles
         ? Visibility.Collapsed
         : Visibility.Visible;
 
@@ -57,9 +61,17 @@ public sealed partial class AnalysisViewModel : ObservableObject
         ? Visibility.Visible
         : Visibility.Collapsed;
 
+    public Visibility TemporaryFileOptionsVisibility => Tool == ToolKind.TemporaryFiles
+        ? Visibility.Visible
+        : Visibility.Collapsed;
+
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(OptionsSummary))]
     public partial double LargeFileMinimumSizeValue { get; set; } = DefaultLargeFileMinimumSizeBytes;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(OptionsSummary))]
+    public partial double TemporaryFileMinimumAgeDays { get; set; } = DefaultTemporaryFileMinimumAgeDays;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(SetupVisibility))]
@@ -115,6 +127,7 @@ public sealed partial class AnalysisViewModel : ObservableObject
         OnPropertyChanged(nameof(OptionsSummary));
         OnPropertyChanged(nameof(OptionsVisibility));
         OnPropertyChanged(nameof(LargeFileOptionsVisibility));
+        OnPropertyChanged(nameof(TemporaryFileOptionsVisibility));
     }
 
     [RelayCommand(CanExecute = nameof(CanStartAnalysis))]
@@ -201,7 +214,9 @@ public sealed partial class AnalysisViewModel : ObservableObject
     private ToolOptions BuildToolOptions(ToolKind tool) => tool switch
     {
         ToolKind.BigFiles => new LargeFileToolOptions(GetLargeFileMinimumSizeBytes()),
-        ToolKind.TemporaryFiles => new TemporaryFileToolOptions(TimeSpan.FromDays(7), DateTime.UtcNow),
+        ToolKind.TemporaryFiles => new TemporaryFileToolOptions(
+            TimeSpan.FromDays(GetTemporaryFileMinimumAgeDays()),
+            DateTime.UtcNow),
         ToolKind.SimilarImages => new SimilarImageToolOptions(10),
         ToolKind.SimilarVideos => new SimilarVideoToolOptions(10),
         ToolKind.MusicDuplicates => new MusicDuplicateToolOptions(TimeSpan.FromSeconds(2)),
@@ -213,6 +228,12 @@ public sealed partial class AnalysisViewModel : ObservableObject
     private long GetLargeFileMinimumSizeBytes() => ByteSizeInput.ToBytes(
         LargeFileMinimumSizeValue,
         DefaultLargeFileMinimumSizeBytes);
+
+    private double GetTemporaryFileMinimumAgeDays() =>
+        double.IsFinite(TemporaryFileMinimumAgeDays) &&
+        TemporaryFileMinimumAgeDays < TimeSpan.MaxValue.TotalDays
+            ? Math.Max(0, TemporaryFileMinimumAgeDays)
+            : DefaultTemporaryFileMinimumAgeDays;
 
     private void UpdateProgress(AnalysisProgress progress)
     {

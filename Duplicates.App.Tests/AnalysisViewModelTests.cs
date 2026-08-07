@@ -230,7 +230,46 @@ public sealed class AnalysisViewModelTests
     }
 
     [Fact]
-    public void BigFiles_PresetsUseExactByteValuesAndEmptyFilesHideOptions()
+    public async Task TemporaryFiles_NormalizesOptionsOnceAndStoresTheExactRunSnapshot()
+    {
+        ToolOptions? requestedOptions = null;
+        var service = new FakeAnalysisService
+        {
+            Run = (_, _, options, _, _) =>
+            {
+                requestedOptions = options;
+                return Task.FromResult(NewResult());
+            },
+        };
+        var store = new AnalysisSessionStore();
+        var viewModel = new AnalysisViewModel(service, store, NewScope());
+        viewModel.SelectTool(ToolKind.TemporaryFiles);
+
+        Assert.Equal(7d, viewModel.TemporaryFileMinimumAgeDays);
+        Assert.Equal("Files at least 7 days old are included.", viewModel.OptionsSummary);
+        Assert.Equal(Visibility.Visible, viewModel.OptionsVisibility);
+        Assert.Equal(Visibility.Visible, viewModel.TemporaryFileOptionsVisibility);
+        Assert.Equal(Visibility.Collapsed, viewModel.LargeFileOptionsVisibility);
+
+        viewModel.TemporaryFileMinimumAgeDays = double.NaN;
+        Assert.Equal("Files at least 7 days old are included.", viewModel.OptionsSummary);
+        viewModel.TemporaryFileMinimumAgeDays = double.MaxValue;
+        Assert.Equal("Files at least 7 days old are included.", viewModel.OptionsSummary);
+        viewModel.TemporaryFileMinimumAgeDays = 3;
+        DateTime beforeRunUtc = DateTime.UtcNow;
+
+        await viewModel.StartAnalysisCommand.ExecuteAsync(null);
+
+        DateTime afterRunUtc = DateTime.UtcNow;
+        var options = Assert.IsType<TemporaryFileToolOptions>(requestedOptions);
+        Assert.Equal(TimeSpan.FromDays(3), options.MinimumAge);
+        Assert.InRange(options.UtcNow, beforeRunUtc, afterRunUtc);
+        Assert.Equal("Files at least 3 days old are included.", viewModel.OptionsSummary);
+        Assert.Same(options, Assert.IsType<AnalysisSession>(store.CurrentSession).ToolOptions);
+    }
+
+    [Fact]
+    public void BigFiles_PresetsUseExactByteValuesAndNoOptionStorageToolsHideOptions()
     {
         var viewModel = new AnalysisViewModel(
             new FakeAnalysisService(),
@@ -251,6 +290,13 @@ public sealed class AnalysisViewModelTests
 
         Assert.Equal(Visibility.Collapsed, viewModel.OptionsVisibility);
         Assert.Equal(Visibility.Collapsed, viewModel.LargeFileOptionsVisibility);
+        Assert.Equal(Visibility.Collapsed, viewModel.TemporaryFileOptionsVisibility);
+
+        viewModel.SelectTool(ToolKind.EmptyFolders);
+
+        Assert.Equal(Visibility.Collapsed, viewModel.OptionsVisibility);
+        Assert.Equal(Visibility.Collapsed, viewModel.LargeFileOptionsVisibility);
+        Assert.Equal(Visibility.Collapsed, viewModel.TemporaryFileOptionsVisibility);
     }
 
     [Fact]
@@ -260,8 +306,14 @@ public sealed class AnalysisViewModelTests
         Directory.CreateDirectory(root);
         string largePath = Path.Combine(root, "large.bin");
         string emptyPath = Path.Combine(root, "empty.txt");
+        string emptyFolderPath = Path.Combine(root, "empty-folder");
+        string temporaryPath = Path.Combine(root, "download.PART");
         await File.WriteAllBytesAsync(largePath, [1, 2, 3]);
         await File.WriteAllBytesAsync(emptyPath, []);
+        Directory.CreateDirectory(emptyFolderPath);
+        await File.WriteAllBytesAsync(temporaryPath, [1]);
+        DateTime utcNow = DateTime.UtcNow;
+        File.SetLastWriteTimeUtc(temporaryPath, utcNow.AddDays(-7));
 
         try
         {
@@ -270,7 +322,7 @@ public sealed class AnalysisViewModelTests
             var reportThreads = new List<int>();
             var progress = new CapturingProgress<AnalysisProgress>(
                 _ => reportThreads.Add(Environment.CurrentManagedThreadId));
-            AnalysisScope scope = new() { IncludedFiles = [largePath, emptyPath] };
+            AnalysisScope scope = new() { IncludedFiles = [largePath, emptyPath, temporaryPath] };
 
             AnalysisResult largeResult = await service.RunAsync(
                 ToolKind.BigFiles,
@@ -284,9 +336,23 @@ public sealed class AnalysisViewModelTests
                 new NoToolOptions(),
                 progress: null,
                 CancellationToken.None);
+            AnalysisResult emptyFolderResult = await service.RunAsync(
+                ToolKind.EmptyFolders,
+                new AnalysisScope { IncludedFolders = [root] },
+                new NoToolOptions(),
+                progress: null,
+                CancellationToken.None);
+            AnalysisResult temporaryResult = await service.RunAsync(
+                ToolKind.TemporaryFiles,
+                scope,
+                new TemporaryFileToolOptions(TimeSpan.FromDays(7), utcNow),
+                progress: null,
+                CancellationToken.None);
 
             Assert.Equal(largePath, Assert.Single(largeResult.Findings).FullPath);
             Assert.Equal(emptyPath, Assert.Single(emptyResult.Findings).FullPath);
+            Assert.Equal(emptyFolderPath, Assert.Single(emptyFolderResult.Findings).FullPath);
+            Assert.Equal(temporaryPath, Assert.Single(temporaryResult.Findings).FullPath);
             Assert.NotEmpty(reportThreads);
             Assert.DoesNotContain(callerThread, reportThreads);
             Assert.True(largeResult.Elapsed >= TimeSpan.Zero);
@@ -311,9 +377,9 @@ public sealed class AnalysisViewModelTests
             new CapturingProgress<AnalysisProgress>(reports.Add),
             CancellationToken.None));
         await Assert.ThrowsAsync<NotSupportedException>(() => service.RunAsync(
-            ToolKind.TemporaryFiles,
+            ToolKind.SimilarImages,
             new AnalysisScope(),
-            new TemporaryFileToolOptions(TimeSpan.FromDays(7), DateTime.UtcNow),
+            new SimilarImageToolOptions(10),
             progress: null,
             CancellationToken.None));
 

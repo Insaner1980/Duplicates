@@ -118,7 +118,7 @@ public sealed class StorageAnalyzerTests : IDisposable
             analyzer.AnalyzeAsync(inventory, -1, CancellationToken.None));
         using var cancellationSource = new CancellationTokenSource();
         FileInventory cancelBetweenEntries = NewInventory(
-            files: new CancelBeforeSecondItemList(
+            files: new CancelBeforeSecondItemList<InventoryFile>(
                 [NewFile(@"C:\scan\first.bin", 100), NewFile(@"C:\scan\second.bin", 100)],
                 cancellationSource));
         await Assert.ThrowsAsync<OperationCanceledException>(() =>
@@ -198,7 +198,7 @@ public sealed class StorageAnalyzerTests : IDisposable
     {
         using var cancellationSource = new CancellationTokenSource();
         FileInventory inventory = NewInventory(
-            files: new CancelBeforeSecondItemList(
+            files: new CancelBeforeSecondItemList<InventoryFile>(
                 [NewFile(@"C:\scan\first.txt", 0), NewFile(@"C:\scan\second.txt", 0)],
                 cancellationSource));
 
@@ -206,14 +206,243 @@ public sealed class StorageAnalyzerTests : IDisposable
             new EmptyFileAnalyzer().AnalyzeAsync(inventory, cancellationSource.Token));
     }
 
+    [Fact]
+    public async Task EmptyFolders_IncludesOnlyPhysicalLeavesAndExcludesIncludedRoot()
+    {
+        FileInventory inventory = NewInventory(
+            directories:
+            [
+                NewDirectory(@"C:\scan", depth: 0, physicalChildCount: 1),
+                NewDirectory(@"C:\scan\parent", depth: 1, physicalChildCount: 1),
+                NewDirectory(@"C:\scan\parent\empty", depth: 2, physicalChildCount: 0),
+                NewDirectory(@"C:\scan\inaccessible", depth: 1, physicalChildCount: -1),
+            ],
+            includedRootPaths: [@"C:\scan"],
+            skippedPaths: [new SkippedPath { Path = @"C:\scan\inaccessible", Reason = "Access denied" }]);
+
+        AnalysisResult result = await new EmptyFolderAnalyzer().AnalyzeAsync(
+            inventory,
+            CancellationToken.None);
+
+        PathFinding finding = Assert.Single(result.Findings);
+        Assert.Equal(@"C:\scan\parent\empty", finding.FullPath);
+        Assert.Equal(PathFindingKind.Directory, finding.Kind);
+        Assert.Equal(0, finding.SizeBytes);
+        Assert.Equal("Folder is empty", finding.Reason);
+        Assert.Null(finding.Suggestion);
+        Assert.Equal("2", Assert.Single(finding.Metadata).Value);
+        Assert.Empty(result.Groups);
+        Assert.Same(inventory.SkippedPaths, result.SkippedPaths);
+        Assert.True(result.Elapsed >= TimeSpan.Zero);
+    }
+
+    [Fact]
+    public async Task EmptyFolders_DirectoryContainingExcludedFileIsNotEmpty()
+    {
+        string candidate = Path.Combine(_root, "candidate");
+        string excluded = WriteBytes(Path.Combine(candidate, "excluded.txt"), 1);
+        FileInventory inventory = new FileInventoryBuilder().Build(
+            new AnalysisScope
+            {
+                IncludedFolders = [_root],
+                ExcludedPaths = [excluded],
+            },
+            progress: null,
+            CancellationToken.None);
+
+        AnalysisResult result = await new EmptyFolderAnalyzer().AnalyzeAsync(
+            inventory,
+            CancellationToken.None);
+
+        Assert.Empty(inventory.Files);
+        Assert.Equal(
+            1,
+            inventory.Directories.Single(directory => directory.FullPath == candidate).PhysicalChildCount);
+        Assert.DoesNotContain(result.Findings, finding => finding.FullPath == candidate);
+    }
+
+    [Fact]
+    public async Task EmptyFolders_DirectoryContainingEmptyChildIsNotEmpty()
+    {
+        string parent = Path.Combine(_root, "parent");
+        string emptyChild = Path.Combine(parent, "empty");
+        Directory.CreateDirectory(emptyChild);
+        FileInventory inventory = new FileInventoryBuilder().Build(
+            new AnalysisScope { IncludedFolders = [_root] },
+            progress: null,
+            CancellationToken.None);
+
+        AnalysisResult result = await new EmptyFolderAnalyzer().AnalyzeAsync(
+            inventory,
+            CancellationToken.None);
+
+        PathFinding finding = Assert.Single(result.Findings);
+        Assert.Equal(emptyChild, finding.FullPath);
+        Assert.DoesNotContain(result.Findings, item => item.FullPath == parent);
+    }
+
+    [Fact]
+    public async Task EmptyFolders_SortsDeepestFirstAndExcludesLinkDirectories()
+    {
+        FileInventory inventory = NewInventory(
+            directories:
+            [
+                NewDirectory(@"C:\scan\shallow", depth: 1, physicalChildCount: 0),
+                NewDirectory(@"C:\scan\z-deep", depth: 3, physicalChildCount: 0),
+                NewDirectory(@"C:\scan\a-deep", depth: 3, physicalChildCount: 0),
+                NewDirectory(
+                    @"C:\scan\linked",
+                    depth: 4,
+                    physicalChildCount: 0,
+                    attributes: FileAttributes.Directory | FileAttributes.ReparsePoint),
+            ],
+            reparsePointPaths: [@"C:\scan\linked"]);
+
+        AnalysisResult result = await new EmptyFolderAnalyzer().AnalyzeAsync(
+            inventory,
+            CancellationToken.None);
+
+        Assert.Equal(
+            [@"C:\scan\a-deep", @"C:\scan\z-deep", @"C:\scan\shallow"],
+            result.Findings.Select(static finding => finding.FullPath));
+    }
+
+    [Fact]
+    public async Task EmptyFolders_HonorsCancellationBetweenDirectories()
+    {
+        using var cancellationSource = new CancellationTokenSource();
+        FileInventory inventory = NewInventory(
+            directories: new CancelBeforeSecondItemList<InventoryDirectory>(
+                [
+                    NewDirectory(@"C:\scan\first", physicalChildCount: 0),
+                    NewDirectory(@"C:\scan\second", physicalChildCount: 0),
+                ],
+                cancellationSource));
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            new EmptyFolderAnalyzer().AnalyzeAsync(inventory, cancellationSource.Token));
+    }
+
+    [Theory]
+    [InlineData("cache.TMP")]
+    [InlineData("cache.temp")]
+    [InlineData("cache.partial")]
+    [InlineData("cache.part")]
+    [InlineData("cache.crdownload")]
+    [InlineData("cache.download")]
+    [InlineData("cache.dmp")]
+    [InlineData("cache.chk")]
+    [InlineData("~$document.docx")]
+    [InlineData("backup~")]
+    public async Task TemporaryFiles_MatchesEveryApprovedNamePatternCaseInsensitively(string fileName)
+    {
+        DateTime utcNow = new(2026, 8, 14, 12, 0, 0, DateTimeKind.Utc);
+        InventoryFile file = NewFile($@"C:\scan\{fileName}", 25, utcNow.AddDays(-7));
+        FileInventory inventory = NewInventory(files: [file]);
+
+        AnalysisResult result = await new TemporaryFileAnalyzer().AnalyzeAsync(
+            inventory,
+            new TemporaryFileOptions(TimeSpan.FromDays(7), utcNow),
+            CancellationToken.None);
+
+        PathFinding finding = Assert.Single(result.Findings);
+        Assert.Equal(file.FullPath, finding.FullPath);
+        Assert.Equal(PathFindingKind.File, finding.Kind);
+        Assert.Equal(25, finding.SizeBytes);
+        Assert.Equal(file.ModifiedUtc, finding.ModifiedUtc);
+        Assert.Equal("Temporary file at least 7 days old", finding.Reason);
+        Assert.Equal(file.Extension, Assert.Single(finding.Metadata).Value);
+        Assert.Empty(result.Groups);
+        Assert.Same(inventory.SkippedPaths, result.SkippedPaths);
+        Assert.True(result.Elapsed >= TimeSpan.Zero);
+    }
+
+    [Fact]
+    public async Task TemporaryFiles_UsesInclusiveAgeBoundaryAndRejectsFreshOrUnapprovedNames()
+    {
+        DateTime utcNow = new(2026, 8, 14, 12, 0, 0, DateTimeKind.Utc);
+        FileInventory inventory = NewInventory(
+            files:
+            [
+                NewFile(@"C:\scan\exact.tmp", 1, utcNow.AddDays(-7)),
+                NewFile(@"C:\scan\fresh.tmp", 1, utcNow.AddDays(-7).AddTicks(1)),
+                NewFile(@"C:\scan\backup.bak", 1, utcNow.AddDays(-30)),
+                NewFile(@"C:\scan\backup.old", 1, utcNow.AddDays(-30)),
+                NewFile(@"C:\scan\ordinary~middle.txt", 1, utcNow.AddDays(-30)),
+                NewFile(
+                    @"C:\scan\linked.tmp",
+                    1,
+                    utcNow.AddDays(-30),
+                    FileAttributes.ReparsePoint),
+            ],
+            skippedPaths: [new SkippedPath { Path = @"C:\scan\locked", Reason = "Access denied" }]);
+
+        AnalysisResult result = await new TemporaryFileAnalyzer().AnalyzeAsync(
+            inventory,
+            new TemporaryFileOptions(TimeSpan.FromDays(7), utcNow),
+            CancellationToken.None);
+
+        Assert.Equal(@"C:\scan\exact.tmp", Assert.Single(result.Findings).FullPath);
+        Assert.Same(inventory.SkippedPaths, result.SkippedPaths);
+    }
+
+    [Fact]
+    public async Task TemporaryFiles_SortsByCanonicalPathAndAcceptsZeroAge()
+    {
+        DateTime utcNow = new(2026, 8, 14, 12, 0, 0, DateTimeKind.Utc);
+        FileInventory inventory = NewInventory(
+            files:
+            [
+                NewFile(@"C:\scan\z.tmp", 1, utcNow),
+                NewFile(@"C:\scan\a.tmp", 1, utcNow),
+                NewFile(@"C:\scan\A.tmp", 1, utcNow),
+            ]);
+
+        AnalysisResult result = await new TemporaryFileAnalyzer().AnalyzeAsync(
+            inventory,
+            new TemporaryFileOptions(TimeSpan.Zero, utcNow),
+            CancellationToken.None);
+
+        Assert.Equal(
+            [@"C:\scan\A.tmp", @"C:\scan\a.tmp", @"C:\scan\z.tmp"],
+            result.Findings.Select(static finding => finding.FullPath));
+        Assert.All(
+            result.Findings,
+            static finding => Assert.Equal("Temporary file at least 0 days old", finding.Reason));
+    }
+
+    [Fact]
+    public async Task TemporaryFiles_RejectsNegativeAgeAndHonorsCancellation()
+    {
+        DateTime utcNow = new(2026, 8, 14, 12, 0, 0, DateTimeKind.Utc);
+        var analyzer = new TemporaryFileAnalyzer();
+        FileInventory inventory = NewInventory(files: [NewFile(@"C:\scan\one.tmp", 1, utcNow)]);
+
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => analyzer.AnalyzeAsync(
+            inventory,
+            new TemporaryFileOptions(TimeSpan.FromTicks(-1), utcNow),
+            CancellationToken.None));
+
+        using var cancellationSource = new CancellationTokenSource();
+        FileInventory cancelBetweenEntries = NewInventory(
+            files: new CancelBeforeSecondItemList<InventoryFile>(
+                [NewFile(@"C:\scan\first.tmp", 1, utcNow), NewFile(@"C:\scan\second.tmp", 1, utcNow)],
+                cancellationSource));
+        await Assert.ThrowsAsync<OperationCanceledException>(() => analyzer.AnalyzeAsync(
+            cancelBetweenEntries,
+            new TemporaryFileOptions(TimeSpan.Zero, utcNow),
+            cancellationSource.Token));
+    }
+
     private static FileInventory NewInventory(
         IReadOnlyList<InventoryFile>? files = null,
         IReadOnlyList<InventoryDirectory>? directories = null,
+        IReadOnlyList<string>? includedRootPaths = null,
         IReadOnlyList<string>? reparsePointPaths = null,
         IReadOnlyList<SkippedPath>? skippedPaths = null) => new(
             files ?? [],
             directories ?? [],
-            [],
+            includedRootPaths ?? [],
             reparsePointPaths ?? [],
             skippedPaths ?? []);
 
@@ -231,12 +460,17 @@ public sealed class StorageAnalyzerTests : IDisposable
             modifiedUtc ?? new DateTime(2026, 8, 7, 12, 0, 0, DateTimeKind.Utc),
             attributes);
 
-    private static InventoryDirectory NewDirectory(string path) => new(
+    private static InventoryDirectory NewDirectory(
+        string path,
+        int depth = 0,
+        int physicalChildCount = 0,
+        FileAttributes attributes = FileAttributes.Directory) => new(
         path,
         Path.GetFileName(path),
         Path.GetDirectoryName(path) ?? string.Empty,
-        0,
-        FileAttributes.Directory);
+        depth,
+        physicalChildCount,
+        attributes);
 
     private static string WriteBytes(string path, int length)
     {
@@ -245,19 +479,19 @@ public sealed class StorageAnalyzerTests : IDisposable
         return Path.GetFullPath(path);
     }
 
-    private sealed class CancelBeforeSecondItemList(
-        IReadOnlyList<InventoryFile> items,
-        CancellationTokenSource cancellationSource) : IReadOnlyList<InventoryFile>
+    private sealed class CancelBeforeSecondItemList<T>(
+        IReadOnlyList<T> items,
+        CancellationTokenSource cancellationSource) : IReadOnlyList<T>
     {
         public int Count => items.Count;
 
-        public InventoryFile this[int index] => items[index];
+        public T this[int index] => items[index];
 
-        public IEnumerator<InventoryFile> GetEnumerator() => Enumerate().GetEnumerator();
+        public IEnumerator<T> GetEnumerator() => Enumerate().GetEnumerator();
 
         IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 
-        private IEnumerable<InventoryFile> Enumerate()
+        private IEnumerable<T> Enumerate()
         {
             yield return items[0];
             cancellationSource.Cancel();

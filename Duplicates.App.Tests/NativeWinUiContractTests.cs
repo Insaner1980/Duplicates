@@ -218,21 +218,36 @@ public sealed class NativeWinUiContractTests
     }
 
     [Fact]
-    public void AnalysisPage_UsesNativeBigFileInputAndExactPresets()
+    public void AnalysisPage_UsesNativeStorageToolInputsAndExactBigFilePresets()
     {
         XDocument page = LoadXaml(@"Views\AnalysisPage.xaml");
         XElement options = page
             .Descendants(Presentation + "Expander")
             .Single(element => (string?)element.Attribute(Xaml + "Name") == "AnalysisOptions");
-        XElement numberBox = Assert.Single(options.Descendants(Presentation + "NumberBox"));
+        XElement[] numberBoxes = options.Descendants(Presentation + "NumberBox").ToArray();
+        Assert.Equal(2, numberBoxes.Length);
+        XElement largeFileInput = numberBoxes.Single(
+            numberBox => (string?)numberBox.Attribute("Header") == "Minimum size, bytes");
+        XElement temporaryFileInput = numberBoxes.Single(
+            numberBox => (string?)numberBox.Attribute("Header") == "Minimum age, days");
 
         Assert.Equal("{Binding OptionsVisibility}", (string?)options.Attribute("Visibility"));
-        Assert.Equal("Minimum size, bytes", (string?)numberBox.Attribute("Header"));
-        Assert.Equal("0", (string?)numberBox.Attribute("Minimum"));
-        Assert.Equal("InvalidInputOverwritten", (string?)numberBox.Attribute("ValidationMode"));
+        Assert.Equal("0", (string?)largeFileInput.Attribute("Minimum"));
+        Assert.Equal("InvalidInputOverwritten", (string?)largeFileInput.Attribute("ValidationMode"));
         Assert.Equal(
             "{Binding LargeFileMinimumSizeValue, Mode=TwoWay}",
-            (string?)numberBox.Attribute("Value"));
+            (string?)largeFileInput.Attribute("Value"));
+        Assert.Equal(
+            "{Binding LargeFileOptionsVisibility}",
+            (string?)largeFileInput.Parent?.Attribute("Visibility"));
+        Assert.Equal("0", (string?)temporaryFileInput.Attribute("Minimum"));
+        Assert.Equal("InvalidInputOverwritten", (string?)temporaryFileInput.Attribute("ValidationMode"));
+        Assert.Equal(
+            "{Binding TemporaryFileMinimumAgeDays, Mode=TwoWay}",
+            (string?)temporaryFileInput.Attribute("Value"));
+        Assert.Equal(
+            "{Binding TemporaryFileOptionsVisibility}",
+            (string?)temporaryFileInput.Parent?.Attribute("Visibility"));
         Assert.Equal(
             new[] { "Any", "100 MB", "1 GB", "10 GB" },
             options.Descendants(Presentation + "Button")

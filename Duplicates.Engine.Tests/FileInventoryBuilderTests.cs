@@ -142,6 +142,28 @@ public sealed class FileInventoryBuilderTests : IDisposable
     }
 
     [Fact]
+    public void Build_PhysicalChildCountIsCapturedBeforeEntryFilters()
+    {
+        string visible = WriteFile("visible.txt", "visible");
+        string hidden = WriteFile("hidden.txt", "hidden");
+        string excluded = WriteFile("excluded.txt", "excluded");
+        Directory.CreateDirectory(Path.Combine(_root, "nested"));
+        File.SetAttributes(hidden, File.GetAttributes(hidden) | FileAttributes.Hidden);
+
+        FileInventory inventory = Build(new AnalysisScope
+        {
+            IncludedFolders = [_root],
+            ExcludedPaths = [excluded],
+            IncludeSubfolders = false,
+        });
+
+        InventoryDirectory root = Assert.Single(inventory.Directories);
+        Assert.Equal(4, root.PhysicalChildCount);
+        InventoryFile file = Assert.Single(inventory.Files);
+        Assert.Equal(visible, file.FullPath);
+    }
+
+    [Fact]
     public void Build_ReparsePoint_CapturesPathWithoutTraversingTarget()
     {
         string target = Path.Combine(_root, "target");
@@ -179,6 +201,10 @@ public sealed class FileInventoryBuilderTests : IDisposable
 
         Assert.Contains(inventory.Files, file => file.FullPath == available);
         Assert.Contains(inventory.SkippedPaths, skipped => string.Equals(skipped.Path, blocked, StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(
+            -1,
+            inventory.Directories.Single(directory =>
+                string.Equals(directory.FullPath, blocked, StringComparison.OrdinalIgnoreCase)).PhysicalChildCount);
     }
 
     [Fact]

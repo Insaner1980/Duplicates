@@ -24,4 +24,5 @@ public sealed record InventoryDirectory(
     string Name,
     string ParentPath,
     int Depth,
+    int PhysicalChildCount,
     FileAttributes Attributes);

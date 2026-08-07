@@ -122,6 +122,13 @@
                                             Content="10 GB" />
                                     </StackPanel>
                                 </StackPanel>
+                                <StackPanel Visibility="{Binding TemporaryFileOptionsVisibility}">
+                                    <NumberBox
+                                        Header="Minimum age, days"
+                                        Minimum="0"
+                                        ValidationMode="InvalidInputOverwritten"
+                                        Value="{Binding TemporaryFileMinimumAgeDays, Mode=TwoWay}" />
+                                </StackPanel>
                                 <TextBlock
                                     Style="{StaticResource MutedTextBlockStyle}"
                                     Text="{Binding OptionsSummary}"

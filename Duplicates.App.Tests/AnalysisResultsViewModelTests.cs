@@ -352,6 +352,264 @@ public sealed class AnalysisResultsViewModelTests
         }
     }
 
+    [Fact]
+    public async Task EmptyFolderDelete_RevalidatesAndDispatchesSelectedFoldersDeepestFirst()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        string shallow = Path.Combine(root, "shallow");
+        string outer = Path.Combine(root, "outer");
+        string deep = Path.Combine(outer, "deep");
+        Directory.CreateDirectory(shallow);
+        Directory.CreateDirectory(deep);
+
+        try
+        {
+            var store = new AnalysisSessionStore();
+            var fileActions = new FakeFileActionService
+            {
+                NextSummary = new DeleteSummary(2, 0, []),
+            };
+            IReadOnlyList<FileActionTarget>? requestedTargets = null;
+            fileActions.OnDelete = (targets, _) => requestedTargets = targets;
+            var viewModel = new AnalysisResultsViewModel(store, fileActions, new FakeResultExportService());
+            store.SetCompleted(
+                ToolKind.EmptyFolders,
+                new AnalysisScope { IncludedFolders = [root] },
+                new NoToolOptions(),
+                NewResult(
+                [
+                    NewDirectoryFinding(shallow, depth: 1),
+                    NewDirectoryFinding(deep, depth: 2),
+                ]));
+            foreach (PathFindingViewModel finding in viewModel.Findings)
+            {
+                finding.IsSelected = true;
+            }
+
+            DeleteSummary summary = await viewModel.DeleteSelectedAsync(CancellationToken.None);
+
+            Assert.Equal(
+                [
+                    new FileActionTarget(deep, 0, FileActionTargetKind.Directory),
+                    new FileActionTarget(shallow, 0, FileActionTargetKind.Directory),
+                ],
+                requestedTargets);
+            Assert.Equal(2, summary.DeletedCount);
+            Assert.Empty(summary.Failures);
+            Assert.Empty(viewModel.Findings);
+            Assert.DoesNotContain(requestedTargets!, target => target.FullPath == outer || target.FullPath == root);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task EmptyFolderDelete_RejectsNonEmptyAndMissingFoldersWithoutCallingService()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        string nonEmpty = Path.Combine(root, "non-empty");
+        string missing = Path.Combine(root, "missing");
+        Directory.CreateDirectory(nonEmpty);
+        await File.WriteAllTextAsync(Path.Combine(nonEmpty, "added.txt"), "changed");
+
+        try
+        {
+            var store = new AnalysisSessionStore();
+            var fileActions = new FakeFileActionService();
+            var viewModel = new AnalysisResultsViewModel(store, fileActions, new FakeResultExportService());
+            store.SetCompleted(
+                ToolKind.EmptyFolders,
+                new AnalysisScope { IncludedFolders = [root] },
+                new NoToolOptions(),
+                NewResult([NewDirectoryFinding(nonEmpty, 1), NewDirectoryFinding(missing, 1)]));
+            foreach (PathFindingViewModel finding in viewModel.Findings)
+            {
+                finding.IsSelected = true;
+            }
+
+            DeleteSummary summary = await viewModel.DeleteSelectedAsync(CancellationToken.None);
+
+            Assert.Equal(2, summary.Failures.Count);
+            Assert.All(
+                summary.Failures,
+                static failure => Assert.Equal("Folder is no longer empty.", failure.Reason));
+            Assert.Equal(0, fileActions.DeleteCallCount);
+            Assert.Equal(2, viewModel.Findings.Count);
+            Assert.All(viewModel.Findings, static finding => Assert.True(finding.IsSelected));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task TemporaryFileDelete_UsesStoredOptionsCurrentLengthAndClosesWriteCheckBeforeDispatch()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string path = Path.Combine(root, "cache.TMP");
+        await File.WriteAllBytesAsync(path, new byte[12]);
+        DateTime utcNow = new(2026, 8, 14, 12, 0, 0, DateTimeKind.Utc);
+        File.SetLastWriteTimeUtc(path, utcNow.AddDays(-7));
+
+        try
+        {
+            var store = new AnalysisSessionStore();
+            var fileActions = new FakeFileActionService
+            {
+                NextSummary = new DeleteSummary(1, 12, []),
+            };
+            IReadOnlyList<FileActionTarget>? requestedTargets = null;
+            fileActions.OnDelete = (targets, _) =>
+            {
+                requestedTargets = targets;
+                using var exclusive = new FileStream(path, FileMode.Open, FileAccess.Write, FileShare.None);
+            };
+            var viewModel = new AnalysisResultsViewModel(store, fileActions, new FakeResultExportService());
+            var options = new TemporaryFileToolOptions(TimeSpan.FromDays(7), utcNow);
+            store.SetCompleted(
+                ToolKind.TemporaryFiles,
+                new AnalysisScope { IncludedFolders = [root] },
+                options,
+                NewResult([NewFinding(path, 100)]));
+            PathFindingViewModel finding = Assert.Single(viewModel.Findings);
+            finding.IsSelected = true;
+
+            DeleteSummary summary = await viewModel.DeleteSelectedAsync(CancellationToken.None);
+
+            Assert.Same(options, Assert.IsType<AnalysisSession>(store.CurrentSession).ToolOptions);
+            Assert.Equal([new FileActionTarget(path, 12, FileActionTargetKind.File)], requestedTargets);
+            Assert.Equal(1, summary.DeletedCount);
+            Assert.Empty(viewModel.Findings);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task TemporaryFileDelete_RejectsChangedFreshActiveAndMissingFilesWithoutCallingService()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string changedName = Path.Combine(root, "changed.txt");
+        string fresh = Path.Combine(root, "fresh.tmp");
+        string active = Path.Combine(root, "active.tmp");
+        string missing = Path.Combine(root, "missing.tmp");
+        await File.WriteAllBytesAsync(changedName, [1]);
+        await File.WriteAllBytesAsync(fresh, [1]);
+        await File.WriteAllBytesAsync(active, [1]);
+        DateTime utcNow = new(2026, 8, 14, 12, 0, 0, DateTimeKind.Utc);
+        File.SetLastWriteTimeUtc(changedName, utcNow.AddDays(-30));
+        File.SetLastWriteTimeUtc(fresh, utcNow.AddDays(-6));
+        File.SetLastWriteTimeUtc(active, utcNow.AddDays(-30));
+
+        try
+        {
+            using var activeHandle = new FileStream(active, FileMode.Open, FileAccess.Read, FileShare.Read);
+            var store = new AnalysisSessionStore();
+            var fileActions = new FakeFileActionService();
+            var viewModel = new AnalysisResultsViewModel(store, fileActions, new FakeResultExportService());
+            store.SetCompleted(
+                ToolKind.TemporaryFiles,
+                new AnalysisScope { IncludedFolders = [root] },
+                new TemporaryFileToolOptions(TimeSpan.FromDays(7), utcNow),
+                NewResult(
+                [
+                    NewFinding(changedName, 1),
+                    NewFinding(fresh, 1),
+                    NewFinding(active, 1),
+                    NewFinding(missing, 1),
+                ]));
+            foreach (PathFindingViewModel finding in viewModel.Findings)
+            {
+                finding.IsSelected = true;
+            }
+
+            DeleteSummary summary = await viewModel.DeleteSelectedAsync(CancellationToken.None);
+
+            Assert.Equal(4, summary.Failures.Count);
+            Assert.All(
+                summary.Failures,
+                static failure => Assert.Equal("File is active or changed.", failure.Reason));
+            Assert.Equal(0, fileActions.DeleteCallCount);
+            Assert.Equal(4, viewModel.Findings.Count);
+            Assert.All(viewModel.Findings, static finding => Assert.True(finding.IsSelected));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task TemporaryFileDelete_MergesLocalAndServiceFailuresAndRemovesOnlySuccesses()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string success = Path.Combine(root, "success.tmp");
+        string serviceFailure = Path.Combine(root, "service-failure.tmp");
+        string localFailure = Path.Combine(root, "changed.txt");
+        await File.WriteAllBytesAsync(success, [1]);
+        await File.WriteAllBytesAsync(serviceFailure, [2]);
+        await File.WriteAllBytesAsync(localFailure, [3]);
+        DateTime utcNow = new(2026, 8, 14, 12, 0, 0, DateTimeKind.Utc);
+        foreach (string path in new[] { success, serviceFailure, localFailure })
+        {
+            File.SetLastWriteTimeUtc(path, utcNow.AddDays(-30));
+        }
+
+        try
+        {
+            var store = new AnalysisSessionStore();
+            var fileActions = new FakeFileActionService
+            {
+                NextSummary = new DeleteSummary(
+                    1,
+                    1,
+                    [new FileActionFailure(serviceFailure, "Service failure")]),
+            };
+            var viewModel = new AnalysisResultsViewModel(store, fileActions, new FakeResultExportService());
+            store.SetCompleted(
+                ToolKind.TemporaryFiles,
+                new AnalysisScope { IncludedFolders = [root] },
+                new TemporaryFileToolOptions(TimeSpan.FromDays(7), utcNow),
+                NewResult(
+                [
+                    NewFinding(success, 1),
+                    NewFinding(serviceFailure, 1),
+                    NewFinding(localFailure, 1),
+                ]));
+            foreach (PathFindingViewModel finding in viewModel.Findings)
+            {
+                finding.IsSelected = true;
+            }
+
+            DeleteSummary summary = await viewModel.DeleteSelectedAsync(CancellationToken.None);
+
+            Assert.Equal(1, fileActions.DeleteCallCount);
+            Assert.Equal(1, summary.DeletedCount);
+            Assert.Equal(2, summary.Failures.Count);
+            Assert.Contains(summary.Failures, failure =>
+                failure.Path == localFailure && failure.Reason == "File is active or changed.");
+            Assert.Contains(summary.Failures, failure =>
+                failure.Path == serviceFailure && failure.Reason == "Service failure");
+            Assert.Equal(
+                new[] { localFailure, serviceFailure }.Order(StringComparer.OrdinalIgnoreCase),
+                viewModel.Findings.Select(static finding => finding.FullPath).Order(StringComparer.OrdinalIgnoreCase),
+                StringComparer.OrdinalIgnoreCase);
+            Assert.All(viewModel.Findings, static finding => Assert.True(finding.IsSelected));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     private static AnalysisResult NewResult(
         IReadOnlyList<PathFinding>? findings = null,
         IReadOnlyList<SimilarityGroup>? groups = null,
@@ -371,6 +629,18 @@ public sealed class AnalysisResultsViewModelTests
         Suggestion = "Review this item.",
         SizeBytes = size,
         ModifiedUtc = modifiedUtc ?? new DateTime(2026, 8, 7, 12, 0, 0, DateTimeKind.Utc),
+    };
+
+    private static PathFinding NewDirectoryFinding(string path, int depth) => new()
+    {
+        FullPath = path,
+        Kind = PathFindingKind.Directory,
+        Reason = "Folder is empty",
+        SizeBytes = 0,
+        Metadata = new Dictionary<string, string>
+        {
+            ["Depth"] = depth.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        },
     };
 
     private static SimilarityGroup NewGroup(

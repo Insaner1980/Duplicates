@@ -55,6 +55,13 @@ public sealed class AnalysisService : IAnalysisService
             (ToolKind.EmptyFiles, NoToolOptions) => await new EmptyFileAnalyzer().AnalyzeAsync(
                 inventory,
                 cancellationToken).ConfigureAwait(false),
+            (ToolKind.EmptyFolders, NoToolOptions) => await new EmptyFolderAnalyzer().AnalyzeAsync(
+                inventory,
+                cancellationToken).ConfigureAwait(false),
+            (ToolKind.TemporaryFiles, TemporaryFileToolOptions options) => await new TemporaryFileAnalyzer().AnalyzeAsync(
+                inventory,
+                new TemporaryFileOptions(options.MinimumAge, options.UtcNow),
+                cancellationToken).ConfigureAwait(false),
             _ => throw new NotSupportedException(
                 $"The {ToolDescriptor.For(tool).Title} analyzer is not installed yet."),
         };

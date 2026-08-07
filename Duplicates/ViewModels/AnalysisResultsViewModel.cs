@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Globalization;
 using System.Security;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -478,8 +479,12 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         SelectionChanged();
     }
 
-    private bool IsMutationToolSupported => _sessionStore.CurrentSession?.Tool is
-        ToolKind.EmptyFiles or ToolKind.EmptyFolders or ToolKind.BigFiles;
+    private bool IsMutationToolSupported => _sessionStore.CurrentSession switch
+    {
+        { Tool: ToolKind.EmptyFiles or ToolKind.EmptyFolders or ToolKind.BigFiles } => true,
+        { Tool: ToolKind.TemporaryFiles, ToolOptions: TemporaryFileToolOptions } => true,
+        _ => false,
+    };
 
     private void EnsureSelectedMutationIsSupported()
     {
@@ -518,7 +523,16 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         var targets = new List<FileActionTarget>();
         var failures = new List<FileActionFailure>();
         int selectedCount = SelectedFindings.Count + SelectedSimilarityItems.Count;
-        foreach (PathFindingViewModel finding in SelectedFindings)
+        IEnumerable<PathFindingViewModel> selectedFindings = SelectedFindings;
+        if (_sessionStore.CurrentSession?.Tool == ToolKind.EmptyFolders)
+        {
+            selectedFindings = selectedFindings
+                .OrderByDescending(GetDirectoryDepth)
+                .ThenBy(static finding => finding.FullPath, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(static finding => finding.FullPath, StringComparer.Ordinal);
+        }
+
+        foreach (PathFindingViewModel finding in selectedFindings)
         {
             if (TryMapFinding(finding, out FileActionTarget? target, out FileActionFailure? failure))
             {
@@ -550,6 +564,17 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         out FileActionTarget? target,
         out FileActionFailure? failure)
     {
+        AnalysisSession? session = _sessionStore.CurrentSession;
+        if (session?.Tool == ToolKind.EmptyFolders)
+        {
+            return TryMapEmptyFolder(finding, out target, out failure);
+        }
+
+        if (session?.Tool == ToolKind.TemporaryFiles)
+        {
+            return TryMapTemporaryFile(finding, session.ToolOptions, out target, out failure);
+        }
+
         target = null;
         failure = null;
         try
@@ -569,6 +594,79 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         catch (Exception ex) when (IsFileSystemFailure(ex))
         {
             failure = ChangedFailure(finding.FullPath);
+            return false;
+        }
+    }
+
+    private static bool TryMapEmptyFolder(
+        PathFindingViewModel finding,
+        out FileActionTarget? target,
+        out FileActionFailure? failure)
+    {
+        target = null;
+        failure = null;
+        try
+        {
+            FileAttributes attributes = File.GetAttributes(finding.FullPath);
+            if (finding.Source.Kind != PathFindingKind.Directory ||
+                GetDirectoryDepth(finding) < 0 ||
+                !attributes.HasFlag(FileAttributes.Directory) ||
+                attributes.HasFlag(FileAttributes.ReparsePoint) ||
+                Directory.EnumerateFileSystemEntries(finding.FullPath).Take(1).Any())
+            {
+                failure = EmptyFolderChangedFailure(finding.FullPath);
+                return false;
+            }
+
+            target = new FileActionTarget(finding.FullPath, 0, FileActionTargetKind.Directory);
+            return true;
+        }
+        catch (Exception ex) when (IsFileSystemFailure(ex))
+        {
+            failure = EmptyFolderChangedFailure(finding.FullPath);
+            return false;
+        }
+    }
+
+    private static bool TryMapTemporaryFile(
+        PathFindingViewModel finding,
+        ToolOptions toolOptions,
+        out FileActionTarget? target,
+        out FileActionFailure? failure)
+    {
+        target = null;
+        failure = null;
+        try
+        {
+            if (finding.Source.Kind != PathFindingKind.File ||
+                toolOptions is not TemporaryFileToolOptions options ||
+                !MatchesTemporaryFileName(Path.GetFileName(finding.FullPath)))
+            {
+                failure = TemporaryFileChangedFailure(finding.FullPath);
+                return false;
+            }
+
+            FileAttributes attributes = File.GetAttributes(finding.FullPath);
+            var file = new FileInfo(finding.FullPath);
+            if (attributes.HasFlag(FileAttributes.Directory) ||
+                attributes.HasFlag(FileAttributes.ReparsePoint) ||
+                file.LastWriteTimeUtc > options.UtcNow - options.MinimumAge)
+            {
+                failure = TemporaryFileChangedFailure(finding.FullPath);
+                return false;
+            }
+
+            long sizeBytes = file.Length;
+            using (new FileStream(finding.FullPath, FileMode.Open, FileAccess.Write, FileShare.None))
+            {
+            }
+
+            target = new FileActionTarget(finding.FullPath, sizeBytes, FileActionTargetKind.File);
+            return true;
+        }
+        catch (Exception ex) when (IsFileSystemFailure(ex))
+        {
+            failure = TemporaryFileChangedFailure(finding.FullPath);
             return false;
         }
     }
@@ -608,7 +706,6 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         return session?.Tool switch
         {
             ToolKind.EmptyFiles => kind == FileActionTargetKind.File && currentSizeBytes == 0,
-            ToolKind.EmptyFolders => kind == FileActionTargetKind.Directory && !Directory.EnumerateFileSystemEntries(finding.FullPath).Any(),
             ToolKind.BigFiles => kind == FileActionTargetKind.File &&
                 session.ToolOptions is LargeFileToolOptions options &&
                 currentSizeBytes >= options.MinimumSizeBytes,
@@ -683,6 +780,30 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
     };
 
     private static FileActionFailure ChangedFailure(string path) => new(path, "File changed since scan.");
+
+    private static FileActionFailure EmptyFolderChangedFailure(string path) =>
+        new(path, "Folder is no longer empty.");
+
+    private static FileActionFailure TemporaryFileChangedFailure(string path) =>
+        new(path, "File is active or changed.");
+
+    private static int GetDirectoryDepth(PathFindingViewModel finding) =>
+        finding.Source.Metadata.TryGetValue("Depth", out string? depthText) &&
+        int.TryParse(depthText, NumberStyles.None, CultureInfo.InvariantCulture, out int depth)
+            ? depth
+            : -1;
+
+    private static bool MatchesTemporaryFileName(string fileName) =>
+        fileName.StartsWith("~$", StringComparison.OrdinalIgnoreCase) ||
+        fileName.EndsWith('~') ||
+        fileName.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase) ||
+        fileName.EndsWith(".temp", StringComparison.OrdinalIgnoreCase) ||
+        fileName.EndsWith(".partial", StringComparison.OrdinalIgnoreCase) ||
+        fileName.EndsWith(".part", StringComparison.OrdinalIgnoreCase) ||
+        fileName.EndsWith(".crdownload", StringComparison.OrdinalIgnoreCase) ||
+        fileName.EndsWith(".download", StringComparison.OrdinalIgnoreCase) ||
+        fileName.EndsWith(".dmp", StringComparison.OrdinalIgnoreCase) ||
+        fileName.EndsWith(".chk", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsFileSystemFailure(Exception ex) =>
         ex is IOException or UnauthorizedAccessException or SecurityException or NotSupportedException;
