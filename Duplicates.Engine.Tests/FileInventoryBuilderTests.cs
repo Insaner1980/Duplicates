@@ -1,6 +1,8 @@
 using System.Runtime.InteropServices;
 using Microsoft.Win32.SafeHandles;
 using Duplicates.Engine.Analysis;
+using Duplicates.Engine.Models;
+using Xunit.Sdk;
 
 namespace Duplicates.Engine.Tests;
 
@@ -109,6 +111,22 @@ public sealed class FileInventoryBuilderTests : IDisposable
     }
 
     [Fact]
+    public void Build_MissingExcludedPath_ReportsSkippedPath()
+    {
+        string missingExcludedPath = Path.Combine(_root, "missing-exclusion");
+
+        FileInventory inventory = Build(new AnalysisScope
+        {
+            IncludedFolders = [_root],
+            ExcludedPaths = [missingExcludedPath],
+        });
+
+        SkippedPath skipped = Assert.Single(inventory.SkippedPaths);
+        Assert.Equal(missingExcludedPath, skipped.Path);
+        Assert.False(string.IsNullOrWhiteSpace(skipped.Reason));
+    }
+
+    [Fact]
     public void Build_IgnoreHiddenAndSystemFiles_ExcludesFlaggedFiles()
     {
         string visible = WriteFile("visible.txt", "visible");
@@ -133,7 +151,7 @@ public sealed class FileInventoryBuilderTests : IDisposable
 
         if (!TryCreateDirectorySymbolicLink(link, target))
         {
-            return;
+            throw SkipException.ForSkip("A directory symbolic-link fixture cannot be created on this Windows host.");
         }
 
         FileInventory inventory = Build(new AnalysisScope { IncludedFolders = [_root] });
@@ -154,7 +172,7 @@ public sealed class FileInventoryBuilderTests : IDisposable
         using SafeFileHandle handle = TryLockDirectory(blocked);
         if (handle.IsInvalid)
         {
-            return;
+            throw SkipException.ForSkip("An exclusive directory-handle fixture cannot be created on this Windows host.");
         }
 
         FileInventory inventory = Build(new AnalysisScope { IncludedFolders = [_root] });

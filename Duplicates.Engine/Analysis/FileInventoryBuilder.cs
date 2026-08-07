@@ -24,7 +24,7 @@ public sealed class FileInventoryBuilder
         var seenIncludedRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var seenReparsePoints = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var reporter = new ProgressReporter(progress);
-        IReadOnlyList<ExcludedPath> excludedPaths = BuildExcludedPaths(scope.ExcludedPaths);
+        IReadOnlyList<ExcludedPath> excludedPaths = BuildExcludedPaths(scope.ExcludedPaths, skippedPaths);
         long totalBytes = 0;
 
         reporter.Report(new AnalysisProgress(AnalysisPhase.Enumerating, 0, 0, 0, 0, null), force: true);
@@ -156,7 +156,7 @@ public sealed class FileInventoryBuilder
         return new FileInventory(files, directories, includedRoots, reparsePointPaths, skippedPaths);
     }
 
-    private static IReadOnlyList<ExcludedPath> BuildExcludedPaths(IReadOnlyList<string> paths)
+    private static IReadOnlyList<ExcludedPath> BuildExcludedPaths(IReadOnlyList<string> paths, List<SkippedPath> skippedPaths)
     {
         var excludedPaths = new List<ExcludedPath>();
 
@@ -175,6 +175,7 @@ public sealed class FileInventoryBuilder
             }
             catch (Exception ex) when (IsSkippable(ex))
             {
+                skippedPaths.Add(new SkippedPath { Path = path, Reason = ex.Message });
             }
         }
 
