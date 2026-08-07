@@ -210,16 +210,22 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
 
         Replace(Findings, findings);
         Replace(Groups, groups);
-        ResultItems.Clear();
-        foreach (PathFindingViewModel finding in Findings)
+        IEnumerable<object> resultItems = Findings.Cast<object>().Concat(Groups);
+        resultItems = SelectedSortIndex switch
         {
-            ResultItems.Add(finding);
-        }
-
-        foreach (SimilarityGroupViewModel group in Groups)
-        {
-            ResultItems.Add(group);
-        }
+            1 => resultItems
+                .OrderByDescending(GetResultSize)
+                .ThenBy(GetResultPath, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(GetResultPath, StringComparer.Ordinal),
+            2 => resultItems
+                .OrderByDescending(GetResultModifiedUtc)
+                .ThenBy(GetResultPath, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(GetResultPath, StringComparer.Ordinal),
+            _ => resultItems
+                .OrderBy(GetResultPath, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(GetResultPath, StringComparer.Ordinal),
+        };
+        Replace(ResultItems, resultItems);
 
         OnPropertyChanged(nameof(ResultsVisibility));
     }
@@ -236,6 +242,27 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         group.Id.Contains(search, StringComparison.OrdinalIgnoreCase) ||
         group.Items.Any(item => item.FullPath.Contains(search, StringComparison.OrdinalIgnoreCase)) ||
         group.MetadataText.Contains(search, StringComparison.OrdinalIgnoreCase);
+
+    private static string GetResultPath(object item) => item switch
+    {
+        PathFindingViewModel finding => finding.FullPath,
+        SimilarityGroupViewModel group => group.FullPath,
+        _ => string.Empty,
+    };
+
+    private static long GetResultSize(object item) => item switch
+    {
+        PathFindingViewModel finding => finding.SizeBytes,
+        SimilarityGroupViewModel group => group.Items.Sum(static candidate => candidate.SizeBytes),
+        _ => 0,
+    };
+
+    private static DateTime GetResultModifiedUtc(object item) => item switch
+    {
+        PathFindingViewModel finding => finding.ModifiedUtc ?? DateTime.MinValue,
+        SimilarityGroupViewModel group => group.ReferenceItem.ModifiedUtc,
+        _ => DateTime.MinValue,
+    };
 
     private static void Replace<T>(ObservableCollection<T> target, IEnumerable<T> items)
     {

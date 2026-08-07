@@ -89,6 +89,11 @@ public sealed partial class AnalysisViewModel : ObservableObject
     public void SelectTool(ToolKind tool)
     {
         _ = BuildToolOptions(tool);
+        if (IsAnalyzing && tool != Tool)
+        {
+            return;
+        }
+
         Tool = tool;
         OnPropertyChanged(nameof(Tool));
         OnPropertyChanged(nameof(Title));
@@ -107,6 +112,7 @@ public sealed partial class AnalysisViewModel : ObservableObject
         IsAnalyzing = true;
         StatusMessage = string.Empty;
         _analysisCancellation = new CancellationTokenSource();
+        CancellationToken cancellationToken = _analysisCancellation.Token;
         ToolKind tool = Tool;
         AnalysisScope scope = BuildScope();
 
@@ -118,7 +124,8 @@ public sealed partial class AnalysisViewModel : ObservableObject
                 scope,
                 BuildToolOptions(tool),
                 progress,
-                _analysisCancellation.Token);
+                cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             _sessionStore.SetCompleted(tool, scope, result);
             AnalysisCompleted?.Invoke(this, _sessionStore.CurrentSession!);
         }

@@ -2,6 +2,10 @@ using System.Reflection;
 using System.Xml;
 using System.Xml.Linq;
 using Duplicates;
+using Duplicates.Engine.Analysis;
+using Duplicates.Models;
+using Duplicates.Services;
+using Duplicates.Views;
 
 namespace Duplicates.App.Tests;
 
@@ -131,6 +135,36 @@ public sealed class NativeWinUiContractTests
     }
 
     [Fact]
+    public void CompletedAnalysisDestination_ReopensResultsOnlyForTheSameTool()
+    {
+        MethodInfo? resolver = typeof(MainWindow).GetMethod(
+            "ResolveAnalysisDestination",
+            BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(resolver);
+        var session = new AnalysisSession(
+            ToolKind.BigFiles,
+            new AnalysisScope(),
+            new AnalysisResult
+            {
+                Findings = [],
+                Groups = [],
+                SkippedPaths = [],
+                Elapsed = TimeSpan.FromSeconds(1),
+            },
+            DateTimeOffset.UtcNow);
+
+        Assert.Equal(
+            typeof(AnalysisResultsPage),
+            resolver.Invoke(null, [ToolKind.BigFiles, session]));
+        Assert.Equal(
+            typeof(AnalysisPage),
+            resolver.Invoke(null, [ToolKind.EmptyFiles, session]));
+        Assert.Equal(
+            typeof(AnalysisPage),
+            resolver.Invoke(null, [ToolKind.BigFiles, null]));
+    }
+
+    [Fact]
     public void ScanPage_UsesNativeControlsWithoutLegacyCards()
     {
         XDocument page = LoadXaml(@"Views\ScanPage.xaml");
@@ -199,6 +233,34 @@ public sealed class NativeWinUiContractTests
 
         XElement skipped = Assert.Single(page.Descendants(Presentation + "InfoBar"));
         Assert.Equal("{Binding HasSkippedPaths}", (string?)skipped.Attribute("IsOpen"));
+        Assert.DoesNotContain(
+            skipped.Ancestors(),
+            ancestor => ancestor.Name == Presentation + "SplitView");
+    }
+
+    [Fact]
+    public void AnalysisResultsPage_SeparatesPreviewFromPathAndSimilarityActionSelection()
+    {
+        XDocument page = LoadXaml(@"Views\AnalysisResultsPage.xaml");
+        XElement pathTemplate = page
+            .Descendants(Presentation + "DataTemplate")
+            .Single(template => (string?)template.Attribute(Xaml + "Key") == "PathFindingTemplate");
+        XElement groupTemplate = page
+            .Descendants(Presentation + "DataTemplate")
+            .Single(template => (string?)template.Attribute(Xaml + "Key") == "SimilarityGroupTemplate");
+
+        Assert.Contains(
+            pathTemplate.Descendants(Presentation + "CheckBox"),
+            checkBox => (string?)checkBox.Attribute("IsChecked") == "{Binding IsSelected, Mode=TwoWay}");
+        XElement similarityItems = Assert.Single(groupTemplate.Descendants(Presentation + "ItemsControl"));
+        Assert.Equal("{Binding Items}", (string?)similarityItems.Attribute("ItemsSource"));
+        Assert.Contains(
+            similarityItems.Descendants(Presentation + "CheckBox"),
+            checkBox => (string?)checkBox.Attribute("IsChecked") == "{Binding IsSelected, Mode=TwoWay}");
+
+        XElement list = Assert.Single(page.Descendants(Presentation + "ListView"));
+        Assert.Equal("Single", (string?)list.Attribute("SelectionMode"));
+        Assert.Equal("{Binding SelectedResult, Mode=TwoWay}", (string?)list.Attribute("SelectedItem"));
     }
 
     [Fact]

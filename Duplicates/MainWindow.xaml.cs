@@ -1,4 +1,5 @@
 using Duplicates.Models;
+using Duplicates.Services;
 using Duplicates.Views;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -9,6 +10,7 @@ namespace Duplicates;
 public sealed partial class MainWindow : Window
 {
     private readonly AppServices _services;
+    private bool _isRestoringAnalysisSelection;
 
     public MainWindow(AppServices services)
     {
@@ -45,6 +47,11 @@ public sealed partial class MainWindow : Window
 
     private void RootNavigationView_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
     {
+        if (_isRestoringAnalysisSelection)
+        {
+            return;
+        }
+
         if (args.IsSettingsSelected)
         {
             NavigateTo(typeof(SettingsPage));
@@ -104,7 +111,17 @@ public sealed partial class MainWindow : Window
     public void ShowAnalysisPage(ToolKind tool)
     {
         _services.AnalysisViewModel.SelectTool(tool);
-        NavigateTo(typeof(AnalysisPage));
+        if (_services.AnalysisViewModel.Tool != tool)
+        {
+            RestoreAnalysisSelection(_services.AnalysisViewModel.Tool);
+            NavigateTo(typeof(AnalysisPage));
+            return;
+        }
+
+        Type destination = _services.AnalysisViewModel.IsAnalyzing
+            ? typeof(AnalysisPage)
+            : ResolveAnalysisDestination(tool, _services.AnalysisSessionStore.CurrentSession);
+        NavigateTo(destination);
     }
 
     public void ShowAnalysisResultsPage()
@@ -124,6 +141,24 @@ public sealed partial class MainWindow : Window
         ToolKind.BrokenFiles or
         ToolKind.BadExtensions or
         ToolKind.BadNames;
+
+    private static Type ResolveAnalysisDestination(ToolKind tool, AnalysisSession? session) =>
+        session?.Tool == tool ? typeof(AnalysisResultsPage) : typeof(AnalysisPage);
+
+    private void RestoreAnalysisSelection(ToolKind tool)
+    {
+        NavigationViewItem? item = RootNavigationView.MenuItems
+            .OfType<NavigationViewItem>()
+            .FirstOrDefault(candidate => string.Equals(candidate.Tag as string, tool.ToString(), StringComparison.Ordinal));
+        if (item is null)
+        {
+            return;
+        }
+
+        _isRestoringAnalysisSelection = true;
+        RootNavigationView.SelectedItem = item;
+        _isRestoringAnalysisSelection = false;
+    }
 
     private async Task ShowToolNotInstalledDialogAsync(ToolDescriptor descriptor)
     {

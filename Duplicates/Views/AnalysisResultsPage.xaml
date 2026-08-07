@@ -3,7 +3,88 @@
     x:Class="Duplicates.Views.AnalysisResultsPage"
     x:Name="PageRoot"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:Duplicates.Views"
+    xmlns:viewModels="using:Duplicates.ViewModels">
+    <Page.Resources>
+        <DataTemplate x:Key="PathFindingTemplate" x:DataType="viewModels:PathFindingViewModel">
+            <Grid
+                Padding="8"
+                ColumnSpacing="12"
+                ToolTipService.ToolTip="{Binding FullPath}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <CheckBox
+                    VerticalAlignment="Center"
+                    AutomationProperties.Name="Select finding for action"
+                    IsChecked="{Binding IsSelected, Mode=TwoWay}" />
+                <StackPanel Grid.Column="1" Spacing="4">
+                    <TextBlock FontWeight="SemiBold" Text="{Binding DisplayName}" />
+                    <TextBlock
+                        Style="{StaticResource MutedTextBlockStyle}"
+                        Text="{Binding SummaryText}"
+                        TextWrapping="Wrap" />
+                    <TextBlock
+                        MaxLines="2"
+                        Style="{StaticResource PathTextBlockStyle}"
+                        Text="{Binding FullPath}"
+                        TextWrapping="Wrap" />
+                </StackPanel>
+            </Grid>
+        </DataTemplate>
+
+        <DataTemplate x:Key="SimilarityGroupTemplate" x:DataType="viewModels:SimilarityGroupViewModel">
+            <StackPanel
+                Padding="8"
+                ToolTipService.ToolTip="{Binding FullPath}"
+                Spacing="8">
+                <TextBlock FontWeight="SemiBold" Text="{Binding DisplayName}" />
+                <TextBlock
+                    Style="{StaticResource MutedTextBlockStyle}"
+                    Text="{Binding SummaryText}"
+                    TextWrapping="Wrap" />
+                <TextBlock
+                    MaxLines="2"
+                    Style="{StaticResource PathTextBlockStyle}"
+                    Text="{Binding FullPath}"
+                    TextWrapping="Wrap" />
+                <ItemsControl ItemsSource="{Binding Items}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="viewModels:SimilarityItemViewModel">
+                            <Grid Padding="0,4" ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <CheckBox
+                                    VerticalAlignment="Center"
+                                    AutomationProperties.Name="Select similar item for action"
+                                    IsChecked="{Binding IsSelected, Mode=TwoWay}" />
+                                <StackPanel Grid.Column="1" Spacing="2">
+                                    <TextBlock Text="{Binding DisplayName}" />
+                                    <TextBlock
+                                        MaxLines="2"
+                                        Style="{StaticResource PathTextBlockStyle}"
+                                        Text="{Binding FullPath}"
+                                        TextWrapping="Wrap" />
+                                    <TextBlock
+                                        Style="{StaticResource MutedTextBlockStyle}"
+                                        Text="{Binding SummaryText}" />
+                                </StackPanel>
+                            </Grid>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </StackPanel>
+        </DataTemplate>
+
+        <local:AnalysisResultTemplateSelector
+            x:Key="AnalysisResultTemplateSelector"
+            PathFindingTemplate="{StaticResource PathFindingTemplate}"
+            SimilarityGroupTemplate="{StaticResource SimilarityGroupTemplate}" />
+    </Page.Resources>
     <Page.KeyboardAccelerators>
         <KeyboardAccelerator Key="F" Modifiers="Control" Invoked="FocusSearch_Invoked" />
     </Page.KeyboardAccelerators>
@@ -91,7 +172,18 @@
         </CommandBar>
 
         <Grid Grid.Row="2">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+            <InfoBar
+                AutomationProperties.LiveSetting="Polite"
+                IsOpen="{Binding HasSkippedPaths}"
+                Message="{Binding SkippedPathsDetailsText}"
+                Severity="Warning"
+                Title="{Binding SkippedPathsSummaryText}" />
             <StackPanel
+                Grid.Row="1"
                 HorizontalAlignment="Center"
                 VerticalAlignment="Center"
                 Visibility="{Binding BeforeFirstAnalysisVisibility}"
@@ -100,6 +192,7 @@
                 <TextBlock Style="{StaticResource SectionHeaderTextBlockStyle}" Text="Run an analysis to see results" />
             </StackPanel>
             <StackPanel
+                Grid.Row="1"
                 HorizontalAlignment="Center"
                 VerticalAlignment="Center"
                 Visibility="{Binding NoFindingsVisibility}"
@@ -111,6 +204,7 @@
 
             <SplitView
                 x:Name="AnalysisSplitView"
+                Grid.Row="1"
                 DisplayMode="Inline"
                 IsPaneOpen="{Binding IsPreviewPaneOpen, Mode=TwoWay}"
                 OpenPaneLength="360"
@@ -135,44 +229,14 @@
                             TextWrapping="Wrap" />
                     </StackPanel>
                 </SplitView.Pane>
-                <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="*" />
-                    </Grid.RowDefinitions>
-                    <InfoBar
-                        AutomationProperties.LiveSetting="Polite"
-                        IsOpen="{Binding HasSkippedPaths}"
-                        Message="{Binding SkippedPathsDetailsText}"
-                        Severity="Warning"
-                        Title="{Binding SkippedPathsSummaryText}" />
-                    <ListView
-                        x:Name="AnalysisResultsList"
-                        Grid.Row="1"
-                        ItemsSource="{Binding ResultItems}"
-                        ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                        ScrollViewer.HorizontalScrollMode="Disabled"
-                        SelectedItem="{Binding SelectedResult, Mode=TwoWay}"
-                        SelectionMode="Single">
-                        <ListView.ItemTemplate>
-                            <DataTemplate>
-                                <Grid
-                                    Padding="8"
-                                    ToolTipService.ToolTip="{Binding FullPath}">
-                                    <StackPanel Spacing="4">
-                                        <TextBlock FontWeight="SemiBold" Text="{Binding DisplayName}" />
-                                        <TextBlock Style="{StaticResource MutedTextBlockStyle}" Text="{Binding SummaryText}" TextWrapping="Wrap" />
-                                        <TextBlock
-                                            MaxLines="2"
-                                            Style="{StaticResource PathTextBlockStyle}"
-                                            Text="{Binding FullPath}"
-                                            TextWrapping="Wrap" />
-                                    </StackPanel>
-                                </Grid>
-                            </DataTemplate>
-                        </ListView.ItemTemplate>
-                    </ListView>
-                </Grid>
+                <ListView
+                    x:Name="AnalysisResultsList"
+                    ItemTemplateSelector="{StaticResource AnalysisResultTemplateSelector}"
+                    ItemsSource="{Binding ResultItems}"
+                    ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                    ScrollViewer.HorizontalScrollMode="Disabled"
+                    SelectedItem="{Binding SelectedResult, Mode=TwoWay}"
+                    SelectionMode="Single" />
             </SplitView>
         </Grid>
     </Grid>

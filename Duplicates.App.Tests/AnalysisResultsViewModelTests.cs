@@ -34,6 +34,24 @@ public sealed class AnalysisResultsViewModelTests
     }
 
     [Fact]
+    public void SkippedOnlyResultKeepsWarningStateVisibleWithoutResultRows()
+    {
+        var store = new AnalysisSessionStore();
+        var viewModel = new AnalysisResultsViewModel(store);
+
+        store.SetCompleted(
+            ToolKind.BrokenFiles,
+            new AnalysisScope(),
+            NewResult(skippedPaths:
+                [new SkippedPath { Path = @"C:\scan\locked.bin", Reason = "Access denied" }]));
+
+        Assert.True(viewModel.HasSkippedPaths);
+        Assert.Equal(Visibility.Visible, viewModel.SkippedPathsVisibility);
+        Assert.Equal(Visibility.Collapsed, viewModel.ResultsVisibility);
+        Assert.Contains(@"C:\scan\locked.bin", viewModel.SkippedPathsDetailsText);
+    }
+
+    [Fact]
     public void SearchKeepsCanonicalSelectionsAndHiddenSelectionTotals()
     {
         var store = new AnalysisSessionStore();
@@ -90,6 +108,38 @@ public sealed class AnalysisResultsViewModelTests
     }
 
     [Fact]
+    public void SortOrdersMixedResultRowsGloballyWithPathTieBreakers()
+    {
+        var store = new AnalysisSessionStore();
+        var viewModel = new AnalysisResultsViewModel(store);
+        DateTime first = new(2026, 8, 7, 10, 0, 0, DateTimeKind.Utc);
+        DateTime second = first.AddHours(1);
+        DateTime third = second.AddHours(1);
+        store.SetCompleted(
+            ToolKind.SimilarImages,
+            new AnalysisScope(),
+            NewResult(
+                [
+                    NewFinding(@"C:\scan\c.bin", 100, second),
+                    NewFinding(@"C:\scan\b.bin", 50, third),
+                ],
+                [NewGroup("a", @"C:\scan\a.jpg", @"C:\scan\a-copy.jpg", 90, second, 10)]));
+
+        (int SortIndex, string[] ExpectedPaths)[] cases =
+        [
+            (0, [@"C:\scan\a.jpg", @"C:\scan\b.bin", @"C:\scan\c.bin"]),
+            (1, [@"C:\scan\a.jpg", @"C:\scan\c.bin", @"C:\scan\b.bin"]),
+            (2, [@"C:\scan\b.bin", @"C:\scan\a.jpg", @"C:\scan\c.bin"]),
+        ];
+
+        foreach ((int sortIndex, string[] expectedPaths) in cases)
+        {
+            viewModel.SelectedSortIndex = sortIndex;
+            Assert.Equal(expectedPaths, viewModel.ResultItems.Select(ResultPath));
+        }
+    }
+
+    [Fact]
     public void SimilaritySelectionsContributeToTotalsEvenWhenGroupIsFilteredOut()
     {
         var store = new AnalysisSessionStore();
@@ -129,6 +179,33 @@ public sealed class AnalysisResultsViewModelTests
     }
 
     [Fact]
+    public void PathAndSimilarityActionSelectionRemainIndependentFromPreview()
+    {
+        var store = new AnalysisSessionStore();
+        var viewModel = new AnalysisResultsViewModel(store);
+        store.SetCompleted(
+            ToolKind.SimilarImages,
+            new AnalysisScope(),
+            NewResult(
+                [NewFinding(@"C:\scan\finding.jpg", 30)],
+                [NewGroup("group", @"C:\scan\reference.jpg", @"C:\scan\candidate.jpg", 40)]));
+        PathFindingViewModel finding = Assert.Single(viewModel.Findings);
+        SimilarityGroupViewModel group = Assert.Single(viewModel.Groups);
+        SimilarityItemViewModel candidate = group.Items.Single(item => !item.IsReference);
+
+        finding.IsSelected = true;
+        candidate.IsSelected = true;
+        viewModel.SelectedResult = group;
+
+        Assert.True(finding.IsSelected);
+        Assert.True(candidate.IsSelected);
+        Assert.False(group.ReferenceItem.IsSelected);
+        Assert.Equal(2, viewModel.SelectedItemCount);
+        Assert.Equal(70, viewModel.SelectedBytes);
+        Assert.Same(group, viewModel.SelectedResult);
+    }
+
+    [Fact]
     public void NewAnalysisClearsSessionFiltersSelectionsAndPreview()
     {
         var store = new AnalysisSessionStore();
@@ -164,36 +241,49 @@ public sealed class AnalysisResultsViewModelTests
             Elapsed = TimeSpan.FromSeconds(2),
         };
 
-    private static PathFinding NewFinding(string path, long size) => new()
+    private static PathFinding NewFinding(string path, long size, DateTime? modifiedUtc = null) => new()
     {
         FullPath = path,
         Kind = PathFindingKind.File,
         Reason = "Test finding",
         Suggestion = "Review this item.",
         SizeBytes = size,
-        ModifiedUtc = new DateTime(2026, 8, 7, 12, 0, 0, DateTimeKind.Utc),
+        ModifiedUtc = modifiedUtc ?? new DateTime(2026, 8, 7, 12, 0, 0, DateTimeKind.Utc),
     };
 
     private static SimilarityGroup NewGroup(
         string id,
         string referencePath,
         string candidatePath,
-        long candidateSize = 50)
+        long candidateSize = 50,
+        DateTime? modifiedUtc = null,
+        long referenceSize = 10)
     {
-        SimilarityItem reference = NewSimilarityItem(referencePath, 100, 10);
+        SimilarityItem reference = NewSimilarityItem(referencePath, 100, referenceSize, modifiedUtc);
         return new SimilarityGroup
         {
             Id = id,
             ReferenceItem = reference,
-            Items = [reference, NewSimilarityItem(candidatePath, 88, candidateSize)],
+            Items = [reference, NewSimilarityItem(candidatePath, 88, candidateSize, modifiedUtc)],
         };
     }
 
-    private static SimilarityItem NewSimilarityItem(string path, double similarity, long size) => new()
+    private static SimilarityItem NewSimilarityItem(
+        string path,
+        double similarity,
+        long size,
+        DateTime? modifiedUtc = null) => new()
+        {
+            FullPath = path,
+            SizeBytes = size,
+            ModifiedUtc = modifiedUtc ?? new DateTime(2026, 8, 7, 12, 0, 0, DateTimeKind.Utc),
+            SimilarityPercent = similarity,
+        };
+
+    private static string ResultPath(object item) => item switch
     {
-        FullPath = path,
-        SizeBytes = size,
-        ModifiedUtc = new DateTime(2026, 8, 7, 12, 0, 0, DateTimeKind.Utc),
-        SimilarityPercent = similarity,
+        PathFindingViewModel finding => finding.FullPath,
+        SimilarityGroupViewModel group => group.FullPath,
+        _ => throw new InvalidOperationException(),
     };
 }

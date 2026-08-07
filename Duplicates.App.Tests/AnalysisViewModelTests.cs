@@ -76,6 +76,37 @@ public sealed class AnalysisViewModelTests
     }
 
     [Fact]
+    public async Task CancellationBeforeNormalServiceReturnKeepsPreviousSessionAndDoesNotComplete()
+    {
+        var store = new AnalysisSessionStore();
+        AnalysisSession previous = StorePreviousResult(store);
+        var serviceStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseService = new TaskCompletionSource<AnalysisResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var service = new FakeAnalysisService
+        {
+            Run = (_, _, _, _, _) =>
+            {
+                serviceStarted.SetResult();
+                return releaseService.Task;
+            },
+        };
+        var viewModel = new AnalysisViewModel(service, store, NewScope());
+        viewModel.SelectTool(ToolKind.EmptyFiles);
+        int completionCount = 0;
+        viewModel.AnalysisCompleted += (_, _) => completionCount++;
+
+        Task run = viewModel.StartAnalysisCommand.ExecuteAsync(null);
+        await serviceStarted.Task;
+        viewModel.CancelAnalysisCommand.Execute(null);
+        releaseService.SetResult(NewResult([NewFinding(@"C:\scan\late.txt", 10)]));
+        await run;
+
+        Assert.Same(previous, store.CurrentSession);
+        Assert.Equal(0, completionCount);
+        Assert.Equal("Analysis cancelled.", viewModel.StatusMessage);
+    }
+
+    [Fact]
     public async Task FailedRunShowsErrorAndKeepsLastSuccessfulSession()
     {
         var store = new AnalysisSessionStore();
@@ -116,6 +147,33 @@ public sealed class AnalysisViewModelTests
         release.SetResult(NewResult());
         await Task.WhenAll(first, second);
         Assert.Equal(1, service.CallCount);
+    }
+
+    [Fact]
+    public async Task ActiveRunRejectsToolSwitchAndKeepsVisibleToolConsistent()
+    {
+        var release = new TaskCompletionSource<AnalysisResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var service = new FakeAnalysisService
+        {
+            Run = (_, _, _, _, _) => release.Task,
+        };
+        var store = new AnalysisSessionStore();
+        var viewModel = new AnalysisViewModel(service, store, NewScope());
+        viewModel.SelectTool(ToolKind.BadNames);
+
+        Task run = viewModel.StartAnalysisCommand.ExecuteAsync(null);
+        Assert.True(SpinWait.SpinUntil(() => viewModel.IsAnalyzing, TimeSpan.FromSeconds(1)));
+
+        viewModel.SelectTool(ToolKind.BigFiles);
+
+        Assert.Equal(ToolKind.BadNames, viewModel.Tool);
+        Assert.Equal("Bad names", viewModel.Title);
+        Assert.False(viewModel.StartAnalysisCommand.CanExecute(null));
+        Assert.Equal(1, service.CallCount);
+
+        release.SetResult(NewResult());
+        await run;
+        Assert.Equal(ToolKind.BadNames, Assert.IsType<AnalysisSession>(store.CurrentSession).Tool);
     }
 
     [Fact]

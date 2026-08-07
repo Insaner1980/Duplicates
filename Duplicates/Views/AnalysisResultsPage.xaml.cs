@@ -41,3 +41,17 @@ public sealed partial class AnalysisResultsPage : Page
         args.Handled = true;
     }
 }
+
+public sealed class AnalysisResultTemplateSelector : DataTemplateSelector
+{
+    public DataTemplate? PathFindingTemplate { get; set; }
+
+    public DataTemplate? SimilarityGroupTemplate { get; set; }
+
+    protected override DataTemplate SelectTemplateCore(object item) => item switch
+    {
+        PathFindingViewModel => PathFindingTemplate!,
+        SimilarityGroupViewModel => SimilarityGroupTemplate!,
+        _ => base.SelectTemplateCore(item),
+    };
+}
