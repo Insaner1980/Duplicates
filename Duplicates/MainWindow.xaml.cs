@@ -67,6 +67,12 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        if (IsReadOnlyAnalysisTool(kind))
+        {
+            ShowAnalysisPage(kind);
+            return;
+        }
+
         _ = ShowToolNotInstalledDialogAsync(ToolDescriptor.For(kind));
     }
 
@@ -94,6 +100,30 @@ public sealed partial class MainWindow : Window
             RootFrame.Navigate(typeof(ScanPage));
         }
     }
+
+    public void ShowAnalysisPage(ToolKind tool)
+    {
+        _services.AnalysisViewModel.SelectTool(tool);
+        NavigateTo(typeof(AnalysisPage));
+    }
+
+    public void ShowAnalysisResultsPage()
+    {
+        NavigateTo(typeof(AnalysisResultsPage));
+    }
+
+    private static bool IsReadOnlyAnalysisTool(ToolKind tool) => tool is
+        ToolKind.SimilarImages or
+        ToolKind.SimilarVideos or
+        ToolKind.MusicDuplicates or
+        ToolKind.EmptyFolders or
+        ToolKind.BigFiles or
+        ToolKind.EmptyFiles or
+        ToolKind.TemporaryFiles or
+        ToolKind.InvalidLinks or
+        ToolKind.BrokenFiles or
+        ToolKind.BadExtensions or
+        ToolKind.BadNames;
 
     private async Task ShowToolNotInstalledDialogAsync(ToolDescriptor descriptor)
     {

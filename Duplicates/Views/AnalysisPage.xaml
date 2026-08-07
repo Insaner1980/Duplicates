@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="Duplicates.Views.AnalysisPage"
+    x:Name="PageRoot"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:Duplicates.Views.Controls">
+    <Grid Background="{ThemeResource BgBaseBrush}">
+        <VisualStateManager.VisualStateGroups>
+            <VisualStateGroup x:Name="WindowWidthStates">
+                <VisualState x:Name="Small">
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="0" />
+                    </VisualState.StateTriggers>
+                    <VisualState.Setters>
+                        <Setter Target="HeaderActionRail.(Grid.Row)" Value="1" />
+                    </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="Medium">
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="641" />
+                    </VisualState.StateTriggers>
+                </VisualState>
+            </VisualStateGroup>
+        </VisualStateManager.VisualStateGroups>
+
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Grid
+            MaxWidth="{StaticResource ContentMaxWidth}"
+            Padding="{StaticResource PageHeaderPadding}"
+            HorizontalAlignment="Stretch">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <StackPanel Spacing="6">
+                <TextBlock
+                    AutomationProperties.HeadingLevel="Level1"
+                    Foreground="{ThemeResource TextPrimaryBrush}"
+                    Style="{ThemeResource TitleTextBlockStyle}"
+                    Text="{Binding Title}" />
+                <TextBlock Style="{StaticResource MutedTextBlockStyle}" Text="{Binding Subtitle}" />
+            </StackPanel>
+            <Grid
+                x:Name="HeaderActionRail"
+                Grid.ColumnSpan="2"
+                MaxWidth="{StaticResource ScanWorkAreaMaxWidth}"
+                HorizontalAlignment="Stretch">
+                <Button
+                    HorizontalAlignment="Right"
+                    VerticalAlignment="Center"
+                    AccessKey="S"
+                    Command="{Binding StartAnalysisCommand}"
+                    Style="{StaticResource AccentButtonStyle}"
+                    Visibility="{Binding SetupVisibility}">
+                    <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpacingSmall}">
+                        <SymbolIcon Symbol="Play" />
+                        <TextBlock Text="Start analysis" />
+                    </StackPanel>
+                </Button>
+            </Grid>
+        </Grid>
+
+        <ScrollViewer
+            Grid.Row="1"
+            HorizontalScrollBarVisibility="Disabled"
+            HorizontalScrollMode="Disabled">
+            <Grid
+                MaxWidth="{StaticResource ContentMaxWidth}"
+                Padding="{StaticResource PageContentPadding}"
+                HorizontalAlignment="Stretch">
+                <StackPanel Spacing="{StaticResource SpacingExtraLarge}">
+                    <InfoBar
+                        AutomationProperties.LiveSetting="Polite"
+                        AutomationProperties.Name="Analysis status"
+                        IsOpen="{Binding IsStatusOpen}"
+                        Message="{Binding StatusMessage}"
+                        Severity="{Binding StatusSeverity}" />
+
+                    <StackPanel Visibility="{Binding SetupVisibility}" Spacing="{StaticResource SpacingExtraLarge}">
+                        <controls:PathScopeEditor
+                            x:Name="PathScopeEditor"
+                            MaxWidth="{StaticResource ScanWorkAreaMaxWidth}"
+                            HorizontalAlignment="Stretch"
+                            DataContext="{Binding PathScope}" />
+                        <Expander
+                            x:Name="AnalysisOptions"
+                            MaxWidth="{StaticResource ScanWorkAreaMaxWidth}"
+                            HorizontalAlignment="Stretch"
+                            Header="Analysis options"
+                            IsExpanded="True">
+                            <TextBlock
+                                Padding="0,12,0,0"
+                                Style="{StaticResource MutedTextBlockStyle}"
+                                Text="{Binding OptionsSummary}"
+                                TextWrapping="Wrap" />
+                        </Expander>
+                    </StackPanel>
+
+                    <StackPanel
+                        AutomationProperties.LiveSetting="Polite"
+                        Visibility="{Binding ProgressVisibility}"
+                        Spacing="{StaticResource SpacingLarge}">
+                        <TextBlock
+                            AutomationProperties.HeadingLevel="Level2"
+                            Style="{StaticResource SectionHeaderTextBlockStyle}"
+                            Text="{Binding PhaseText}" />
+                        <ProgressBar
+                            Maximum="100"
+                            IsIndeterminate="{Binding IsProgressIndeterminate}"
+                            Value="{Binding ProgressValue}" />
+                        <WrapGrid Orientation="Horizontal">
+                            <StackPanel Margin="0,0,24,12">
+                                <TextBlock Style="{ThemeResource CaptionTextBlockStyle}" Text="Discovered" />
+                                <TextBlock Text="{Binding ItemsDiscoveredText}" />
+                            </StackPanel>
+                            <StackPanel Margin="0,0,24,12">
+                                <TextBlock Style="{ThemeResource CaptionTextBlockStyle}" Text="Processed" />
+                                <TextBlock Text="{Binding ItemsProcessedText}" />
+                            </StackPanel>
+                            <StackPanel Margin="0,0,24,12">
+                                <TextBlock Style="{ThemeResource CaptionTextBlockStyle}" Text="Data" />
+                                <TextBlock Text="{Binding BytesProcessedText}" />
+                            </StackPanel>
+                        </WrapGrid>
+                        <TextBlock Style="{StaticResource PathTextBlockStyle}" Text="{Binding CurrentPath}" />
+                        <Button HorizontalAlignment="Right" Command="{Binding CancelAnalysisCommand}">
+                            <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpacingSmall}">
+                                <SymbolIcon Symbol="Cancel" />
+                                <TextBlock Text="Cancel" />
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
+                </StackPanel>
+            </Grid>
+        </ScrollViewer>
+    </Grid>
+</Page>

@@ -165,6 +165,70 @@ public sealed class NativeWinUiContractTests
     }
 
     [Fact]
+    public void AnalysisPage_ReusesNativeSetupAndProgressControls()
+    {
+        XDocument page = LoadXaml(@"Views\AnalysisPage.xaml");
+
+        Assert.Single(page.Descendants(), element => element.Name.LocalName == "PathScopeEditor");
+        Assert.Single(page.Descendants(Presentation + "Expander"));
+        Assert.Single(page.Descendants(Presentation + "InfoBar"));
+        Assert.Single(page.Descendants(Presentation + "ProgressBar"));
+        Assert.Single(
+            page.Descendants(Presentation + "Button"),
+            button => (string?)button.Attribute("Style") == "{StaticResource AccentButtonStyle}");
+
+        XElement scrollViewer = Assert.Single(page.Descendants(Presentation + "ScrollViewer"));
+        Assert.Equal("Disabled", (string?)scrollViewer.Attribute("HorizontalScrollMode"));
+        Assert.Equal("Disabled", (string?)scrollViewer.Attribute("HorizontalScrollBarVisibility"));
+    }
+
+    [Fact]
+    public void AnalysisResultsPage_UsesOneNativeListCommandBarAndResponsivePreview()
+    {
+        XDocument page = LoadXaml(@"Views\AnalysisResultsPage.xaml");
+
+        Assert.Single(page.Descendants(Presentation + "CommandBar"));
+        Assert.Single(page.Descendants(Presentation + "ListView"));
+        Assert.Single(page.Descendants(Presentation + "SplitView"));
+        Assert.NotEmpty(page.Descendants(Presentation + "VisualState"));
+
+        XElement list = Assert.Single(page.Descendants(Presentation + "ListView"));
+        Assert.Equal("Disabled", (string?)list.Attribute("ScrollViewer.HorizontalScrollMode"));
+        Assert.Equal("Disabled", (string?)list.Attribute("ScrollViewer.HorizontalScrollBarVisibility"));
+        Assert.Equal("{Binding SelectedResult, Mode=TwoWay}", (string?)list.Attribute("SelectedItem"));
+
+        XElement skipped = Assert.Single(page.Descendants(Presentation + "InfoBar"));
+        Assert.Equal("{Binding HasSkippedPaths}", (string?)skipped.Attribute("IsOpen"));
+    }
+
+    [Fact]
+    public void AnalysisResultsPage_KeepsCompletePathsAvailableAndIconCommandsAccessible()
+    {
+        XDocument page = LoadXaml(@"Views\AnalysisResultsPage.xaml");
+
+        Assert.Contains(
+            page.Descendants(Presentation + "TextBlock"),
+            text =>
+                (string?)text.Attribute("Text") == "{Binding FullPath}" &&
+                (string?)text.Attribute("TextWrapping") == "Wrap" &&
+                (string?)text.Attribute("MaxLines") == "2");
+        XElement previewPath = page
+            .Descendants(Presentation + "TextBlock")
+            .Single(text => (string?)text.Attribute("Text") == "{Binding PreviewPath}");
+        Assert.Equal("Wrap", (string?)previewPath.Attribute("TextWrapping"));
+        Assert.Equal("None", (string?)previewPath.Attribute("TextTrimming"));
+        Assert.Equal("True", (string?)previewPath.Attribute("IsTextSelectionEnabled"));
+
+        foreach (XElement button in page.Descendants(Presentation + "AppBarButton"))
+        {
+            Assert.True(
+                button.Attribute("Label") is not null ||
+                button.Attribute("AutomationProperties.Name") is not null,
+                Location(@"Views\AnalysisResultsPage.xaml", button));
+        }
+    }
+
+    [Fact]
     public void SettingsPage_UsesRecommendedSettingsControlsAndNumberBox()
     {
         XDocument page = LoadXaml(@"Views\SettingsPage.xaml");
