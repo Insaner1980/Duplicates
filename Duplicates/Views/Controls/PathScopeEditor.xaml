@@ -170,6 +170,7 @@
                 <StackPanel Padding="0,12,0,0" Spacing="{StaticResource SpacingMedium}">
                     <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpacingSmall}">
                         <Button
+                            AccessKey="X"
                             Click="AddExcludedFolder_Click"
                             ToolTipService.ToolTip="Exclude a folder and its contents">
                             <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpacingSmall}">
@@ -178,6 +179,7 @@
                             </StackPanel>
                         </Button>
                         <Button
+                            AccessKey="E"
                             Click="AddExcludedFile_Click"
                             ToolTipService.ToolTip="Exclude individual files">
                             <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpacingSmall}">

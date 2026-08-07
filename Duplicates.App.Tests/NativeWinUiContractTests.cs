@@ -291,6 +291,45 @@ public sealed class NativeWinUiContractTests
     }
 
     [Fact]
+    public void PathScopeEditor_PickerButtonsHaveUniqueAccessKeys()
+    {
+        XDocument editor = LoadXaml(@"Views\Controls\PathScopeEditor.xaml");
+        XDocument scan = LoadXaml(@"Views\ScanPage.xaml");
+        string[] pickerHandlers =
+        [
+            "AddIncludedFolder_Click",
+            "AddIncludedFile_Click",
+            "AddExcludedFolder_Click",
+            "AddExcludedFile_Click",
+        ];
+
+        XElement[] pickerButtons = editor
+            .Descendants(Presentation + "Button")
+            .Where(button => pickerHandlers.Contains((string?)button.Attribute("Click"), StringComparer.Ordinal))
+            .ToArray();
+        string[] accessKeys = pickerButtons
+            .Select(button => (string?)button.Attribute("AccessKey"))
+            .Where(key => !string.IsNullOrWhiteSpace(key))
+            .Cast<string>()
+            .ToArray();
+
+        Assert.Equal(pickerHandlers.Length, pickerButtons.Length);
+        Assert.Equal(pickerButtons.Length, accessKeys.Length);
+        Assert.Equal(accessKeys.Length, accessKeys.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        XElement startScan = Assert.Single(
+            scan.Descendants(Presentation + "Button"),
+            button => (string?)button.Attribute("AccessKey") == "S");
+        string startScanAccessKey = Assert.IsType<string>(startScan.Attribute("AccessKey")?.Value);
+        Assert.Equal(
+            accessKeys.Length + 1,
+            accessKeys.Append(startScanAccessKey).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.Equal("F", AccessKeyFor(pickerButtons, "AddIncludedFolder_Click"));
+        Assert.Equal("I", AccessKeyFor(pickerButtons, "AddIncludedFile_Click"));
+        Assert.Equal("X", AccessKeyFor(pickerButtons, "AddExcludedFolder_Click"));
+        Assert.Equal("E", AccessKeyFor(pickerButtons, "AddExcludedFile_Click"));
+    }
+
+    [Fact]
     public void Resources_DoNotOverrideNativeFocusVisuals()
     {
         string[] forbidden =
@@ -447,6 +486,11 @@ public sealed class NativeWinUiContractTests
         string path = Path.Combine(AppContext.BaseDirectory, "UiSource", relativePath);
         return XDocument.Load(path, LoadOptions.SetLineInfo);
     }
+
+    private static string? AccessKeyFor(IEnumerable<XElement> buttons, string clickHandler) =>
+        buttons
+            .Single(button => (string?)button.Attribute("Click") == clickHandler)
+            .Attribute("AccessKey")?.Value;
 
     private static string[] NavigationTags(XDocument main) => main
         .Descendants(Presentation + "NavigationViewItem")
