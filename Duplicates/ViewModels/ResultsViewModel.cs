@@ -272,34 +272,51 @@ public sealed partial class ResultsViewModel : ObservableObject
         {
             DeleteProgressText = $"0 of {files.Count:N0} files processed";
             DeleteProgressValue = 0;
-            FileOperationSummary summary = await _fileActionService.MoveAsync(
-                MapTargets(files),
-                destinationFolder,
-                collisionBehavior,
-                new InlineProgress<FileOperationProgress>(UpdateFileOperationProgress),
-                cancellationToken);
-            HashSet<string> movedPaths = summary.Results
-                .Where(static result => result.Succeeded)
-                .Select(static result => result.SourcePath)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            RemoveSuccessfulPaths(movedPaths);
-            FileActionFailure[] failures = summary.Results
-                .Where(static result => !result.Succeeded)
-                .Select(static result => result.Failure!)
-                .ToArray();
-            int movedCount = summary.Results.Count(static result => result.Succeeded);
-            DeleteStatusMessage = failures.Length == 0
-                ? movedCount == 1 ? "1 file moved." : $"{movedCount:N0} files moved."
-                : $"{movedCount:N0} files moved, {failures.Length:N0} could not be moved.";
-            DeleteFailureDetailsText = BuildFailureDetailsText(failures);
-            ApplySearchAndSort();
-            RefreshAllComputedProperties();
+            FileOperationSummary summary;
+            try
+            {
+                summary = await _fileActionService.MoveAsync(
+                    MapTargets(files),
+                    destinationFolder,
+                    collisionBehavior,
+                    new InlineProgress<FileOperationProgress>(UpdateFileOperationProgress),
+                    cancellationToken);
+            }
+            catch (FileOperationCanceledException ex)
+            {
+                ApplyMoveSummary(ex.Summary, wasCancelled: true);
+                throw;
+            }
+
+            ApplyMoveSummary(summary, wasCancelled: false);
             return summary;
         }
         finally
         {
             IsDeleting = false;
         }
+    }
+
+    private void ApplyMoveSummary(FileOperationSummary summary, bool wasCancelled)
+    {
+        HashSet<string> movedPaths = summary.Results
+            .Where(static result => result.Succeeded)
+            .Select(static result => result.SourcePath)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        RemoveSuccessfulPaths(movedPaths);
+        FileActionFailure[] failures = summary.Results
+            .Where(static result => !result.Succeeded)
+            .Select(static result => result.Failure!)
+            .ToArray();
+        int movedCount = summary.Results.Count(static result => result.Succeeded);
+        DeleteStatusMessage = wasCancelled
+            ? $"Move cancelled after {movedCount:N0} {(movedCount == 1 ? "file" : "files")} moved."
+            : failures.Length == 0
+                ? movedCount == 1 ? "1 file moved." : $"{movedCount:N0} files moved."
+                : $"{movedCount:N0} files moved, {failures.Length:N0} could not be moved.";
+        DeleteFailureDetailsText = BuildFailureDetailsText(failures);
+        ApplySearchAndSort();
+        RefreshAllComputedProperties();
     }
 
     public Task ExportAsync(

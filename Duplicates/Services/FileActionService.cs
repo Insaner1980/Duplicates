@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Runtime.ExceptionServices;
+using System.Runtime.InteropServices;
 using System.Security;
 using Duplicates.Models;
 using Microsoft.VisualBasic.FileIO;
@@ -7,6 +9,13 @@ namespace Duplicates.Services;
 
 public sealed class FileActionService : IFileActionService
 {
+    private const uint RecycleEmptyDirectoryFlags =
+        0x0004 | // FOF_SILENT
+        0x0010 | // FOF_NOCONFIRMATION
+        0x0400 | // FOF_NOERRORUI
+        0x1000 | // FOF_NORECURSION
+        0x00080000; // FOFX_RECYCLEONDELETE
+
     private static readonly HashSet<string> ReservedNames = new(
         ["CON", "PRN", "AUX", "NUL", .. Enumerable.Range(1, 9).Select(static number => $"COM{number}"), .. Enumerable.Range(1, 9).Select(static number => $"LPT{number}")],
         StringComparer.OrdinalIgnoreCase);
@@ -86,7 +95,18 @@ public sealed class FileActionService : IFileActionService
 
                 foreach (FileActionTarget target in targets)
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        if (results.Count > 0)
+                        {
+                            throw new FileOperationCanceledException(
+                                new FileOperationSummary(results.ToArray(), succeededBytes),
+                                cancellationToken);
+                        }
+
+                        cancellationToken.ThrowIfCancellationRequested();
+                    }
+
                     string? finalPath = null;
                     FileActionFailure? failure = null;
                     try
@@ -181,7 +201,18 @@ public sealed class FileActionService : IFileActionService
 
     private static void DeleteTarget(FileActionTarget target, RecycleOption recycleOption)
     {
-        if (target.Kind is FileActionTargetKind.Directory or FileActionTargetKind.DirectoryLink)
+        if (target.Kind == FileActionTargetKind.Directory)
+        {
+            if (recycleOption == RecycleOption.SendToRecycleBin)
+            {
+                RecycleEmptyDirectory(target.FullPath);
+            }
+            else
+            {
+                Directory.Delete(target.FullPath, recursive: false);
+            }
+        }
+        else if (target.Kind == FileActionTargetKind.DirectoryLink)
         {
             FileSystem.DeleteDirectory(target.FullPath, UIOption.OnlyErrorDialogs, recycleOption);
         }
@@ -193,12 +224,37 @@ public sealed class FileActionService : IFileActionService
 
     private static void MoveTarget(FileActionTarget target, string destinationPath)
     {
-        if (target.Kind is FileActionTargetKind.Directory or FileActionTargetKind.DirectoryLink)
+        bool sameVolume = string.Equals(
+            Path.GetPathRoot(Path.GetFullPath(target.FullPath)),
+            Path.GetPathRoot(Path.GetFullPath(destinationPath)),
+            StringComparison.OrdinalIgnoreCase);
+        if (target.Kind == FileActionTargetKind.Directory)
         {
+            if (sameVolume)
+            {
+                Directory.Move(target.FullPath, destinationPath);
+            }
+            else
+            {
+                MoveEmptyDirectoryAcrossVolumes(target.FullPath, destinationPath);
+            }
+        }
+        else if (target.Kind == FileActionTargetKind.DirectoryLink)
+        {
+            if (!sameVolume)
+            {
+                throw new IOException("File-system links cannot be moved across volumes safely.");
+            }
+
             Directory.Move(target.FullPath, destinationPath);
         }
         else
         {
+            if (target.Kind == FileActionTargetKind.FileLink && !sameVolume)
+            {
+                throw new IOException("File-system links cannot be moved across volumes safely.");
+            }
+
             File.Move(target.FullPath, destinationPath);
         }
     }
@@ -222,6 +278,11 @@ public sealed class FileActionService : IFileActionService
         if (target.Kind == FileActionTargetKind.File && new FileInfo(target.FullPath).Length != target.SizeBytes)
         {
             throw new IOException("The source no longer matches the scan result.");
+        }
+
+        if (target.Kind == FileActionTargetKind.Directory && Directory.EnumerateFileSystemEntries(target.FullPath).Any())
+        {
+            throw new IOException("The directory is no longer empty.");
         }
     }
 
@@ -284,8 +345,142 @@ public sealed class FileActionService : IFileActionService
             return false;
         }
 
-        string stem = Path.GetFileNameWithoutExtension(name);
+        string stem = Path.GetFileNameWithoutExtension(name).TrimEnd(' ', '.');
         return !ReservedNames.Contains(stem);
+    }
+
+    private static void RecycleEmptyDirectory(string path)
+    {
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                RecycleEmptyDirectoryOnSta(path);
+            }
+            catch (Exception ex)
+            {
+                failure = ex;
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "Duplicates Recycle Bin operation",
+        };
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        thread.Join();
+        if (failure is not null)
+        {
+            ExceptionDispatchInfo.Capture(failure).Throw();
+        }
+    }
+
+    private static void RecycleEmptyDirectoryOnSta(string path)
+    {
+        if (Directory.EnumerateFileSystemEntries(path).Any())
+        {
+            throw new IOException("The directory is no longer empty.");
+        }
+
+        IFileOperation? operation = null;
+        IShellItem? item = null;
+        try
+        {
+            operation = (IFileOperation)(object)new FileOperationComObject();
+            Marshal.ThrowExceptionForHR(operation.SetOperationFlags(RecycleEmptyDirectoryFlags));
+            Guid shellItemId = typeof(IShellItem).GUID;
+            Marshal.ThrowExceptionForHR(SHCreateItemFromParsingName(
+                path,
+                nint.Zero,
+                ref shellItemId,
+                out item));
+            Marshal.ThrowExceptionForHR(operation.DeleteItem(item, nint.Zero));
+
+            int performResult = operation.PerformOperations();
+            int abortedResult = operation.GetAnyOperationsAborted(out int wasAborted);
+            Marshal.ThrowExceptionForHR(performResult);
+            Marshal.ThrowExceptionForHR(abortedResult);
+            if (wasAborted != 0 || Directory.Exists(path))
+            {
+                throw new IOException("The Recycle Bin operation did not delete the empty directory.");
+            }
+        }
+        catch (COMException ex)
+        {
+            throw new IOException("The Recycle Bin operation failed.", ex);
+        }
+        finally
+        {
+            if (item is not null)
+            {
+                Marshal.FinalReleaseComObject(item);
+            }
+
+            if (operation is not null)
+            {
+                Marshal.FinalReleaseComObject(operation);
+            }
+        }
+    }
+
+    private static void MoveEmptyDirectoryAcrossVolumes(string sourcePath, string destinationPath)
+    {
+        if (Directory.EnumerateFileSystemEntries(sourcePath).Any())
+        {
+            throw new IOException("The directory is no longer empty.");
+        }
+
+        DateTime creationTimeUtc = Directory.GetCreationTimeUtc(sourcePath);
+        DateTime lastWriteTimeUtc = Directory.GetLastWriteTimeUtc(sourcePath);
+        string destinationParent = Path.GetDirectoryName(destinationPath) ??
+            throw new IOException("The destination folder is invalid.");
+        string stagingPath = Path.Combine(
+            destinationParent,
+            $".duplicates-{Guid.NewGuid():N}.tmp");
+        bool destinationCreated = false;
+        try
+        {
+            Directory.CreateDirectory(stagingPath);
+            Directory.SetCreationTimeUtc(stagingPath, creationTimeUtc);
+            Directory.SetLastWriteTimeUtc(stagingPath, lastWriteTimeUtc);
+            Directory.Move(stagingPath, destinationPath);
+            destinationCreated = true;
+
+            FileAttributes destinationAttributes = File.GetAttributes(destinationPath);
+            if (destinationAttributes.HasFlag(FileAttributes.ReparsePoint) ||
+                !destinationAttributes.HasFlag(FileAttributes.Directory) ||
+                Directory.EnumerateFileSystemEntries(destinationPath).Any() ||
+                Directory.GetCreationTimeUtc(destinationPath) != creationTimeUtc ||
+                Directory.GetLastWriteTimeUtc(destinationPath) != lastWriteTimeUtc)
+            {
+                throw new IOException("The destination directory could not be verified.");
+            }
+
+            Directory.Delete(sourcePath, recursive: false);
+            destinationCreated = false;
+        }
+        catch
+        {
+            if (destinationCreated &&
+                Directory.Exists(destinationPath) &&
+                !File.GetAttributes(destinationPath).HasFlag(FileAttributes.ReparsePoint) &&
+                !Directory.EnumerateFileSystemEntries(destinationPath).Any())
+            {
+                Directory.Delete(destinationPath, recursive: false);
+            }
+
+            throw;
+        }
+        finally
+        {
+            if (Directory.Exists(stagingPath) &&
+                !File.GetAttributes(stagingPath).HasFlag(FileAttributes.ReparsePoint) &&
+                !Directory.EnumerateFileSystemEntries(stagingPath).Any())
+            {
+                Directory.Delete(stagingPath, recursive: false);
+            }
+        }
     }
 
     private static HashSet<string> GetExistingNames(string destination)
@@ -338,4 +533,104 @@ public sealed class FileActionService : IFileActionService
 
     private static bool IsOperationalFailure(Exception ex) =>
         ex is IOException or UnauthorizedAccessException or SecurityException or NotSupportedException;
+
+    [ComImport]
+    [Guid("43826D1E-E718-42EE-BC55-A1E261C37BFE")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IShellItem
+    {
+    }
+
+    [ComImport]
+    [Guid("3AD05575-8857-4850-9277-11B85BDB8E09")]
+    [ClassInterface(ClassInterfaceType.None)]
+    private sealed class FileOperationComObject
+    {
+    }
+
+    [ComImport]
+    [Guid("947AAB5F-0A5C-4C13-B4D6-4BF7836FC9F8")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IFileOperation
+    {
+        [PreserveSig]
+        int Advise(nint progressSink, out uint cookie);
+
+        [PreserveSig]
+        int Unadvise(uint cookie);
+
+        [PreserveSig]
+        int SetOperationFlags(uint flags);
+
+        [PreserveSig]
+        int SetProgressMessage([MarshalAs(UnmanagedType.LPWStr)] string message);
+
+        [PreserveSig]
+        int SetProgressDialog(nint progressDialog);
+
+        [PreserveSig]
+        int SetProperties(nint propertyChangeArray);
+
+        [PreserveSig]
+        int SetOwnerWindow(nint ownerWindow);
+
+        [PreserveSig]
+        int ApplyPropertiesToItem(IShellItem item);
+
+        [PreserveSig]
+        int ApplyPropertiesToItems(nint items);
+
+        [PreserveSig]
+        int RenameItem(IShellItem item, [MarshalAs(UnmanagedType.LPWStr)] string newName, nint progressSink);
+
+        [PreserveSig]
+        int RenameItems(nint items, [MarshalAs(UnmanagedType.LPWStr)] string newName);
+
+        [PreserveSig]
+        int MoveItem(
+            IShellItem item,
+            IShellItem destinationFolder,
+            [MarshalAs(UnmanagedType.LPWStr)] string? newName,
+            nint progressSink);
+
+        [PreserveSig]
+        int MoveItems(nint items, IShellItem destinationFolder);
+
+        [PreserveSig]
+        int CopyItem(
+            IShellItem item,
+            IShellItem destinationFolder,
+            [MarshalAs(UnmanagedType.LPWStr)] string? copyName,
+            nint progressSink);
+
+        [PreserveSig]
+        int CopyItems(nint items, IShellItem destinationFolder);
+
+        [PreserveSig]
+        int DeleteItem(IShellItem item, nint progressSink);
+
+        [PreserveSig]
+        int DeleteItems(nint items);
+
+        [PreserveSig]
+        int NewItem(
+            IShellItem destinationFolder,
+            uint fileAttributes,
+            [MarshalAs(UnmanagedType.LPWStr)] string name,
+            [MarshalAs(UnmanagedType.LPWStr)] string? templateName,
+            nint progressSink);
+
+        [PreserveSig]
+        int PerformOperations();
+
+        [PreserveSig]
+        int GetAnyOperationsAborted(out int anyOperationsAborted);
+    }
+
+    [DllImport("shell32.dll", ExactSpelling = true, CharSet = CharSet.Unicode, PreserveSig = true)]
+    private static extern int SHCreateItemFromParsingName(
+        [MarshalAs(UnmanagedType.LPWStr)] string path,
+        nint bindContext,
+        ref Guid interfaceId,
+        [MarshalAs(UnmanagedType.Interface)] out IShellItem item);
 }

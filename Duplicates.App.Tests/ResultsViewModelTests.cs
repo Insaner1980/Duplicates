@@ -386,6 +386,39 @@ public sealed class ResultsViewModelTests
     }
 
     [Fact]
+    public async Task MoveSelectedAsync_CancellationReconcilesCompletedItemsBeforeRethrowing()
+    {
+        var store = new ResultsStore();
+        var fileActions = new FakeFileActionService();
+        var viewModel = NewViewModel(store, fileActions);
+        store.SetResult(NewResult(NewGroup(1, "one", "first.txt", "second.txt", "keep.txt")));
+        viewModel.ClearSelectionCommand.Execute(null);
+        DuplicateFileViewModel first = viewModel.Groups[0].Files[0];
+        DuplicateFileViewModel second = viewModel.Groups[0].Files[1];
+        first.IsSelected = true;
+        second.IsSelected = true;
+        var completedSummary = new FileOperationSummary(
+            [new FileOperationResult(first.FullPath, @"C:\destination\first.txt", null)],
+            first.SizeBytes);
+        fileActions.NextMoveCancellation = new FileOperationCanceledException(
+            completedSummary,
+            new CancellationToken(canceled: true));
+
+        FileOperationCanceledException exception = await Assert.ThrowsAsync<FileOperationCanceledException>(() =>
+            viewModel.MoveSelectedAsync(
+                @"C:\destination",
+                MoveCollisionBehavior.Skip,
+                CancellationToken.None));
+
+        Assert.Same(completedSummary, exception.Summary);
+        DuplicateGroupViewModel remainingGroup = Assert.Single(viewModel.Groups);
+        Assert.DoesNotContain(remainingGroup.Files, file => file.FullPath == first.FullPath);
+        Assert.Contains(remainingGroup.Files, file => file.FullPath == second.FullPath);
+        Assert.Contains("cancelled", viewModel.DeleteStatusMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.False(viewModel.IsDeleting);
+    }
+
+    [Fact]
     public async Task ExportAsync_UsesCanonicalExactResultsAndStoredUtcSessionMetadata()
     {
         var store = new ResultsStore();
@@ -453,6 +486,8 @@ public sealed class ResultsViewModelTests
                 finding.IsSelected = true;
             }
 
+            Assert.True(viewModel.CanActOnSelection);
+
             IReadOnlyList<FileActionTarget>? requestedTargets = null;
             fileActions.OnDelete = (targets, _) => requestedTargets = targets;
             fileActions.NextSummary = new DeleteSummary(1, 0, []);
@@ -474,8 +509,60 @@ public sealed class ResultsViewModelTests
         }
     }
 
+    [Theory]
+    [InlineData(ToolKind.TemporaryFiles)]
+    [InlineData(ToolKind.BrokenFiles)]
+    [InlineData(ToolKind.InvalidLinks)]
+    [InlineData(ToolKind.BadExtensions)]
+    [InlineData(ToolKind.BadNames)]
+    public async Task AnalysisMutations_UnsupportedToolsFailClosedWithoutCallingFileActions(ToolKind tool)
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string path = Path.Combine(root, "finding.tmp");
+        await File.WriteAllBytesAsync(path, [1]);
+
+        try
+        {
+            var store = new AnalysisSessionStore();
+            var fileActions = new FakeFileActionService();
+            var viewModel = new AnalysisResultsViewModel(store, fileActions, new FakeResultExportService());
+            store.SetCompleted(
+                tool,
+                new AnalysisScope { IncludedFolders = [root] },
+                new AnalysisResult
+                {
+                    Findings = [NewPathFinding(path, 1)],
+                    Groups = [],
+                    SkippedPaths = [],
+                    Elapsed = TimeSpan.Zero,
+                });
+            PathFindingViewModel finding = Assert.Single(viewModel.Findings);
+            finding.IsSelected = true;
+
+            Assert.False(viewModel.CanActOnSelection);
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                viewModel.DeleteSelectedAsync(CancellationToken.None));
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                viewModel.MoveSelectedAsync(
+                    root,
+                    MoveCollisionBehavior.Skip,
+                    CancellationToken.None));
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                viewModel.RenameFindingAsync(finding, "renamed.tmp", CancellationToken.None));
+            Assert.Equal(0, fileActions.DeleteCallCount);
+            Assert.Equal(0, fileActions.MoveCallCount);
+            Assert.Equal(0, fileActions.RenameCallCount);
+            Assert.Contains(viewModel.Findings, candidate => candidate.FullPath == path);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Fact]
-    public async Task AnalysisDelete_ClearsPreviewWhenSuccessfulItemRemovesSimilarityGroup()
+    public async Task AnalysisMutations_SimilarityItemsFailClosedWithoutCallingFileActions()
     {
         string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
@@ -489,10 +576,7 @@ public sealed class ResultsViewModelTests
             SimilarityItem reference = NewSimilarityItem(referencePath, 100);
             SimilarityItem candidate = NewSimilarityItem(candidatePath, 90);
             var store = new AnalysisSessionStore();
-            var fileActions = new FakeFileActionService
-            {
-                NextSummary = new DeleteSummary(1, 1, []),
-            };
+            var fileActions = new FakeFileActionService();
             var viewModel = new AnalysisResultsViewModel(store, fileActions, new FakeResultExportService());
             store.SetCompleted(
                 ToolKind.SimilarImages,
@@ -512,13 +596,117 @@ public sealed class ResultsViewModelTests
                     SkippedPaths = [],
                     Elapsed = TimeSpan.Zero,
                 });
-            SimilarityGroupViewModel group = Assert.Single(viewModel.Groups);
-            group.Items.Single(item => !item.IsReference).IsSelected = true;
-            viewModel.SelectedResult = group;
+            viewModel.Groups[0].Items.Single(item => !item.IsReference).IsSelected = true;
+
+            Assert.False(viewModel.CanActOnSelection);
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                viewModel.DeleteSelectedAsync(CancellationToken.None));
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                viewModel.MoveSelectedAsync(
+                    root,
+                    MoveCollisionBehavior.Skip,
+                    CancellationToken.None));
+            Assert.Equal(0, fileActions.DeleteCallCount);
+            Assert.Equal(0, fileActions.MoveCallCount);
+            Assert.Single(viewModel.Groups);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task AnalysisMove_CancellationReconcilesCompletedFindingsBeforeRethrowing()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string firstPath = Path.Combine(root, "first.txt");
+        string secondPath = Path.Combine(root, "second.txt");
+        await File.WriteAllBytesAsync(firstPath, []);
+        await File.WriteAllBytesAsync(secondPath, []);
+
+        try
+        {
+            var store = new AnalysisSessionStore();
+            var fileActions = new FakeFileActionService();
+            var viewModel = new AnalysisResultsViewModel(store, fileActions, new FakeResultExportService());
+            store.SetCompleted(
+                ToolKind.EmptyFiles,
+                new AnalysisScope { IncludedFolders = [root] },
+                new AnalysisResult
+                {
+                    Findings =
+                    [
+                        NewPathFinding(firstPath, 0),
+                        NewPathFinding(secondPath, 0),
+                    ],
+                    Groups = [],
+                    SkippedPaths = [],
+                    Elapsed = TimeSpan.Zero,
+                });
+            foreach (PathFindingViewModel finding in viewModel.Findings)
+            {
+                finding.IsSelected = true;
+            }
+
+            var completedSummary = new FileOperationSummary(
+                [new FileOperationResult(firstPath, Path.Combine(root, "moved", "first.txt"), null)],
+                0);
+            fileActions.NextMoveCancellation = new FileOperationCanceledException(
+                completedSummary,
+                new CancellationToken(canceled: true));
+
+            await Assert.ThrowsAsync<FileOperationCanceledException>(() =>
+                viewModel.MoveSelectedAsync(
+                    Path.Combine(root, "moved"),
+                    MoveCollisionBehavior.Skip,
+                    CancellationToken.None));
+
+            Assert.DoesNotContain(viewModel.Findings, finding => finding.FullPath == firstPath);
+            Assert.Contains(viewModel.Findings, finding => finding.FullPath == secondPath);
+            Assert.Contains("cancelled", viewModel.ActionStatusMessage, StringComparison.OrdinalIgnoreCase);
+            Assert.False(viewModel.IsActionRunning);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task AnalysisDelete_ClearsPreviewWhenSuccessfulFindingIsRemoved()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string path = Path.Combine(root, "empty.txt");
+        await File.WriteAllBytesAsync(path, []);
+
+        try
+        {
+            var store = new AnalysisSessionStore();
+            var fileActions = new FakeFileActionService
+            {
+                NextSummary = new DeleteSummary(1, 0, []),
+            };
+            var viewModel = new AnalysisResultsViewModel(store, fileActions, new FakeResultExportService());
+            store.SetCompleted(
+                ToolKind.EmptyFiles,
+                new AnalysisScope { IncludedFolders = [root] },
+                new AnalysisResult
+                {
+                    Findings = [NewPathFinding(path, 0)],
+                    Groups = [],
+                    SkippedPaths = [],
+                    Elapsed = TimeSpan.Zero,
+                });
+            PathFindingViewModel finding = Assert.Single(viewModel.Findings);
+            finding.IsSelected = true;
+            viewModel.SelectedResult = finding;
 
             await viewModel.DeleteSelectedAsync(CancellationToken.None);
 
-            Assert.Empty(viewModel.Groups);
+            Assert.Empty(viewModel.Findings);
             Assert.Null(viewModel.SelectedResult);
         }
         finally

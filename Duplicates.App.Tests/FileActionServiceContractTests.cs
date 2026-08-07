@@ -1,3 +1,4 @@
+using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using Duplicates.Engine.Models;
@@ -16,7 +17,6 @@ public sealed class FileActionServiceContractTests
         string missingPath = fixture.PathFor("missing.txt");
         string filePath = fixture.WriteFile("file.txt", [1, 2, 3]);
         string directoryPath = fixture.CreateDirectory("folder");
-        File.WriteAllText(Path.Combine(directoryPath, "child.txt"), "child");
         FileActionService service = CreateService(DeletionMode.Permanent);
         var reports = new List<DeleteProgress>();
 
@@ -44,8 +44,8 @@ public sealed class FileActionServiceContractTests
         using var fixture = new TemporaryDirectory();
         string filePath = fixture.WriteFile("recycle.txt", [1]);
         string directoryPath = fixture.CreateDirectory("recycle-folder");
-        File.WriteAllText(Path.Combine(directoryPath, "child.txt"), "child");
         FileActionService service = CreateService(DeletionMode.RecycleBin);
+        DateTime operationStartedUtc = DateTime.UtcNow.AddSeconds(-1);
 
         DeleteSummary summary = await service.DeleteAsync(
             [
@@ -59,6 +59,35 @@ public sealed class FileActionServiceContractTests
         Assert.Empty(summary.Failures);
         Assert.False(File.Exists(filePath));
         Assert.False(Directory.Exists(directoryPath));
+        Assert.True(
+            WaitForRecycledPath(directoryPath, operationStartedUtc),
+            "The empty directory was removed but no matching Recycle Bin metadata was found.");
+    }
+
+    [Theory]
+    [InlineData(DeletionMode.Permanent)]
+    [InlineData(DeletionMode.RecycleBin)]
+    public async Task DeleteAsync_RegularNonEmptyDirectoryFailsClosedAndPreservesEntireTree(
+        DeletionMode deletionMode)
+    {
+        using var fixture = new TemporaryDirectory();
+        string directoryPath = fixture.CreateDirectory("not-empty");
+        string directChild = fixture.WriteFile(Path.Combine("not-empty", "direct.txt"), [1]);
+        string childDirectory = fixture.CreateDirectory(Path.Combine("not-empty", "nested"));
+        string nestedChild = fixture.WriteFile(Path.Combine("not-empty", "nested", "child.txt"), [2]);
+        FileActionService service = CreateService(deletionMode);
+
+        DeleteSummary summary = await service.DeleteAsync(
+            [new FileActionTarget(directoryPath, 0, FileActionTargetKind.Directory)],
+            null,
+            CancellationToken.None);
+
+        Assert.Equal(0, summary.DeletedCount);
+        Assert.Equal(directoryPath, Assert.Single(summary.Failures).Path);
+        Assert.True(Directory.Exists(directoryPath));
+        Assert.True(File.Exists(directChild));
+        Assert.True(Directory.Exists(childDirectory));
+        Assert.True(File.Exists(nestedChild));
     }
 
     [Fact]
@@ -218,6 +247,122 @@ public sealed class FileActionServiceContractTests
     }
 
     [Fact]
+    public async Task MoveAsync_EmptyDirectoryPreservesTimestampsAndNeverOverwrites()
+    {
+        using var fixture = new TemporaryDirectory();
+        string source = fixture.CreateDirectory(Path.Combine("source", "empty"));
+        DateTime createdUtc = new(2025, 5, 1, 10, 20, 30, DateTimeKind.Utc);
+        DateTime modifiedUtc = new(2026, 6, 2, 11, 21, 31, DateTimeKind.Utc);
+        Directory.SetCreationTimeUtc(source, createdUtc);
+        Directory.SetLastWriteTimeUtc(source, modifiedUtc);
+        string destination = fixture.CreateDirectory("destination");
+        FileActionService service = CreateService(DeletionMode.Permanent);
+
+        FileOperationSummary moved = await service.MoveAsync(
+            [new FileActionTarget(source, 0, FileActionTargetKind.Directory)],
+            destination,
+            MoveCollisionBehavior.Skip,
+            null,
+            CancellationToken.None);
+
+        string movedPath = Path.Combine(destination, "empty");
+        Assert.True(Assert.Single(moved.Results).Succeeded);
+        Assert.False(Directory.Exists(source));
+        Assert.True(Directory.Exists(movedPath));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(movedPath));
+        Assert.Equal(createdUtc, Directory.GetCreationTimeUtc(movedPath));
+        Assert.Equal(modifiedUtc, Directory.GetLastWriteTimeUtc(movedPath));
+
+        string secondSource = fixture.CreateDirectory(Path.Combine("second-source", "empty"));
+        File.WriteAllText(Path.Combine(movedPath, "keep.txt"), "keep");
+        FileOperationSummary collision = await service.MoveAsync(
+            [new FileActionTarget(secondSource, 0, FileActionTargetKind.Directory)],
+            destination,
+            MoveCollisionBehavior.Skip,
+            null,
+            CancellationToken.None);
+
+        Assert.False(Assert.Single(collision.Results).Succeeded);
+        Assert.True(Directory.Exists(secondSource));
+        Assert.Equal("keep", File.ReadAllText(Path.Combine(movedPath, "keep.txt")));
+    }
+
+    [CrossVolumeFact]
+    public async Task MoveAsync_EmptyDirectoryMovesAcrossWritableVolumesWhenAvailable()
+    {
+        (string SourceRoot, string DestinationRoot)? roots = TryCreateCrossVolumeRoots();
+        Assert.True(roots.HasValue, "Two writable volumes became unavailable after test discovery.");
+
+        string sourceRoot = roots.Value.SourceRoot;
+        string destinationRoot = roots.Value.DestinationRoot;
+        try
+        {
+            string source = Path.Combine(sourceRoot, "empty");
+            Directory.CreateDirectory(source);
+            DateTime modifiedUtc = new(2026, 6, 2, 11, 21, 32, DateTimeKind.Utc);
+            Directory.SetLastWriteTimeUtc(source, modifiedUtc);
+            FileActionService service = CreateService(DeletionMode.Permanent);
+
+            FileOperationSummary summary = await service.MoveAsync(
+                [new FileActionTarget(source, 0, FileActionTargetKind.Directory)],
+                destinationRoot,
+                MoveCollisionBehavior.Skip,
+                null,
+                CancellationToken.None);
+
+            string movedPath = Path.Combine(destinationRoot, "empty");
+            Assert.True(Assert.Single(summary.Results).Succeeded);
+            Assert.False(Directory.Exists(source));
+            Assert.True(Directory.Exists(movedPath));
+            Assert.Empty(Directory.EnumerateFileSystemEntries(movedPath));
+            Assert.Equal(modifiedUtc, Directory.GetLastWriteTimeUtc(movedPath));
+        }
+        finally
+        {
+            DeleteFixtureRoot(sourceRoot);
+            DeleteFixtureRoot(destinationRoot);
+        }
+    }
+
+    [Fact]
+    public async Task MoveAsync_CancellationAfterFirstItemCarriesCompletedSummary()
+    {
+        using var fixture = new TemporaryDirectory();
+        string first = fixture.WriteFile(Path.Combine("source-a", "first.txt"), [1]);
+        string second = fixture.WriteFile(Path.Combine("source-b", "second.txt"), [2]);
+        string destination = fixture.CreateDirectory("destination");
+        FileActionService service = CreateService(DeletionMode.Permanent);
+        using var cancellation = new CancellationTokenSource();
+        var progress = new InlineProgress<FileOperationProgress>(report =>
+        {
+            if (report.ProcessedCount == 1)
+            {
+                cancellation.Cancel();
+            }
+        });
+
+        FileOperationCanceledException exception = await Assert.ThrowsAsync<FileOperationCanceledException>(() =>
+            service.MoveAsync(
+                [
+                    new FileActionTarget(first, 1, FileActionTargetKind.File),
+                    new FileActionTarget(second, 1, FileActionTargetKind.File),
+                ],
+                destination,
+                MoveCollisionBehavior.Skip,
+                progress,
+                cancellation.Token));
+
+        FileOperationResult completed = Assert.Single(exception.Summary.Results);
+        Assert.True(completed.Succeeded);
+        Assert.Equal(first, completed.SourcePath);
+        Assert.Equal(1, exception.Summary.SucceededBytes);
+        Assert.False(File.Exists(first));
+        Assert.True(File.Exists(Path.Combine(destination, "first.txt")));
+        Assert.True(File.Exists(second));
+        Assert.False(File.Exists(Path.Combine(destination, "second.txt")));
+    }
+
+    [Fact]
     public async Task RenameAsync_CollisionReturnsFailureWithoutOverwriting()
     {
         using var fixture = new TemporaryDirectory();
@@ -241,6 +386,8 @@ public sealed class FileActionServiceContractTests
     [InlineData("..")]
     [InlineData("folder\\name.txt")]
     [InlineData("CON.txt")]
+    [InlineData("COM1 .txt")]
+    [InlineData("LPT9..log")]
     [InlineData("trailing.")]
     public async Task RenameAsync_InvalidWindowsLeafThrowsBeforeMutation(string newName)
     {
@@ -416,6 +563,83 @@ public sealed class FileActionServiceContractTests
         }
     }
 
+    private static bool WaitForRecycledPath(string originalPath, DateTime operationStartedUtc)
+    {
+        string? root = Path.GetPathRoot(originalPath);
+        string? sid = WindowsIdentity.GetCurrent().User?.Value;
+        if (string.IsNullOrWhiteSpace(root) || string.IsNullOrWhiteSpace(sid))
+        {
+            return false;
+        }
+
+        string recycleDirectory = Path.Combine(root, "$Recycle.Bin", sid);
+        byte[] expectedPath = Encoding.Unicode.GetBytes(originalPath);
+        var timeout = System.Diagnostics.Stopwatch.StartNew();
+        while (timeout.Elapsed < TimeSpan.FromSeconds(5))
+        {
+            try
+            {
+                foreach (string metadataPath in Directory.EnumerateFiles(recycleDirectory, "$I*", SearchOption.TopDirectoryOnly))
+                {
+                    if (File.GetLastWriteTimeUtc(metadataPath) < operationStartedUtc)
+                    {
+                        continue;
+                    }
+
+                    byte[] metadata = File.ReadAllBytes(metadataPath);
+                    if (metadata.AsSpan().IndexOf(expectedPath) >= 0)
+                    {
+                        return true;
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return false;
+            }
+
+            Thread.Sleep(50);
+        }
+
+        return false;
+    }
+
+    private static (string SourceRoot, string DestinationRoot)? TryCreateCrossVolumeRoots()
+    {
+        var writableRoots = new List<string>();
+        foreach (DriveInfo drive in DriveInfo.GetDrives().Where(static drive => drive.IsReady))
+        {
+            string candidate = Path.Combine(drive.RootDirectory.FullName, $"Duplicates-{Guid.NewGuid():N}");
+            try
+            {
+                Directory.CreateDirectory(candidate);
+                writableRoots.Add(candidate);
+                if (writableRoots.Count == 2)
+                {
+                    return (writableRoots[0], writableRoots[1]);
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+            }
+        }
+
+        foreach (string root in writableRoots)
+        {
+            DeleteFixtureRoot(root);
+        }
+
+        return null;
+    }
+
+    private static void DeleteFixtureRoot(string root)
+    {
+        if (Directory.Exists(root))
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     private sealed class TemporaryDirectory : IDisposable
     {
         public TemporaryDirectory()
@@ -455,5 +679,50 @@ public sealed class FileActionServiceContractTests
     private sealed class InlineProgress<T>(Action<T> report) : IProgress<T>
     {
         public void Report(T value) => report(value);
+    }
+}
+
+public sealed class CrossVolumeFactAttribute : FactAttribute
+{
+    private const string UnavailableReason =
+        "Cross-volume move requires two writable local volumes; this host exposes fewer than two.";
+
+    public CrossVolumeFactAttribute()
+    {
+        if (!HasTwoWritableVolumes())
+        {
+            Skip = UnavailableReason;
+        }
+    }
+
+    private static bool HasTwoWritableVolumes()
+    {
+        int writableVolumeCount = 0;
+        foreach (DriveInfo drive in DriveInfo.GetDrives().Where(static drive => drive.IsReady))
+        {
+            string probe = Path.Combine(drive.RootDirectory.FullName, $"Duplicates-probe-{Guid.NewGuid():N}");
+            try
+            {
+                Directory.CreateDirectory(probe);
+                writableVolumeCount++;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+            }
+            finally
+            {
+                if (Directory.Exists(probe))
+                {
+                    Directory.Delete(probe, recursive: false);
+                }
+            }
+
+            if (writableVolumeCount == 2)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

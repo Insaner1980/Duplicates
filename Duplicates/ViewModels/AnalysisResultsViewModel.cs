@@ -111,7 +111,11 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
     public long SelectedBytes => SelectedFindings.Sum(static item => item.SizeBytes) +
         SelectedSimilarityItems.Sum(static item => item.SizeBytes);
 
-    public bool CanActOnSelection => !IsActionRunning && SelectedItemCount > 0;
+    public bool CanActOnSelection =>
+        !IsActionRunning &&
+        IsMutationToolSupported &&
+        SelectedFindings.Count > 0 &&
+        SelectedSimilarityItems.Count == 0;
 
     public IReadOnlyList<PathFindingViewModel> SelectedFindings =>
         _allFindings.Where(static item => item.IsSelected).ToArray();
@@ -178,6 +182,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
 
     public async Task<DeleteSummary> DeleteSelectedAsync(CancellationToken cancellationToken)
     {
+        EnsureSelectedMutationIsSupported();
         IFileActionService fileActions = _fileActionService ??
             throw new InvalidOperationException("File actions are not configured.");
         SelectionTargets selection = BuildValidatedSelection();
@@ -216,6 +221,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         MoveCollisionBehavior collisionBehavior,
         CancellationToken cancellationToken)
     {
+        EnsureSelectedMutationIsSupported();
         IFileActionService fileActions = _fileActionService ??
             throw new InvalidOperationException("File actions are not configured.");
         SelectionTargets selection = BuildValidatedSelection();
@@ -228,29 +234,25 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         ActionStatusMessage = "Moving selected items...";
         try
         {
-            FileOperationSummary serviceSummary = selection.Targets.Count == 0
-                ? new FileOperationSummary([], 0)
-                : await fileActions.MoveAsync(
-                    selection.Targets,
-                    destinationFolder,
-                    collisionBehavior,
-                    null,
-                    cancellationToken);
-            FileOperationResult[] localFailures = selection.Failures
-                .Select(static failure => new FileOperationResult(failure.Path, null, failure))
-                .ToArray();
-            FileOperationResult[] results = [.. localFailures, .. serviceSummary.Results];
-            HashSet<string> successfulPaths = results
-                .Where(static result => result.Succeeded)
-                .Select(static result => result.SourcePath)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            RemoveSuccessfulPaths(successfulPaths);
-            int succeeded = results.Count(static result => result.Succeeded);
-            int failed = results.Length - succeeded;
-            ActionStatusMessage = failed == 0
-                ? succeeded == 1 ? "1 item moved." : $"{succeeded:N0} items moved."
-                : $"{succeeded:N0} items moved, {failed:N0} could not be moved.";
-            return new FileOperationSummary(results, serviceSummary.SucceededBytes);
+            FileOperationSummary serviceSummary;
+            try
+            {
+                serviceSummary = selection.Targets.Count == 0
+                    ? new FileOperationSummary([], 0)
+                    : await fileActions.MoveAsync(
+                        selection.Targets,
+                        destinationFolder,
+                        collisionBehavior,
+                        null,
+                        cancellationToken);
+            }
+            catch (FileOperationCanceledException ex)
+            {
+                ApplyMoveSummary(ex.Summary, selection.Failures, wasCancelled: true);
+                throw;
+            }
+
+            return ApplyMoveSummary(serviceSummary, selection.Failures, wasCancelled: false);
         }
         finally
         {
@@ -263,6 +265,11 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         string newName,
         CancellationToken cancellationToken)
     {
+        if (!IsMutationToolSupported || !_allFindings.Contains(finding))
+        {
+            throw new InvalidOperationException("Actions are not available for these results yet.");
+        }
+
         IFileActionService fileActions = _fileActionService ??
             throw new InvalidOperationException("File actions are not configured.");
         if (!TryMapFinding(finding, out FileActionTarget? target, out FileActionFailure? failure))
@@ -472,6 +479,41 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         SelectionChanged();
     }
 
+    private bool IsMutationToolSupported => _sessionStore.CurrentSession?.Tool is
+        ToolKind.EmptyFiles or ToolKind.EmptyFolders or ToolKind.BigFiles;
+
+    private void EnsureSelectedMutationIsSupported()
+    {
+        if (!IsMutationToolSupported || SelectedSimilarityItems.Count > 0)
+        {
+            throw new InvalidOperationException("Actions are not available for these results yet.");
+        }
+    }
+
+    private FileOperationSummary ApplyMoveSummary(
+        FileOperationSummary serviceSummary,
+        IReadOnlyList<FileActionFailure> localFailures,
+        bool wasCancelled)
+    {
+        FileOperationResult[] localResults = localFailures
+            .Select(static failure => new FileOperationResult(failure.Path, null, failure))
+            .ToArray();
+        FileOperationResult[] results = [.. localResults, .. serviceSummary.Results];
+        HashSet<string> successfulPaths = results
+            .Where(static result => result.Succeeded)
+            .Select(static result => result.SourcePath)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        RemoveSuccessfulPaths(successfulPaths);
+        int succeeded = results.Count(static result => result.Succeeded);
+        int failed = results.Length - succeeded;
+        ActionStatusMessage = wasCancelled
+            ? $"Move cancelled after {succeeded:N0} {(succeeded == 1 ? "item" : "items")} moved."
+            : failed == 0
+                ? succeeded == 1 ? "1 item moved." : $"{succeeded:N0} items moved."
+                : $"{succeeded:N0} items moved, {failed:N0} could not be moved.";
+        return new FileOperationSummary(results, serviceSummary.SucceededBytes);
+    }
+
     private SelectionTargets BuildValidatedSelection()
     {
         var targets = new List<FileActionTarget>();
@@ -566,9 +608,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
             ToolKind.EmptyFolders => kind == FileActionTargetKind.Directory && !Directory.EnumerateFileSystemEntries(finding.FullPath).Any(),
             ToolKind.BigFiles => kind == FileActionTargetKind.File &&
                 new FileInfo(finding.FullPath).Length >= GetMinimumSize(finding.Source),
-            _ => kind != FileActionTargetKind.File ||
-                finding.Source.SizeBytes is null ||
-                new FileInfo(finding.FullPath).Length == finding.Source.SizeBytes.Value,
+            _ => false,
         };
     }
 

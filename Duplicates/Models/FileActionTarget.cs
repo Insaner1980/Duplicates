@@ -22,3 +22,16 @@ public sealed record FileOperationProgress(
     int TotalCount,
     string CurrentPath,
     long SucceededBytes);
+
+public sealed class FileOperationCanceledException : OperationCanceledException
+{
+    public FileOperationCanceledException(
+        FileOperationSummary summary,
+        CancellationToken cancellationToken)
+        : base("The file operation was cancelled.", null, cancellationToken)
+    {
+        Summary = summary;
+    }
+
+    public FileOperationSummary Summary { get; }
+}

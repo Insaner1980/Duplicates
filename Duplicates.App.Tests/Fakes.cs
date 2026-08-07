@@ -35,7 +35,15 @@ internal sealed class FakeFileActionService : IFileActionService
 
     public FileOperationSummary NextMoveSummary { get; set; } = new([], 0);
 
+    public FileOperationCanceledException? NextMoveCancellation { get; set; }
+
     public FileOperationResult? NextRenameResult { get; set; }
+
+    public int DeleteCallCount { get; private set; }
+
+    public int MoveCallCount { get; private set; }
+
+    public int RenameCallCount { get; private set; }
 
     public Action<IReadOnlyList<FileActionTarget>, IProgress<DeleteProgress>?>? OnDelete { get; set; }
 
@@ -46,6 +54,7 @@ internal sealed class FakeFileActionService : IFileActionService
         IProgress<DeleteProgress>? progress,
         CancellationToken cancellationToken)
     {
+        DeleteCallCount++;
         OnDelete?.Invoke(targets, progress);
         return Task.FromResult(NextSummary);
     }
@@ -57,7 +66,13 @@ internal sealed class FakeFileActionService : IFileActionService
         IProgress<FileOperationProgress>? progress,
         CancellationToken cancellationToken)
     {
+        MoveCallCount++;
         OnMove?.Invoke(targets, destinationFolder, collisionBehavior, progress);
+        if (NextMoveCancellation is not null)
+        {
+            throw NextMoveCancellation;
+        }
+
         return Task.FromResult(NextMoveSummary);
     }
 
@@ -66,6 +81,7 @@ internal sealed class FakeFileActionService : IFileActionService
         string newName,
         CancellationToken cancellationToken)
     {
+        RenameCallCount++;
         return Task.FromResult(NextRenameResult ?? new FileOperationResult(
             target.FullPath,
             Path.Combine(Path.GetDirectoryName(target.FullPath)!, newName),
