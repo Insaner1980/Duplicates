@@ -1,5 +1,7 @@
+using System.Reflection;
 using System.Xml;
 using System.Xml.Linq;
+using Duplicates;
 
 namespace Duplicates.App.Tests;
 
@@ -100,6 +102,32 @@ public sealed class NativeWinUiContractTests
             .Descendants(Presentation + "Grid")
             .Single(element => (string?)element.Attribute(Xaml + "Name") == "Root");
         Assert.Equal("640", (string?)root.Attribute("MinWidth"));
+    }
+
+    [Fact]
+    public async Task UnavailableToolDialog_RestoresDuplicateFilesSelectionAfterItCloses()
+    {
+        MethodInfo? completion = typeof(MainWindow).GetMethod(
+            "CompleteUnavailableToolSelectionAsync",
+            BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(completion);
+
+        var dialogClosed = new TaskCompletionSource<object?>();
+        string? selectedTag = null;
+        Task recovery = Assert.IsAssignableFrom<Task>(
+            completion.Invoke(
+                null,
+                [
+                    new Func<Task>(() => dialogClosed.Task),
+                    new Action(() => selectedTag = "DuplicateFiles"),
+                ]));
+
+        Assert.Null(selectedTag);
+
+        dialogClosed.SetResult(null);
+        await recovery;
+
+        Assert.Equal("DuplicateFiles", selectedTag);
     }
 
     [Fact]

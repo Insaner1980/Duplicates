@@ -106,6 +106,19 @@ public sealed partial class MainWindow : Window
             DefaultButton = ContentDialogButton.Close,
         };
 
-        await dialog.ShowAsync();
+        await CompleteUnavailableToolSelectionAsync(
+            async () =>
+            {
+                await dialog.ShowAsync();
+            },
+            () => RootNavigationView.SelectedItem = ScanNavigationItem);
+    }
+
+    private static async Task CompleteUnavailableToolSelectionAsync(
+        Func<Task> showDialogAsync,
+        Action restoreDuplicateFilesSelection)
+    {
+        await showDialogAsync();
+        restoreDuplicateFilesSelection();
     }
 }
