@@ -27,11 +27,30 @@ public sealed class AppServices
             musicMetadataProvider: MusicMetadataProvider);
         FileActionService = new FileActionService(SettingsService);
         ResultExportService = new ResultExportService();
+        OperationCoordinator = new AppOperationCoordinator();
+        var fileLinkPlatform = new FileLinkNative();
+        RecycleBinService = new RecycleBinService(fileLinkPlatform);
+        FileLinkService = new FileLinkService(fileLinkPlatform, RecycleBinService);
         PathScopeViewModel = new PathScopeViewModel();
 
-        ScanViewModel = new ScanViewModel(new DuplicateScanner(), SettingsService, ResultsStore, PathScopeViewModel);
-        ResultsViewModel = new ResultsViewModel(ResultsStore, FileActionService, SettingsService, ResultExportService);
-        AnalysisViewModel = new AnalysisViewModel(AnalysisService, AnalysisSessionStore, PathScopeViewModel);
+        ScanViewModel = new ScanViewModel(
+            new DuplicateScanner(),
+            SettingsService,
+            ResultsStore,
+            PathScopeViewModel,
+            OperationCoordinator);
+        ResultsViewModel = new ResultsViewModel(
+            ResultsStore,
+            FileActionService,
+            SettingsService,
+            ResultExportService,
+            FileLinkService,
+            OperationCoordinator);
+        AnalysisViewModel = new AnalysisViewModel(
+            AnalysisService,
+            AnalysisSessionStore,
+            PathScopeViewModel,
+            OperationCoordinator);
         AnalysisResultsViewModel = new AnalysisResultsViewModel(
             AnalysisSessionStore,
             FileActionService,
@@ -39,7 +58,8 @@ public sealed class AppServices
             FileSignatureDetector.DetectFileAsync,
             FileFormatProbe,
             AnalysisService,
-            MediaPreviewLoader);
+            MediaPreviewLoader,
+            OperationCoordinator);
         SettingsViewModel = new SettingsViewModel(SettingsService);
     }
 
@@ -68,6 +88,12 @@ public sealed class AppServices
     public IFileActionService FileActionService { get; }
 
     public IResultExportService ResultExportService { get; }
+
+    public IAppOperationCoordinator OperationCoordinator { get; }
+
+    public IRecycleBinService RecycleBinService { get; }
+
+    public IFileLinkService FileLinkService { get; }
 
     public PathScopeViewModel PathScopeViewModel { get; }
 

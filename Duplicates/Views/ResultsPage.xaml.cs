@@ -12,6 +12,7 @@ namespace Duplicates.Views;
 public sealed partial class ResultsPage : Page
 {
     private bool _isDeleteDialogOpen;
+    private bool _isLinkDialogOpen;
 
     public ResultsPage()
     {
@@ -24,7 +25,7 @@ public sealed partial class ResultsPage : Page
 
     private async void KeepPreferredFolder_Click(object sender, RoutedEventArgs e)
     {
-        if (App.Current.MainWindow is null)
+        if (App.Current.MainWindow is null || !ViewModel.CanMutateSelection)
         {
             return;
         }
@@ -37,7 +38,7 @@ public sealed partial class ResultsPage : Page
         };
 
         PickFolderResult? result = await picker.PickSingleFolderAsync();
-        if (result is not null)
+        if (result is not null && ViewModel.CanMutateSelection)
         {
             ViewModel.AutoSelectKeepPreferredFolder(result.Path);
         }
@@ -63,7 +64,8 @@ public sealed partial class ResultsPage : Page
 
     private async void DeleteFile_Click(object sender, RoutedEventArgs e)
     {
-        if ((sender as FrameworkElement)?.DataContext is not DuplicateFileViewModel file || ViewModel.IsDeleting)
+        if ((sender as FrameworkElement)?.DataContext is not DuplicateFileViewModel file ||
+            !ViewModel.CanMutateSelection)
         {
             return;
         }
@@ -113,7 +115,7 @@ public sealed partial class ResultsPage : Page
 
     private async void Export_Click(object sender, RoutedEventArgs e)
     {
-        if (App.Current.MainWindow is null)
+        if (App.Current.MainWindow is null || !ViewModel.CanExport)
         {
             return;
         }
@@ -143,6 +145,78 @@ public sealed partial class ResultsPage : Page
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException)
         {
             ViewModel.DeleteStatusMessage = ex.Message;
+        }
+    }
+
+    private void ReplaceWithHardLinks_Click(object sender, RoutedEventArgs e)
+    {
+        _ = ConfirmAndReplaceWithLinksAsync(LinkReplacementMode.HardLink);
+    }
+
+    private void ReplaceWithSymbolicLinks_Click(object sender, RoutedEventArgs e)
+    {
+        _ = ConfirmAndReplaceWithLinksAsync(LinkReplacementMode.SymbolicLink);
+    }
+
+    private async Task ConfirmAndReplaceWithLinksAsync(LinkReplacementMode mode)
+    {
+        if (App.Current.MainWindow is null || !ViewModel.CanReplaceWithLinks || _isLinkDialogOpen)
+        {
+            return;
+        }
+
+        ExactLinkReplacementSnapshot snapshot;
+        try
+        {
+            snapshot = ViewModel.CreateLinkReplacementSnapshot(mode);
+        }
+        catch (InvalidOperationException ex)
+        {
+            ViewModel.DeleteStatusMessage = ex.Message;
+            return;
+        }
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = mode == LinkReplacementMode.HardLink
+                ? "Replace duplicates with hard links?"
+                : "Replace duplicates with symbolic links?",
+            Content = new TextBlock
+            {
+                Text = snapshot.ConfirmationText,
+                TextWrapping = TextWrapping.Wrap,
+                IsTextSelectionEnabled = true,
+            },
+            PrimaryButtonText = "Replace",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+        };
+
+        _isLinkDialogOpen = true;
+        try
+        {
+            if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+            {
+                return;
+            }
+
+            if (!ViewModel.IsLinkReplacementSnapshotCurrent(snapshot))
+            {
+                ViewModel.DeleteStatusMessage = "The duplicate selection changed after confirmation.";
+                return;
+            }
+
+            await ViewModel.ReplaceWithLinksAsync(snapshot, CancellationToken.None);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or
+            ArgumentException or InvalidOperationException or OperationCanceledException)
+        {
+            ViewModel.DeleteStatusMessage = ex.Message;
+        }
+        finally
+        {
+            _isLinkDialogOpen = false;
         }
     }
 
@@ -252,7 +326,10 @@ public sealed partial class ResultsPage : Page
 
     private void NewScan_Click(object sender, RoutedEventArgs e)
     {
-        App.Current.MainWindow?.ShowScanPage();
+        if (ViewModel.CanStartNewScan)
+        {
+            App.Current.MainWindow?.ShowScanPage();
+        }
     }
 
     private void OpenFile_Click(object sender, RoutedEventArgs e)

@@ -127,10 +127,21 @@
                 x:Name="ResultsCommandBar"
                 DefaultLabelPosition="Right"
                 IsDynamicOverflowEnabled="True">
+                <CommandBar.SecondaryCommands>
+                    <AppBarButton
+                        Label="Replace with hard links"
+                        IsEnabled="{Binding CanReplaceWithLinks}"
+                        Click="ReplaceWithHardLinks_Click" />
+                    <AppBarButton
+                        Label="Replace with symbolic links"
+                        IsEnabled="{Binding CanReplaceWithLinks}"
+                        Click="ReplaceWithSymbolicLinks_Click" />
+                </CommandBar.SecondaryCommands>
                 <AppBarButton
                     AccessKey="R"
                     Icon="Filter"
-                    Label="Selection rule">
+                    Label="Selection rule"
+                    IsEnabled="{Binding CanMutateSelection}">
                     <AppBarButton.Flyout>
                         <MenuFlyout>
                             <MenuFlyoutItem Text="Keep newest" Command="{Binding AutoSelectKeepNewestCommand}" />
@@ -143,6 +154,7 @@
                 <AppBarButton
                     Icon="Clear"
                     Label="Clear selection"
+                    IsEnabled="{Binding CanMutateSelection}"
                     Command="{Binding ClearSelectionCommand}" />
                 <AppBarButton
                     Icon="Undo"
@@ -165,6 +177,7 @@
                     AccessKey="E"
                     Icon="Save"
                     Label="Export"
+                    IsEnabled="{Binding CanExport}"
                     Click="Export_Click" />
                 <AppBarButton
                     AccessKey="D"
@@ -212,6 +225,7 @@
                 <Button
                     Content="New scan"
                     Style="{StaticResource AccentButtonStyle}"
+                    IsEnabled="{Binding CanStartNewScan}"
                     Click="NewScan_Click" />
             </StackPanel>
 
@@ -296,6 +310,7 @@
                                             <MenuFlyoutItem
                                                 Text="Delete file"
                                                 Foreground="{ThemeResource DangerBrush}"
+                                                IsEnabled="{Binding ViewModel.CanMutateSelection, ElementName=PageRoot}"
                                                 Click="DeleteFile_Click" />
                                         </MenuFlyout>
                                     </Setter.Value>
@@ -341,6 +356,7 @@
                                     ToolTipService.ToolTip="{Binding FullPath}">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="Auto" />
                                         <ColumnDefinition Width="Auto" />
@@ -348,9 +364,17 @@
                                     <CheckBox
                                         VerticalAlignment="Center"
                                         AutomationProperties.Name="Select file for deletion"
-                                        IsChecked="{Binding IsSelected, Mode=TwoWay}" />
-                                    <StackPanel
+                                        IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                        IsEnabled="{Binding CanMutateSelection}" />
+                                    <RadioButton
                                         Grid.Column="1"
+                                        VerticalAlignment="Center"
+                                        AutomationProperties.Name="Use as link survivor"
+                                        IsChecked="{Binding IsLinkSurvivor, Mode=TwoWay}"
+                                        IsEnabled="{Binding CanBeLinkSurvivor}"
+                                        ToolTipService.ToolTip="Use as link survivor" />
+                                    <StackPanel
+                                        Grid.Column="2"
                                         VerticalAlignment="Center"
                                         Spacing="2">
                                         <TextBlock
@@ -369,7 +393,7 @@
                                             Text="{Binding MetadataText}" />
                                     </StackPanel>
                                     <StackPanel
-                                        Grid.Column="2"
+                                        Grid.Column="3"
                                         VerticalAlignment="Center"
                                         Orientation="Horizontal"
                                         Spacing="4"
@@ -380,13 +404,13 @@
                                             Text="KEEP" />
                                     </StackPanel>
                                     <TextBlock
-                                        Grid.Column="2"
+                                        Grid.Column="3"
                                         VerticalAlignment="Center"
                                         Foreground="{ThemeResource DangerBrush}"
                                         Text="DELETE"
                                         Visibility="{Binding DeleteVisibility}" />
                                     <Button
-                                        Grid.Column="3"
+                                        Grid.Column="4"
                                         AutomationProperties.Name="File actions"
                                         ToolTipService.ToolTip="File actions">
                                         <SymbolIcon Symbol="More" />
@@ -403,6 +427,7 @@
                                                 <MenuFlyoutItem
                                                     Text="Delete file"
                                                     Foreground="{ThemeResource DangerBrush}"
+                                                    IsEnabled="{Binding ViewModel.CanMutateSelection, ElementName=PageRoot}"
                                                     Click="DeleteFile_Click" />
                                             </MenuFlyout>
                                         </Button.Flyout>

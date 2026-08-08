@@ -23,9 +23,11 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
     private readonly IFileFormatProbe? _fileFormatProbe;
     private readonly IAnalysisService? _analysisService;
     private readonly IMediaPreviewLoader? _mediaPreviewLoader;
+    private readonly IAppOperationCoordinator _operationCoordinator;
     private readonly List<PathFindingViewModel> _allFindings = [];
     private readonly List<SimilarityGroupViewModel> _allGroups = [];
     private CancellationTokenSource? _previewCancellation;
+    private CancellationTokenSource? _actionCancellation;
     private long _previewRequestGeneration;
 
     public AnalysisResultsViewModel(AnalysisSessionStore sessionStore)
@@ -71,10 +73,30 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         AnalysisSessionStore sessionStore,
         IFileActionService? fileActionService,
         IResultExportService? resultExportService,
+        IAnalysisService? analysisService,
+        IMediaPreviewLoader? mediaPreviewLoader,
+        IAppOperationCoordinator operationCoordinator)
+        : this(
+            sessionStore,
+            fileActionService,
+            resultExportService,
+            FileSignatureDetector.DetectFileAsync,
+            null,
+            analysisService,
+            mediaPreviewLoader,
+            operationCoordinator)
+    {
+    }
+
+    public AnalysisResultsViewModel(
+        AnalysisSessionStore sessionStore,
+        IFileActionService? fileActionService,
+        IResultExportService? resultExportService,
         Func<string, CancellationToken, ValueTask<DetectedFileType?>> detectFileAsync,
         IFileFormatProbe? fileFormatProbe,
         IAnalysisService? analysisService = null,
-        IMediaPreviewLoader? mediaPreviewLoader = null)
+        IMediaPreviewLoader? mediaPreviewLoader = null,
+        IAppOperationCoordinator? operationCoordinator = null)
     {
         _sessionStore = sessionStore;
         _fileActionService = fileActionService;
@@ -83,7 +105,9 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         _fileFormatProbe = fileFormatProbe;
         _analysisService = analysisService;
         _mediaPreviewLoader = mediaPreviewLoader;
+        _operationCoordinator = operationCoordinator ?? new AppOperationCoordinator();
         _sessionStore.ResultChanged += ResultsChanged;
+        _operationCoordinator.ActiveOperationChanged += OperationChanged;
     }
 
     public event EventHandler<ToolKind>? NewAnalysisRequested;
@@ -134,6 +158,10 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(CanActOnSelection))]
     [NotifyPropertyChangedFor(nameof(CanRenameSelection))]
     [NotifyPropertyChangedFor(nameof(RenameSelection))]
+    [NotifyPropertyChangedFor(nameof(CanExport))]
+    [NotifyPropertyChangedFor(nameof(CanStartNewAnalysis))]
+    [NotifyPropertyChangedFor(nameof(CanMutateSelection))]
+    [NotifyCanExecuteChangedFor(nameof(ClearSelectionCommand))]
     public partial bool IsActionRunning { get; set; }
 
     public Visibility BeforeFirstAnalysisVisibility => _sessionStore.CurrentSession is null
@@ -183,11 +211,13 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
 
     public bool CanActOnSelection =>
         !IsActionRunning &&
+        _operationCoordinator.ActiveOperation is null &&
         IsBulkMutationToolSupported &&
         SelectedItemCount > 0;
 
     public bool CanRenameSelection =>
         !IsActionRunning &&
+        _operationCoordinator.ActiveOperation is null &&
         SupportsRenameDialog(_sessionStore.CurrentSession) &&
         SelectedFindings.Count == 1 &&
         SelectedSimilarityItems.Count == 0;
@@ -195,6 +225,12 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
     public PathFindingViewModel? RenameSelection => CanRenameSelection
         ? SelectedFindings[0]
         : null;
+
+    public bool CanExport => !IsActionRunning && _operationCoordinator.ActiveOperation is null;
+
+    public bool CanStartNewAnalysis => _operationCoordinator.ActiveOperation is null;
+
+    public bool CanMutateSelection => !IsActionRunning && _operationCoordinator.ActiveOperation is null;
 
     public IReadOnlyList<PathFindingViewModel> SelectedFindings =>
         _allFindings.Where(static item => item.IsSelected).ToArray();
@@ -246,9 +282,14 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
             _ => string.Empty,
         };
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanStartNewAnalysis))]
     private void NewAnalysis()
     {
+        if (!CanStartNewAnalysis)
+        {
+            return;
+        }
+
         ToolKind tool = _sessionStore.CurrentSession?.Tool ?? ToolKind.EmptyFolders;
         SearchText = string.Empty;
         SelectedSortIndex = 0;
@@ -259,7 +300,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         NewAnalysisRequested?.Invoke(this, tool);
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanMutateSelection))]
     private void ClearSelection()
     {
         foreach (PathFindingViewModel finding in _allFindings)
@@ -364,7 +405,10 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         }
     }
 
-    public async Task<DeleteSummary> DeleteSelectedAsync(CancellationToken cancellationToken)
+    public Task<DeleteSummary> DeleteSelectedAsync(CancellationToken cancellationToken) =>
+        RunCoordinatedActionAsync(DeleteSelectedCoreAsync, cancellationToken);
+
+    private async Task<DeleteSummary> DeleteSelectedCoreAsync(CancellationToken cancellationToken)
     {
         EnsureSelectedMutationIsSupported();
         AnalysisSession? initiatingSession = _sessionStore.CurrentSession;
@@ -412,7 +456,14 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         }
     }
 
-    public async Task<FileOperationSummary> MoveSelectedAsync(
+    public Task<FileOperationSummary> MoveSelectedAsync(
+        string destinationFolder,
+        MoveCollisionBehavior collisionBehavior,
+        CancellationToken cancellationToken) => RunCoordinatedActionAsync(
+            token => MoveSelectedCoreAsync(destinationFolder, collisionBehavior, token),
+            cancellationToken);
+
+    private async Task<FileOperationSummary> MoveSelectedCoreAsync(
         string destinationFolder,
         MoveCollisionBehavior collisionBehavior,
         CancellationToken cancellationToken)
@@ -679,7 +730,14 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         return selection;
     }
 
-    public async Task<FileOperationResult> RenameFindingAsync(
+    public Task<FileOperationResult> RenameFindingAsync(
+        PathFindingViewModel finding,
+        string newName,
+        CancellationToken cancellationToken) => RunCoordinatedActionAsync(
+            token => RenameFindingCoreAsync(finding, newName, token),
+            cancellationToken);
+
+    private async Task<FileOperationResult> RenameFindingCoreAsync(
         PathFindingViewModel finding,
         string newName,
         CancellationToken cancellationToken)
@@ -821,6 +879,17 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
     public Task ExportAsync(
         ResultExportFormat format,
         string destinationPath,
+        CancellationToken cancellationToken) => RunCoordinatedActionAsync(
+            async token =>
+            {
+                await ExportCoreAsync(format, destinationPath, token);
+                return true;
+            },
+            cancellationToken);
+
+    private Task ExportCoreAsync(
+        ResultExportFormat format,
+        string destinationPath,
         CancellationToken cancellationToken)
     {
         IResultExportService exporter = _resultExportService ??
@@ -867,6 +936,33 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
             [.. findingItems, .. similarityItems],
             skippedPaths);
         return exporter.ExportAsync(snapshot, format, destinationPath, cancellationToken);
+    }
+
+    private async Task<T> RunCoordinatedActionAsync<T>(
+        Func<CancellationToken, Task<T>> action,
+        CancellationToken cancellationToken)
+    {
+        using CancellationTokenSource actionCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        if (!_operationCoordinator.TryAcquire(
+                new AppOperationDescriptor(AppOperationKind.AnalysisResultsAction),
+                actionCancellation.Cancel,
+                out IAppOperationLease? lease))
+        {
+            throw new InvalidOperationException("Another operation is already running.");
+        }
+
+        _actionCancellation = actionCancellation;
+        IsActionRunning = true;
+        try
+        {
+            return await action(actionCancellation.Token);
+        }
+        finally
+        {
+            IsActionRunning = false;
+            _actionCancellation = null;
+            lease!.Dispose();
+        }
     }
 
     partial void OnSearchTextChanged(string value) => ApplyFilterAndSort();
@@ -1011,6 +1107,16 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         OnPropertyChanged(nameof(CanActOnSelection));
         OnPropertyChanged(nameof(CanRenameSelection));
         OnPropertyChanged(nameof(RenameSelection));
+        OnPropertyChanged(nameof(CanExport));
+        OnPropertyChanged(nameof(CanStartNewAnalysis));
+        OnPropertyChanged(nameof(CanMutateSelection));
+    }
+
+    private void OperationChanged(object? sender, EventArgs e)
+    {
+        SelectionChanged();
+        NewAnalysisCommand.NotifyCanExecuteChanged();
+        ClearSelectionCommand.NotifyCanExecuteChanged();
     }
 
     private void NotifyResultStateChanged()

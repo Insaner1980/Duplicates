@@ -34,6 +34,14 @@
       Include="..\Duplicates\**\*.xaml"
       Link="UiSource\%(RecursiveDir)%(Filename)%(Extension)"
       CopyToOutputDirectory="PreserveNewest" />
+    <None
+      Include="..\Duplicates\app.manifest"
+      Link="UiSource\app.manifest"
+      CopyToOutputDirectory="PreserveNewest" />
+    <None
+      Include="..\Duplicates\MainWindow.xaml.cs"
+      Link="UiSource\MainWindow.xaml.cs"
+      CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

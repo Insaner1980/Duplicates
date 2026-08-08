@@ -9,6 +9,7 @@ public sealed class DuplicateFileViewModel : ObservableObject
 {
     private readonly DuplicateGroupViewModel _parent;
     private bool _isSelected;
+    private bool _isLinkSurvivor;
 
     public DuplicateFileViewModel(FileEntry file, DuplicateGroupViewModel parent)
     {
@@ -44,6 +45,43 @@ public sealed class DuplicateFileViewModel : ObservableObject
 
     public Visibility DeleteVisibility => IsSelected ? Visibility.Visible : Visibility.Collapsed;
 
+    public bool CanMutateSelection => _parent.CanMutateSelection;
+
+    public bool CanBeLinkSurvivor => CanMutateSelection && !IsSelected;
+
+    public bool IsLinkSurvivor
+    {
+        get => _isLinkSurvivor;
+        set
+        {
+            if (_isLinkSurvivor == value)
+            {
+                return;
+            }
+
+            if (!CanMutateSelection)
+            {
+                OnPropertyChanged();
+                return;
+            }
+
+            if (value)
+            {
+                if (!_parent.CanSetLinkSurvivor(this))
+                {
+                    OnPropertyChanged();
+                    return;
+                }
+
+                _parent.SetLinkSurvivor(this);
+            }
+            else if (_isLinkSurvivor)
+            {
+                _parent.ClearLinkSurvivor(this);
+            }
+        }
+    }
+
     public bool IsSelected
     {
         get => _isSelected;
@@ -51,6 +89,12 @@ public sealed class DuplicateFileViewModel : ObservableObject
         {
             if (_isSelected == value)
             {
+                return;
+            }
+
+            if (!CanMutateSelection)
+            {
+                OnPropertyChanged();
                 return;
             }
 
@@ -75,6 +119,18 @@ public sealed class DuplicateFileViewModel : ObservableObject
         OnPropertyChanged(nameof(IsKept));
         OnPropertyChanged(nameof(KeptVisibility));
         OnPropertyChanged(nameof(DeleteVisibility));
+        OnPropertyChanged(nameof(CanBeLinkSurvivor));
+    }
+
+    internal void SetLinkSurvivorCore(bool value)
+    {
+        SetProperty(ref _isLinkSurvivor, value, nameof(IsLinkSurvivor));
+    }
+
+    internal void NotifyMutationAvailabilityChanged()
+    {
+        OnPropertyChanged(nameof(CanMutateSelection));
+        OnPropertyChanged(nameof(CanBeLinkSurvivor));
     }
 
     private void SetSelectedCore(bool value)
@@ -84,6 +140,7 @@ public sealed class DuplicateFileViewModel : ObservableObject
             OnPropertyChanged(nameof(IsKept));
             OnPropertyChanged(nameof(KeptVisibility));
             OnPropertyChanged(nameof(DeleteVisibility));
+            OnPropertyChanged(nameof(CanBeLinkSurvivor));
         }
     }
 }

@@ -391,6 +391,29 @@ public sealed class NativeWinUiContractTests
     }
 
     [Fact]
+    public void AnalysisResultsPage_DisablesSelectionMutationDuringSharedOperation()
+    {
+        XDocument page = LoadXaml(@"Views\AnalysisResultsPage.xaml");
+        XElement[] actionSelections = page
+            .Descendants(Presentation + "CheckBox")
+            .Where(element => ((string?)element.Attribute("AutomationProperties.Name"))?.Contains(
+                "for action",
+                StringComparison.Ordinal) == true)
+            .ToArray();
+        XElement clearSelection = page
+            .Descendants(Presentation + "AppBarButton")
+            .Single(element => (string?)element.Attribute("Label") == "Clear selection");
+
+        Assert.Equal(2, actionSelections.Length);
+        Assert.All(
+            actionSelections,
+            selection => Assert.Equal(
+                "{Binding DataContext.CanMutateSelection, ElementName=PageRoot}",
+                (string?)selection.Attribute("IsEnabled")));
+        Assert.Equal("{Binding CanMutateSelection}", (string?)clearSelection.Attribute("IsEnabled"));
+    }
+
+    [Fact]
     public void AnalysisResultsPage_UsesCappedNativeImagePreviewAndNonfatalFallback()
     {
         XDocument page = LoadXaml(@"Views\AnalysisResultsPage.xaml");
@@ -823,6 +846,107 @@ public sealed class NativeWinUiContractTests
         Assert.Equal("Wrap", (string?)previewPath.Attribute("TextWrapping"));
         Assert.Equal("None", (string?)previewPath.Attribute("TextTrimming"));
         Assert.Equal("True", (string?)previewPath.Attribute("IsTextSelectionEnabled"));
+    }
+
+    [Fact]
+    public void ResultsPage_ExposesLinkReplacementOnlyAsAccessibleSecondaryCommands()
+    {
+        XDocument exact = LoadXaml(@"Views\ResultsPage.xaml");
+        XElement commandBar = exact
+            .Descendants(Presentation + "CommandBar")
+            .Single();
+        XElement secondaryCommands = commandBar
+            .Elements(Presentation + "CommandBar.SecondaryCommands")
+            .Single();
+        XElement[] linkCommands = secondaryCommands
+            .Elements(Presentation + "AppBarButton")
+            .Where(element => ((string?)element.Attribute("Click")) is "ReplaceWithHardLinks_Click" or "ReplaceWithSymbolicLinks_Click")
+            .ToArray();
+
+        Assert.Equal(2, linkCommands.Length);
+        Assert.Contains(linkCommands, command => (string?)command.Attribute("Label") == "Replace with hard links");
+        Assert.Contains(linkCommands, command => (string?)command.Attribute("Label") == "Replace with symbolic links");
+        Assert.All(linkCommands, command => Assert.Equal("{Binding CanReplaceWithLinks}", (string?)command.Attribute("IsEnabled")));
+
+        XDocument analysis = LoadXaml(@"Views\AnalysisResultsPage.xaml");
+        Assert.DoesNotContain(
+            analysis.Descendants(Presentation + "AppBarButton"),
+            command => ((string?)command.Attribute("Label"))?.Contains("link", StringComparison.OrdinalIgnoreCase) == true);
+    }
+
+    [Fact]
+    public void ResultsPage_UsesDedicatedAccessibleSurvivorSelectionSeparateFromDeleteSelection()
+    {
+        XDocument page = LoadXaml(@"Views\ResultsPage.xaml");
+        XElement deleteSelection = page
+            .Descendants(Presentation + "CheckBox")
+            .Single(element => (string?)element.Attribute("IsChecked") == "{Binding IsSelected, Mode=TwoWay}");
+        XElement survivorSelection = page
+            .Descendants(Presentation + "RadioButton")
+            .Single(element => (string?)element.Attribute("IsChecked") == "{Binding IsLinkSurvivor, Mode=TwoWay}");
+
+        Assert.Equal("Select file for deletion", (string?)deleteSelection.Attribute("AutomationProperties.Name"));
+        Assert.Equal("Use as link survivor", (string?)survivorSelection.Attribute("AutomationProperties.Name"));
+        Assert.Equal("{Binding CanBeLinkSurvivor}", (string?)survivorSelection.Attribute("IsEnabled"));
+    }
+
+    [Fact]
+    public void ResultsPage_DisablesSelectionMutationsDuringSharedOperation()
+    {
+        XDocument page = LoadXaml(@"Views\ResultsPage.xaml");
+        const string pageOperationBinding =
+            "{Binding ViewModel.CanMutateSelection, ElementName=PageRoot}";
+
+        XElement selectionRule = page
+            .Descendants(Presentation + "AppBarButton")
+            .Single(element => (string?)element.Attribute("Label") == "Selection rule");
+        XElement clearSelection = page
+            .Descendants(Presentation + "AppBarButton")
+            .Single(element => (string?)element.Attribute("Label") == "Clear selection");
+        XElement deleteSelection = page
+            .Descendants(Presentation + "CheckBox")
+            .Single(element => (string?)element.Attribute("IsChecked") == "{Binding IsSelected, Mode=TwoWay}");
+        XElement survivorSelection = page
+            .Descendants(Presentation + "RadioButton")
+            .Single(element => (string?)element.Attribute("IsChecked") == "{Binding IsLinkSurvivor, Mode=TwoWay}");
+        XElement[] deleteFileCommands = page
+            .Descendants(Presentation + "MenuFlyoutItem")
+            .Where(element => (string?)element.Attribute("Text") == "Delete file")
+            .ToArray();
+
+        Assert.Equal("{Binding CanMutateSelection}", (string?)selectionRule.Attribute("IsEnabled"));
+        Assert.Equal("{Binding CanMutateSelection}", (string?)clearSelection.Attribute("IsEnabled"));
+        Assert.Equal("{Binding CanMutateSelection}", (string?)deleteSelection.Attribute("IsEnabled"));
+        Assert.Equal("{Binding CanBeLinkSurvivor}", (string?)survivorSelection.Attribute("IsEnabled"));
+        Assert.NotEmpty(deleteFileCommands);
+        Assert.All(
+            deleteFileCommands,
+            command => Assert.Equal(pageOperationBinding, (string?)command.Attribute("IsEnabled")));
+    }
+
+    [Fact]
+    public void Manifest_RemainsNonElevatedForSymbolicLinkCreation()
+    {
+        string path = Path.Combine(AppContext.BaseDirectory, "UiSource", "app.manifest");
+        XDocument manifest = XDocument.Load(path);
+        XElement requestedExecutionLevel = manifest
+            .Descendants()
+            .Single(element => element.Name.LocalName == "requestedExecutionLevel");
+
+        Assert.Equal("asInvoker", (string?)requestedExecutionLevel.Attribute("level"));
+        Assert.Equal("false", (string?)requestedExecutionLevel.Attribute("uiAccess"));
+    }
+
+    [Fact]
+    public void MainWindow_InterceptsAppWindowClosingBeforeAwaitingOperationCleanup()
+    {
+        string path = Path.Combine(AppContext.BaseDirectory, "UiSource", "MainWindow.xaml.cs");
+        string source = File.ReadAllText(path);
+
+        Assert.Contains("AppWindow.Closing += AppWindow_Closing", source, StringComparison.Ordinal);
+        Assert.Contains("args.Cancel = true", source, StringComparison.Ordinal);
+        Assert.Contains("ConfirmCloseAsync", source, StringComparison.Ordinal);
+        Assert.Contains("Close();", source, StringComparison.Ordinal);
     }
 
     private static XDocument LoadXaml(string relativePath)

@@ -17,17 +17,21 @@ public sealed partial class AnalysisViewModel : ObservableObject
     private readonly IAnalysisService _analysisService;
     private readonly AnalysisSessionStore _sessionStore;
     private readonly PathScopeViewModel _pathScope;
+    private readonly IAppOperationCoordinator _operationCoordinator;
     private CancellationTokenSource? _analysisCancellation;
 
     public AnalysisViewModel(
         IAnalysisService analysisService,
         AnalysisSessionStore sessionStore,
-        PathScopeViewModel pathScope)
+        PathScopeViewModel pathScope,
+        IAppOperationCoordinator? operationCoordinator = null)
     {
         _analysisService = analysisService;
         _sessionStore = sessionStore;
         _pathScope = pathScope;
+        _operationCoordinator = operationCoordinator ?? new AppOperationCoordinator();
         _pathScope.PropertyChanged += PathScopeChanged;
+        _operationCoordinator.ActiveOperationChanged += OperationChanged;
         SelectTool(ToolKind.EmptyFolders);
     }
 
@@ -158,13 +162,26 @@ public sealed partial class AnalysisViewModel : ObservableObject
             return;
         }
 
+        var cancellation = new CancellationTokenSource();
+        if (!_operationCoordinator.TryAcquire(
+                new AppOperationDescriptor(AppOperationKind.AnalysisRun),
+                cancellation.Cancel,
+                out IAppOperationLease? lease))
+        {
+            cancellation.Dispose();
+            StatusSeverity = InfoBarSeverity.Informational;
+            StatusMessage = "Another operation is already running.";
+            return;
+        }
+
         IsAnalyzing = true;
         StatusMessage = string.Empty;
-        _analysisCancellation = new CancellationTokenSource();
+        _analysisCancellation = cancellation;
         CancellationToken cancellationToken = _analysisCancellation.Token;
         ToolKind tool = Tool;
         AnalysisScope scope = BuildScope();
         ToolOptions toolOptions = BuildToolOptions(tool);
+        AnalysisResult? completedResult = null;
 
         try
         {
@@ -176,8 +193,7 @@ public sealed partial class AnalysisViewModel : ObservableObject
                 progress,
                 cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
-            _sessionStore.SetCompleted(tool, scope, toolOptions, result);
-            AnalysisCompleted?.Invoke(this, _sessionStore.CurrentSession!);
+            completedResult = result;
         }
         catch (OperationCanceledException)
         {
@@ -195,6 +211,13 @@ public sealed partial class AnalysisViewModel : ObservableObject
             _analysisCancellation = null;
             IsAnalyzing = false;
             StartAnalysisCommand.NotifyCanExecuteChanged();
+            lease!.Dispose();
+        }
+
+        if (completedResult is not null)
+        {
+            _sessionStore.SetCompleted(tool, scope, toolOptions, completedResult);
+            AnalysisCompleted?.Invoke(this, _sessionStore.CurrentSession!);
         }
     }
 
@@ -213,7 +236,10 @@ public sealed partial class AnalysisViewModel : ObservableObject
     [RelayCommand]
     private void SetLargeFileMinimumSizeTo10Gb() => LargeFileMinimumSizeValue = 10_737_418_240;
 
-    private bool CanStartAnalysis() => !IsAnalyzing && PathScope.HasIncludedPaths;
+    private bool CanStartAnalysis() =>
+        !IsAnalyzing &&
+        _operationCoordinator.ActiveOperation is null &&
+        PathScope.HasIncludedPaths;
 
     private AnalysisScope BuildScope() => new()
     {
@@ -304,6 +330,11 @@ public sealed partial class AnalysisViewModel : ObservableObject
     }
 
     partial void OnIsAnalyzingChanged(bool value) => StartAnalysisCommand.NotifyCanExecuteChanged();
+
+    private void OperationChanged(object? sender, EventArgs e)
+    {
+        StartAnalysisCommand.NotifyCanExecuteChanged();
+    }
 
     private void PathScopeChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {

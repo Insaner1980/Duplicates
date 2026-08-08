@@ -205,7 +205,7 @@ public sealed partial class AnalysisResultsPage : Page
 
     private async void Export_Click(object sender, RoutedEventArgs e)
     {
-        if (App.Current.MainWindow is null)
+        if (App.Current.MainWindow is null || !ViewModel.CanExport)
         {
             return;
         }

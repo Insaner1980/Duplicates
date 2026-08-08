@@ -19,7 +19,8 @@
                 <CheckBox
                     VerticalAlignment="Center"
                     AutomationProperties.Name="Select finding for action"
-                    IsChecked="{Binding IsSelected, Mode=TwoWay}" />
+                    IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                    IsEnabled="{Binding DataContext.CanMutateSelection, ElementName=PageRoot}" />
                 <StackPanel Grid.Column="1" Spacing="4">
                     <TextBlock FontWeight="SemiBold" Text="{Binding DisplayName}" />
                     <TextBlock
@@ -61,7 +62,8 @@
                                 <CheckBox
                                     VerticalAlignment="Center"
                                     AutomationProperties.Name="Select similar item for action"
-                                    IsChecked="{Binding IsSelected, Mode=TwoWay}" />
+                                    IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                    IsEnabled="{Binding DataContext.CanMutateSelection, ElementName=PageRoot}" />
                                 <StackPanel Grid.Column="1" Spacing="2">
                                     <HyperlinkButton
                                         Padding="0"
@@ -147,12 +149,14 @@
                 AutomationProperties.Name="New analysis"
                 Command="{Binding NewAnalysisCommand}"
                 Icon="Refresh"
+                IsEnabled="{Binding CanStartNewAnalysis}"
                 Label="New analysis" />
             <AppBarButton
                 AccessKey="C"
                 AutomationProperties.Name="Clear action selection"
                 Command="{Binding ClearSelectionCommand}"
                 Icon="ClearSelection"
+                IsEnabled="{Binding CanMutateSelection}"
                 Label="Clear selection" />
             <AppBarButton
                 AccessKey="P"
@@ -186,6 +190,7 @@
                 AccessKey="E"
                 AutomationProperties.Name="Export analysis results"
                 Icon="Save"
+                IsEnabled="{Binding CanExport}"
                 Label="Export"
                 Click="Export_Click" />
             <CommandBar.Content>

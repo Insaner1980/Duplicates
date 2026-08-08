@@ -1,6 +1,7 @@
 using Duplicates.Models;
 using Duplicates.Services;
 using Duplicates.Views;
+using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Windows.Graphics;
@@ -10,11 +11,16 @@ namespace Duplicates;
 public sealed partial class MainWindow : Window
 {
     private readonly AppServices _services;
+    private readonly MainWindowOperationGuard _operationGuard;
     private bool _isRestoringAnalysisSelection;
+    private bool _isRestoringNavigationSelection;
+    private bool _isCloseReentry;
+    private object? _lastNavigationItem;
 
     public MainWindow(AppServices services)
     {
         _services = services;
+        _operationGuard = new MainWindowOperationGuard(_services.OperationCoordinator);
         InitializeComponent();
 
         ExtendsContentIntoTitleBar = true;
@@ -24,15 +30,19 @@ public sealed partial class MainWindow : Window
 
         _services.ThemeService.Apply(this, Root, _services.SettingsService.Current);
         _services.SettingsService.SettingsChanged += SettingsChanged;
+        AppWindow.Closing += AppWindow_Closing;
         Closed += MainWindow_Closed;
 
         RootNavigationView.SelectedItem = ScanNavigationItem;
+        _lastNavigationItem = ScanNavigationItem;
         RootFrame.Navigate(typeof(ScanPage));
     }
 
     private void MainWindow_Closed(object sender, WindowEventArgs args)
     {
         _services.SettingsService.SettingsChanged -= SettingsChanged;
+        AppWindow.Closing -= AppWindow_Closing;
+        _operationGuard.Dispose();
     }
 
     private void SettingsChanged(object? sender, AppSettings settings)
@@ -45,29 +55,47 @@ public sealed partial class MainWindow : Window
         RootNavigationView.IsPaneOpen = !RootNavigationView.IsPaneOpen;
     }
 
-    private void RootNavigationView_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
+    private async void RootNavigationView_SelectionChanged(
+        NavigationView sender,
+        NavigationViewSelectionChangedEventArgs args)
     {
-        if (_isRestoringAnalysisSelection)
+        if (_isRestoringAnalysisSelection || _isRestoringNavigationSelection)
         {
             return;
         }
 
-        if (args.IsSettingsSelected)
+        object? requestedItem = args.SelectedItem;
+        bool isSettingsSelected = args.IsSettingsSelected;
+        string? requestedTag = args.SelectedItemContainer?.Tag as string;
+        AppOperationDescriptor? active = _services.OperationCoordinator.ActiveOperation;
+        if (active is not null && IsOwningPage(active.Kind, RootFrame.CurrentSourcePageType))
+        {
+            bool accepted = await _operationGuard.ConfirmDepartureAsync(ShowDepartureConfirmationAsync);
+            if (!accepted)
+            {
+                RestoreNavigationSelection(_lastNavigationItem);
+                return;
+            }
+
+            RestoreNavigationSelection(requestedItem);
+        }
+
+        if (isSettingsSelected)
         {
             NavigateTo(typeof(SettingsPage));
+            _lastNavigationItem = requestedItem;
             return;
         }
 
-        if (args.SelectedItemContainer?.Tag is not string tag)
+        if (requestedTag is null ||
+            !Enum.TryParse(requestedTag, out ToolKind kind) ||
+            !Enum.IsDefined(kind))
         {
+            RestoreNavigationSelection(_lastNavigationItem);
             return;
         }
 
-        if (!Enum.TryParse(tag, out ToolKind kind) || !Enum.IsDefined(kind))
-        {
-            return;
-        }
-
+        _lastNavigationItem = requestedItem;
         if (kind == ToolKind.DuplicateFiles)
         {
             NavigateTo(typeof(ScanPage));
@@ -81,6 +109,74 @@ public sealed partial class MainWindow : Window
         }
 
         _ = ShowToolNotInstalledDialogAsync(ToolDescriptor.For(kind));
+    }
+
+    private async void AppWindow_Closing(AppWindow sender, AppWindowClosingEventArgs args)
+    {
+        if (_isCloseReentry || _services.OperationCoordinator.ActiveOperation is null)
+        {
+            return;
+        }
+
+        args.Cancel = true;
+        if (!await _operationGuard.ConfirmCloseAsync(ShowCloseConfirmationAsync))
+        {
+            return;
+        }
+
+        _isCloseReentry = true;
+        Close();
+    }
+
+    private Task<bool> ShowDepartureConfirmationAsync() => ShowOperationConfirmationAsync(
+        "Leave while the operation continues?",
+        "The current operation will keep running. You can return to its page to view progress.",
+        "Leave page");
+
+    private Task<bool> ShowCloseConfirmationAsync() => ShowOperationConfirmationAsync(
+        "Cancel the operation and close?",
+        "Duplicates will request cancellation and wait for any safe file transaction to finish before closing.",
+        "Cancel and close");
+
+    private async Task<bool> ShowOperationConfirmationAsync(
+        string title,
+        string content,
+        string primaryButtonText)
+    {
+        var dialog = new ContentDialog
+        {
+            XamlRoot = Root.XamlRoot,
+            Title = title,
+            Content = content,
+            PrimaryButtonText = primaryButtonText,
+            CloseButtonText = "Stay",
+            DefaultButton = ContentDialogButton.Close,
+        };
+        return await dialog.ShowAsync() == ContentDialogResult.Primary;
+    }
+
+    private static bool IsOwningPage(AppOperationKind kind, Type? pageType) => kind switch
+    {
+        AppOperationKind.ExactScan => pageType == typeof(ScanPage),
+        AppOperationKind.AnalysisRun => pageType == typeof(AnalysisPage),
+        AppOperationKind.ExactResultsAction => pageType == typeof(ResultsPage),
+        AppOperationKind.AnalysisResultsAction => pageType == typeof(AnalysisResultsPage),
+        AppOperationKind.ExifCleaning => pageType?.Name == "ExifRemoverPage",
+        AppOperationKind.VideoOptimization => pageType?.Name == "VideoOptimizerPage",
+        _ => false,
+    };
+
+    private void RestoreNavigationSelection(object? item)
+    {
+        _isRestoringNavigationSelection = true;
+        try
+        {
+            RootNavigationView.SelectedItem = item;
+        }
+        finally
+        {
+            _isRestoringNavigationSelection = false;
+        }
     }
 
     private void NavigateTo(Type pageType)

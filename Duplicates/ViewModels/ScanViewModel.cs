@@ -16,6 +16,7 @@ public sealed partial class ScanViewModel : ObservableObject
     private readonly ISettingsService _settingsService;
     private readonly ResultsStore _resultsStore;
     private readonly PathScopeViewModel _pathScope;
+    private readonly IAppOperationCoordinator _operationCoordinator;
     private CancellationTokenSource? _scanCancellation;
     private DateTimeOffset _scanStartedAt;
 
@@ -23,14 +24,17 @@ public sealed partial class ScanViewModel : ObservableObject
         DuplicateScanner scanner,
         ISettingsService settingsService,
         ResultsStore resultsStore,
-        PathScopeViewModel pathScope)
+        PathScopeViewModel pathScope,
+        IAppOperationCoordinator? operationCoordinator = null)
     {
         _scanner = scanner;
         _settingsService = settingsService;
         _resultsStore = resultsStore;
         _pathScope = pathScope;
+        _operationCoordinator = operationCoordinator ?? new AppOperationCoordinator();
         _pathScope.PropertyChanged += PathScopeChanged;
         _settingsService.SettingsChanged += SettingsChanged;
+        _operationCoordinator.ActiveOperationChanged += OperationChanged;
         ResetFromSettings();
     }
 
@@ -149,18 +153,33 @@ public sealed partial class ScanViewModel : ObservableObject
     [RelayCommand(CanExecute = nameof(CanStartScan))]
     private async Task StartScanAsync()
     {
+        var cancellation = new CancellationTokenSource();
+        if (!_operationCoordinator.TryAcquire(
+                new AppOperationDescriptor(AppOperationKind.ExactScan),
+                cancellation.Cancel,
+                out IAppOperationLease? lease))
+        {
+            cancellation.Dispose();
+            StatusMessage = "Another operation is already running.";
+            return;
+        }
+
         IsScanning = true;
         StatusMessage = string.Empty;
         _scanStartedAt = DateTimeOffset.UtcNow;
-        _scanCancellation = new CancellationTokenSource();
+        _scanCancellation = cancellation;
+        ScanResult? completedResult = null;
+        AnalysisScope? completedScope = null;
+        DateTimeOffset completedAt = default;
 
         try
         {
             ScanOptions options = BuildScanOptions();
             var progress = new Progress<ScanProgress>(UpdateProgress);
             ScanResult result = await _scanner.ScanAsync(options, progress, _scanCancellation.Token);
-            _resultsStore.SetResult(result, BuildResultScope(options), DateTimeOffset.UtcNow);
-            ScanCompleted?.Invoke(this, result);
+            completedResult = result;
+            completedScope = BuildResultScope(options);
+            completedAt = DateTimeOffset.UtcNow;
         }
         catch (OperationCanceledException)
         {
@@ -176,6 +195,13 @@ public sealed partial class ScanViewModel : ObservableObject
             _scanCancellation = null;
             IsScanning = false;
             StartScanCommand.NotifyCanExecuteChanged();
+            lease!.Dispose();
+        }
+
+        if (completedResult is not null)
+        {
+            _resultsStore.SetResult(completedResult, completedScope!, completedAt);
+            ScanCompleted?.Invoke(this, completedResult);
         }
     }
 
@@ -206,7 +232,9 @@ public sealed partial class ScanViewModel : ObservableObject
 
     private bool CanStartScan()
     {
-        return !IsScanning && PathScope.HasIncludedPaths;
+        return !IsScanning &&
+            _operationCoordinator.ActiveOperation is null &&
+            PathScope.HasIncludedPaths;
     }
 
     private ScanOptions BuildScanOptions()
@@ -334,6 +362,11 @@ public sealed partial class ScanViewModel : ObservableObject
     }
 
     partial void OnIsScanningChanged(bool value)
+    {
+        StartScanCommand.NotifyCanExecuteChanged();
+    }
+
+    private void OperationChanged(object? sender, EventArgs e)
     {
         StartScanCommand.NotifyCanExecuteChanged();
     }
