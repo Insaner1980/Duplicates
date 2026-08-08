@@ -84,6 +84,25 @@ public sealed class BadNameAnalyzer
         string trimmedInspectedName = TrimUnsafeEnds(inspectedName);
         List<NameSegment> safeSegments = CreateSafeSegments(currentName);
         string sanitizedInspectedName = JoinInspected(safeSegments);
+        List<string> reasons = GetReasons(
+            inspectedName,
+            trimmedInspectedName,
+            sanitizedInspectedName);
+
+        if (reasons.Count == 0)
+        {
+            return null;
+        }
+
+        string suggestion = EnsureSafeSuggestion(BuildSuggestion(safeSegments));
+        return new BadNameFinding(fullPath, currentName, suggestion, reasons);
+    }
+
+    private static List<string> GetReasons(
+        string inspectedName,
+        string trimmedInspectedName,
+        string sanitizedInspectedName)
+    {
         var reasons = new List<string>(7);
 
         if (inspectedName.Any(IsControlCharacter))
@@ -124,13 +143,29 @@ public sealed class BadNameAnalyzer
             reasons.Add("Has an empty file name stem");
         }
 
-        if (reasons.Count == 0)
+        return reasons;
+    }
+
+    private static string EnsureSafeSuggestion(string suggestion)
+    {
+        if (!HasDefinedRisk(suggestion))
         {
-            return null;
+            return suggestion;
         }
 
-        string suggestion = BuildSuggestion(safeSegments);
-        return new BadNameFinding(fullPath, currentName, suggestion, reasons);
+        string inspectedSuggestion = NormalizeForInspection(suggestion);
+        string fallback = BuildSuggestion(CreateSafeSegments(inspectedSuggestion));
+        return HasDefinedRisk(fallback) ? "file" : fallback;
+    }
+
+    private static bool HasDefinedRisk(string name)
+    {
+        string inspectedName = NormalizeForInspection(name);
+        List<NameSegment> safeSegments = CreateSafeSegments(name);
+        return GetReasons(
+            inspectedName,
+            TrimUnsafeEnds(inspectedName),
+            JoinInspected(safeSegments)).Count > 0;
     }
 
     private static string NormalizeForInspection(string name)
