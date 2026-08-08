@@ -300,17 +300,17 @@ public sealed class WindowsFileFormatProbe : IFileFormatProbe
         ulong entryCount = entryCount16;
         ulong centralDirectorySize = centralDirectorySize32;
         ulong centralDirectoryOffset = centralDirectoryOffset32;
+        ulong centralDirectoryLimit = (ulong)endRecordPosition;
         if (entryCount16 == ushort.MaxValue ||
             centralDirectorySize32 == uint.MaxValue ||
             centralDirectoryOffset32 == uint.MaxValue)
         {
-            (entryCount, centralDirectorySize, centralDirectoryOffset) = ReadZip64EndRecord(
-                stream,
-                endRecordPosition);
+            (entryCount, centralDirectorySize, centralDirectoryOffset, centralDirectoryLimit) =
+                ReadZip64EndRecord(stream, endRecordPosition);
         }
 
-        if (centralDirectoryOffset > (ulong)stream.Length ||
-            centralDirectorySize > (ulong)stream.Length - centralDirectoryOffset)
+        if (centralDirectoryOffset > centralDirectoryLimit ||
+            centralDirectorySize > centralDirectoryLimit - centralDirectoryOffset)
         {
             throw new InvalidDataException();
         }
@@ -353,7 +353,11 @@ public sealed class WindowsFileFormatProbe : IFileFormatProbe
         return hasEncryptedEntry;
     }
 
-    private static (ulong EntryCount, ulong CentralDirectorySize, ulong CentralDirectoryOffset) ReadZip64EndRecord(
+    private static (
+        ulong EntryCount,
+        ulong CentralDirectorySize,
+        ulong CentralDirectoryOffset,
+        ulong EndRecordPosition) ReadZip64EndRecord(
         Stream stream,
         long endRecordPosition)
     {
@@ -414,7 +418,8 @@ public sealed class WindowsFileFormatProbe : IFileFormatProbe
         return (
             entryCount,
             BinaryPrimitives.ReadUInt64LittleEndian(record.AsSpan(40)),
-            BinaryPrimitives.ReadUInt64LittleEndian(record.AsSpan(48)));
+            BinaryPrimitives.ReadUInt64LittleEndian(record.AsSpan(48)),
+            recordPosition);
     }
 
     private static bool IsFileSystemFailure(Exception exception) =>

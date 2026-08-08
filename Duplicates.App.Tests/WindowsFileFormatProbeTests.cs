@@ -189,6 +189,60 @@ public sealed class WindowsFileFormatProbeTests : IDisposable
     }
 
     [Fact]
+    public async Task ProbeAsync_OrdinaryCentralDirectoryOverlappingEndRecordIsInvalid()
+    {
+        byte[] bytes = CreateZipWithSingleEntry();
+        int endRecordOffset = FindEndOfCentralDirectory(bytes);
+        int centralDirectoryOffset = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(
+            bytes.AsSpan(endRecordOffset + 16)));
+        uint centralDirectorySize = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(endRecordOffset + 12));
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(centralDirectoryOffset + 32), 1);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(endRecordOffset + 12), centralDirectorySize + 1);
+        string path = await WriteFixtureAsync("overlapping-end-record.zip", bytes);
+
+        await using (FileStream stream = File.OpenRead(path))
+        using (var archive = new ZipArchive(stream, ZipArchiveMode.Read, leaveOpen: false))
+        {
+            Assert.Single(archive.Entries);
+        }
+
+        FileProbeResult result = await ProbeDetectedAsync(path);
+
+        Assert.Equal(FileProbeStatus.Invalid, result.Status);
+        Assert.Equal("ZipCentralDirectoryFailure", result.ErrorType);
+    }
+
+    [Fact]
+    public async Task ProbeAsync_Zip64CentralDirectoryOverlappingZip64EndRecordIsInvalid()
+    {
+        byte[] bytes = CreateValidZip64();
+        int endRecordOffset = FindEndOfCentralDirectory(bytes);
+        int locatorOffset = endRecordOffset - 20;
+        int zip64EndRecordOffset = checked((int)BinaryPrimitives.ReadUInt64LittleEndian(
+            bytes.AsSpan(locatorOffset + 8)));
+        int centralDirectoryOffset = checked((int)BinaryPrimitives.ReadUInt64LittleEndian(
+            bytes.AsSpan(zip64EndRecordOffset + 48)));
+        ulong centralDirectorySize = BinaryPrimitives.ReadUInt64LittleEndian(
+            bytes.AsSpan(zip64EndRecordOffset + 40));
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(centralDirectoryOffset + 32), 1);
+        BinaryPrimitives.WriteUInt64LittleEndian(
+            bytes.AsSpan(zip64EndRecordOffset + 40),
+            centralDirectorySize + 1);
+        string path = await WriteFixtureAsync("overlapping-zip64-end-record.zip", bytes);
+
+        await using (FileStream stream = File.OpenRead(path))
+        using (var archive = new ZipArchive(stream, ZipArchiveMode.Read, leaveOpen: false))
+        {
+            Assert.Single(archive.Entries);
+        }
+
+        FileProbeResult result = await ProbeDetectedAsync(path);
+
+        Assert.Equal(FileProbeStatus.Invalid, result.Status);
+        Assert.Equal("ZipCentralDirectoryFailure", result.ErrorType);
+    }
+
+    [Fact]
     public async Task ProbeAsync_ValidPngWindowsSmokeIsValid()
     {
         string path = await WriteFixtureAsync(
