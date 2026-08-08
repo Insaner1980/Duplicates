@@ -49,7 +49,7 @@ public sealed partial class AnalysisViewModel : ObservableObject
             "Files at least {0:N0} days old are included.",
             GetTemporaryFileMinimumAgeDays()),
         ToolKind.SimilarImages => $"{ImageSimilarityPreset} image matching allows a Hamming distance up to {GetImageMaximumHammingDistance()}.",
-        ToolKind.SimilarVideos => "Balanced similarity matching is used.",
+        ToolKind.SimilarVideos => $"{VideoSimilarityPreset} five-frame Windows media matching allows a mean frame distance up to {GetVideoMaximumMeanFrameDistance()}.",
         ToolKind.MusicDuplicates => "Track durations may differ by up to 2 seconds.",
         _ => "No additional options are required.",
     };
@@ -71,6 +71,10 @@ public sealed partial class AnalysisViewModel : ObservableObject
         ? Visibility.Visible
         : Visibility.Collapsed;
 
+    public Visibility SimilarVideoOptionsVisibility => Tool == ToolKind.SimilarVideos
+        ? Visibility.Visible
+        : Visibility.Collapsed;
+
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(OptionsSummary))]
     public partial double LargeFileMinimumSizeValue { get; set; } = DefaultLargeFileMinimumSizeBytes;
@@ -82,6 +86,10 @@ public sealed partial class AnalysisViewModel : ObservableObject
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(OptionsSummary))]
     public partial SimilarityPreset ImageSimilarityPreset { get; set; } = SimilarityPreset.Balanced;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(OptionsSummary))]
+    public partial SimilarityPreset VideoSimilarityPreset { get; set; } = SimilarityPreset.Balanced;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(SetupVisibility))]
@@ -139,6 +147,7 @@ public sealed partial class AnalysisViewModel : ObservableObject
         OnPropertyChanged(nameof(LargeFileOptionsVisibility));
         OnPropertyChanged(nameof(TemporaryFileOptionsVisibility));
         OnPropertyChanged(nameof(SimilarImageOptionsVisibility));
+        OnPropertyChanged(nameof(SimilarVideoOptionsVisibility));
     }
 
     [RelayCommand(CanExecute = nameof(CanStartAnalysis))]
@@ -227,7 +236,7 @@ public sealed partial class AnalysisViewModel : ObservableObject
         ToolKind.BigFiles => new LargeFileToolOptions(GetLargeFileMinimumSizeBytes()),
         ToolKind.TemporaryFiles => BuildTemporaryFileOptions(),
         ToolKind.SimilarImages => new SimilarImageToolOptions(GetImageMaximumHammingDistance()),
-        ToolKind.SimilarVideos => new SimilarVideoToolOptions(10),
+        ToolKind.SimilarVideos => new SimilarVideoToolOptions(GetVideoMaximumMeanFrameDistance()),
         ToolKind.MusicDuplicates => new MusicDuplicateToolOptions(TimeSpan.FromSeconds(2)),
         ToolKind.EmptyFolders or ToolKind.EmptyFiles or ToolKind.InvalidLinks or
             ToolKind.BrokenFiles or ToolKind.BadExtensions or ToolKind.BadNames => new NoToolOptions(),
@@ -243,6 +252,13 @@ public sealed partial class AnalysisViewModel : ObservableObject
         SimilarityPreset.Strict => 4,
         SimilarityPreset.Broad => 12,
         _ => 8,
+    };
+
+    private int GetVideoMaximumMeanFrameDistance() => VideoSimilarityPreset switch
+    {
+        SimilarityPreset.Strict => 5,
+        SimilarityPreset.Broad => 13,
+        _ => 9,
     };
 
     private TemporaryFileToolOptions BuildTemporaryFileOptions()

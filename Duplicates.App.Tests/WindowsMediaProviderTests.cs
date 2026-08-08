@@ -1,5 +1,6 @@
 using Duplicates.Engine.Analysis.Media;
 using Duplicates.Engine.Analysis;
+using Duplicates.Engine.Analysis.Analyzers;
 using Duplicates.Models;
 using Duplicates.Services;
 using Windows.Foundation;
@@ -242,6 +243,157 @@ public sealed class WindowsMediaProviderTests : IDisposable
         Assert.True(topBottom > leftRight, $"top/bottom={topBottom}, left/right={leftRight}");
         MoveAwayAndBack(video.Path);
         await File.WriteAllBytesAsync(video.Path, new byte[original.Length]);
+    }
+
+    [Theory]
+    [InlineData(16d / 9d, 512, 0)]
+    [InlineData(1d, 512, 0)]
+    [InlineData(9d / 16d, 0, 512)]
+    public void MediaPreviewLoader_VideoThumbnailUsesOnlyTheDisplayLongDimension(
+        double displayAspectRatio,
+        int expectedWidth,
+        int expectedHeight)
+    {
+        var evidence = new VideoSimilarityEvidence(
+            0,
+            0,
+            0,
+            0,
+            0,
+            1920,
+            1080,
+            displayAspectRatio,
+            TimeSpan.FromSeconds(10),
+            1_000_000,
+            30,
+            "H264");
+
+        (int width, int height) = WindowsMediaPreviewLoader.GetVideoThumbnailSize(evidence);
+
+        Assert.Equal(expectedWidth, width);
+        Assert.Equal(expectedHeight, height);
+    }
+
+    [Fact]
+    public async Task MediaPreviewLoader_DecodesVideoMidpointReleasesSourceAndLeavesFingerprintCacheUntouched()
+    {
+        StorageFolder folder = await StorageFolder.GetFolderFromPathAsync(_root);
+        StorageFile red = await WriteColorImageAsync(folder, "preview-red.png", 255, 0, 0);
+        StorageFile green = await WriteColorImageAsync(folder, "preview-green.png", 0, 255, 0);
+        StorageFile blue = await WriteColorImageAsync(folder, "preview-blue.png", 0, 0, 255);
+        StorageFile video = await RenderSequenceVideoAsync(
+            folder,
+            "preview.mp4",
+            [red, green, blue],
+            width: 640,
+            height: 360,
+            bitrate: 2_000_000);
+        string cachePath = Path.Combine(_root, "preview-cache.json");
+        int fingerprintCalls = 0;
+        var provider = new WindowsVideoSampleProvider(
+            new MediaFingerprintCache(cachePath),
+            (_, _) => Task.FromResult(Video((byte)++fingerprintCalls)));
+        _ = await provider.GetSampleAsync(video.Path, CancellationToken.None);
+        byte[] cacheBefore = await File.ReadAllBytesAsync(cachePath);
+        var info = new FileInfo(video.Path);
+        SimilarityItem item = new()
+        {
+            FullPath = video.Path,
+            SizeBytes = info.Length,
+            ModifiedUtc = info.LastWriteTimeUtc,
+            SimilarityPercent = 100,
+            Evidence = new VideoSimilarityEvidence(
+                0,
+                0,
+                0,
+                0,
+                0,
+                640,
+                360,
+                16d / 9d,
+                TimeSpan.FromHours(1),
+                2_000_000,
+                30,
+                "H264"),
+        };
+
+        MediaPreviewData preview = await new WindowsMediaPreviewLoader().LoadAsync(
+            ToolKind.SimilarVideos,
+            item,
+            CancellationToken.None);
+
+        Assert.Equal(512, preview.Width);
+        Assert.InRange(preview.Height, 287, 289);
+        AssertPreviewPixel(preview, preview.Width / 2, preview.Height / 2, (0, 255, 0));
+        Assert.Equal(1, fingerprintCalls);
+        Assert.Equal(cacheBefore, await File.ReadAllBytesAsync(cachePath));
+        long originalLength = info.Length;
+        MoveAwayAndBack(video.Path);
+        await File.WriteAllBytesAsync(video.Path, new byte[originalLength]);
+        Assert.Equal(originalLength, new FileInfo(video.Path).Length);
+    }
+
+    [Fact]
+    public async Task SimilarVideoWindowsSmoke_GroupsSourceAndLowerBitrateTranscodeButNotUnrelated()
+    {
+        StorageFolder folder = await StorageFolder.GetFolderFromPathAsync(_root);
+        var sourceImages = new List<StorageFile>();
+        var unrelatedImages = new List<StorageFile>();
+        for (int index = 0; index < 5; index++)
+        {
+            sourceImages.Add(await WritePatternImageAsync(folder, $"source-{index}.png", index, transpose: false));
+            unrelatedImages.Add(await WritePatternImageAsync(folder, $"unrelated-{index}.png", index, transpose: true));
+        }
+
+        StorageFile source = await RenderSequenceVideoAsync(
+            folder,
+            "source.mp4",
+            sourceImages,
+            width: 640,
+            height: 360,
+            bitrate: 4_000_000);
+        StorageFile unrelated = await RenderSequenceVideoAsync(
+            folder,
+            "unrelated.mp4",
+            unrelatedImages,
+            width: 640,
+            height: 360,
+            bitrate: 4_000_000);
+        StorageFile transcode = await TranscodeVideoAsync(
+            folder,
+            source,
+            "transcode.mp4",
+            width: 640,
+            height: 360,
+            bitrate: 750_000);
+        var files = new[] { source, transcode, unrelated }
+            .Select(static file =>
+            {
+                var info = new FileInfo(file.Path);
+                info.Refresh();
+                return new InventoryFile(
+                    file.Path,
+                    file.Name,
+                    Path.GetExtension(file.Name).ToLowerInvariant(),
+                    Path.GetDirectoryName(file.Path)!,
+                    info.Length,
+                    info.CreationTimeUtc,
+                    info.LastWriteTimeUtc,
+                    System.IO.FileAttributes.Normal);
+            })
+            .ToArray();
+
+        AnalysisResult result = await new SimilarVideoAnalyzer(new WindowsVideoSampleProvider()).AnalyzeAsync(
+            new FileInventory(files, [], [], [], []),
+            new SimilarVideoOptions(9),
+            CancellationToken.None);
+
+        SimilarityGroup group = Assert.Single(result.Groups);
+        Assert.True(
+            new HashSet<string>([source.Path, transcode.Path], StringComparer.OrdinalIgnoreCase)
+                .SetEquals(group.Items.Select(static item => item.FullPath)));
+        Assert.DoesNotContain(group.Items, item => string.Equals(item.FullPath, unrelated.Path, StringComparison.OrdinalIgnoreCase));
+        Assert.Empty(result.SkippedPaths);
     }
 
     [Fact]
@@ -514,6 +666,163 @@ public sealed class WindowsMediaProviderTests : IDisposable
         }
 
         return file;
+    }
+
+    private static async Task<StorageFile> WriteColorImageAsync(
+        StorageFolder folder,
+        string name,
+        byte red,
+        byte green,
+        byte blue)
+    {
+        const uint width = 320;
+        const uint height = 180;
+        StorageFile file = await folder.CreateFileAsync(name, CreationCollisionOption.ReplaceExisting);
+        using var stream = await file.OpenAsync(FileAccessMode.ReadWrite);
+        BitmapEncoder encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, stream);
+        try
+        {
+            byte[] pixels = new byte[checked((int)(width * height * 4))];
+            for (int offset = 0; offset < pixels.Length; offset += 4)
+            {
+                pixels[offset] = blue;
+                pixels[offset + 1] = green;
+                pixels[offset + 2] = red;
+                pixels[offset + 3] = 255;
+            }
+
+            encoder.SetPixelData(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Ignore, width, height, 96, 96, pixels);
+            await encoder.FlushAsync();
+        }
+        finally
+        {
+            MediaLuminanceConverter.ReleaseNativeObject(encoder);
+        }
+
+        return file;
+    }
+
+    private static async Task<StorageFile> WritePatternImageAsync(
+        StorageFolder folder,
+        string name,
+        int seed,
+        bool transpose)
+    {
+        const uint width = 320;
+        const uint height = 180;
+        StorageFile file = await folder.CreateFileAsync(name, CreationCollisionOption.ReplaceExisting);
+        using var stream = await file.OpenAsync(FileAccessMode.ReadWrite);
+        BitmapEncoder encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, stream);
+        try
+        {
+            byte[] pixels = new byte[checked((int)(width * height * 4))];
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    int first = transpose ? y : x;
+                    int second = transpose ? x : y;
+                    bool bright = ((first + (seed * 37)) % 160 < 64) ^
+                        (second > (seed + 1) * 24);
+                    byte value = bright ? (byte)255 : (byte)0;
+                    int offset = ((y * (int)width) + x) * 4;
+                    pixels[offset] = value;
+                    pixels[offset + 1] = value;
+                    pixels[offset + 2] = value;
+                    pixels[offset + 3] = 255;
+                }
+            }
+
+            encoder.SetPixelData(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Ignore, width, height, 96, 96, pixels);
+            await encoder.FlushAsync();
+        }
+        finally
+        {
+            MediaLuminanceConverter.ReleaseNativeObject(encoder);
+        }
+
+        return file;
+    }
+
+    private static async Task<StorageFile> RenderSequenceVideoAsync(
+        StorageFolder folder,
+        string name,
+        IReadOnlyList<StorageFile> images,
+        uint width,
+        uint height,
+        uint bitrate)
+    {
+        StorageFile output = await folder.CreateFileAsync(name, CreationCollisionOption.ReplaceExisting);
+        var composition = new MediaComposition();
+        IList<MediaClip> clips = composition.Clips;
+        var ownedClips = new List<MediaClip>(images.Count);
+        MediaEncodingProfile? profile = null;
+        try
+        {
+            foreach (StorageFile image in images)
+            {
+                MediaClip clip = await MediaClip.CreateFromImageFileAsync(image, TimeSpan.FromSeconds(1));
+                ownedClips.Add(clip);
+                clips.Add(clip);
+            }
+
+            profile = MediaEncodingProfile.CreateMp4(VideoEncodingQuality.HD720p);
+            profile.Video.Width = width;
+            profile.Video.Height = height;
+            profile.Video.Bitrate = bitrate;
+            TranscodeFailureReason result = await composition.RenderToFileAsync(
+                output,
+                MediaTrimmingPreference.Precise,
+                profile);
+            Assert.True(result == TranscodeFailureReason.None, $"Video render failed: {result}.");
+            return output;
+        }
+        finally
+        {
+            clips.Clear();
+            foreach (MediaClip clip in ownedClips)
+            {
+                MediaLuminanceConverter.ReleaseNativeObject(clip);
+            }
+
+            MediaLuminanceConverter.ReleaseNativeObject(profile);
+            MediaLuminanceConverter.ReleaseNativeObject(clips);
+            MediaLuminanceConverter.ReleaseNativeObject(composition);
+        }
+    }
+
+    private static async Task<StorageFile> TranscodeVideoAsync(
+        StorageFolder folder,
+        StorageFile source,
+        string name,
+        uint width,
+        uint height,
+        uint bitrate)
+    {
+        StorageFile output = await folder.CreateFileAsync(name, CreationCollisionOption.ReplaceExisting);
+        MediaEncodingProfile? profile = null;
+        MediaTranscoder? transcoder = null;
+        PrepareTranscodeResult? preparation = null;
+        try
+        {
+            profile = MediaEncodingProfile.CreateMp4(VideoEncodingQuality.HD720p);
+            profile.Video.Width = width;
+            profile.Video.Height = height;
+            profile.Video.Bitrate = bitrate;
+            transcoder = new MediaTranscoder { AlwaysReencode = true };
+            preparation = await transcoder.PrepareFileTranscodeAsync(source, output, profile);
+            Assert.True(
+                preparation.CanTranscode,
+                $"Video transcode preparation failed: {preparation.FailureReason}.");
+            await preparation.TranscodeAsync();
+            return output;
+        }
+        finally
+        {
+            MediaLuminanceConverter.ReleaseNativeObject(preparation);
+            MediaLuminanceConverter.ReleaseNativeObject(transcoder);
+            MediaLuminanceConverter.ReleaseNativeObject(profile);
+        }
     }
 
     private static double Average(byte[] frame, int x, int y, int width, int height)

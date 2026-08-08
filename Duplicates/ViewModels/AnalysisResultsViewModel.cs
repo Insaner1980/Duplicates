@@ -26,6 +26,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
     private readonly List<PathFindingViewModel> _allFindings = [];
     private readonly List<SimilarityGroupViewModel> _allGroups = [];
     private CancellationTokenSource? _previewCancellation;
+    private long _previewRequestGeneration;
 
     public AnalysisResultsViewModel(AnalysisSessionStore sessionStore)
         : this(sessionStore, null, null, FileSignatureDetector.DetectFileAsync, null, null, null)
@@ -290,12 +291,15 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         _previewCancellation?.Dispose();
         var cancellation = new CancellationTokenSource();
         _previewCancellation = cancellation;
+        long requestGeneration = ++_previewRequestGeneration;
         SimilarityPreview = null;
         SimilarityPreviewStatusText = "Loading preview...";
 
         if (_mediaPreviewLoader is null)
         {
             SimilarityPreviewStatusText = "Preview unavailable";
+            _previewCancellation = null;
+            cancellation.Dispose();
             return;
         }
 
@@ -306,6 +310,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
                 item.Source,
                 cancellation.Token);
             if (cancellation.IsCancellationRequested ||
+                requestGeneration != _previewRequestGeneration ||
                 !ReferenceEquals(_sessionStore.CurrentSession, session) ||
                 !ReferenceEquals(SelectedSimilarityPreviewItem, item) ||
                 !IsCanonicalSimilarityItem(item))
@@ -331,6 +336,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         catch (Exception ex) when (IsExpectedSimilarityProviderFailure(ex))
         {
             if (!cancellation.IsCancellationRequested &&
+                requestGeneration == _previewRequestGeneration &&
                 ReferenceEquals(_sessionStore.CurrentSession, session) &&
                 ReferenceEquals(SelectedSimilarityPreviewItem, item) &&
                 IsCanonicalSimilarityItem(item))
@@ -355,7 +361,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         AnalysisSession? initiatingSession = _sessionStore.CurrentSession;
         IFileActionService fileActions = _fileActionService ??
             throw new InvalidOperationException("File actions are not configured.");
-        if (IsSimilarImageSession(initiatingSession))
+        if (IsSimilarityActionSession(initiatingSession))
         {
             return await DeleteSelectedSimilarityAsync(
                 initiatingSession!,
@@ -406,7 +412,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         AnalysisSession? initiatingSession = _sessionStore.CurrentSession;
         IFileActionService fileActions = _fileActionService ??
             throw new InvalidOperationException("File actions are not configured.");
-        if (IsSimilarImageSession(initiatingSession))
+        if (IsSimilarityActionSession(initiatingSession))
         {
             return await MoveSelectedSimilarityAsync(
                 initiatingSession!,
@@ -612,7 +618,10 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
 
             if (providerFailure is not null)
             {
-                failures.Add(new FileActionFailure(item.FullPath, "Could not decode image."));
+                string reason = snapshot.Session.Tool == ToolKind.SimilarVideos
+                    ? "Could not decode video."
+                    : "Could not decode image.";
+                failures.Add(new FileActionFailure(item.FullPath, reason));
                 continue;
             }
 
@@ -1004,6 +1013,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         { Tool: ToolKind.InvalidLinks, ToolOptions: NoToolOptions } => true,
         { Tool: ToolKind.BrokenFiles, ToolOptions: NoToolOptions } => true,
         { Tool: ToolKind.SimilarImages, ToolOptions: SimilarImageToolOptions } => true,
+        { Tool: ToolKind.SimilarVideos, ToolOptions: SimilarVideoToolOptions } => true,
         _ => false,
     };
 
@@ -1841,13 +1851,17 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         exception is IOException or UnauthorizedAccessException or SecurityException or ArgumentException or
             NotSupportedException or InvalidDataException or OverflowException or COMException;
 
-    private static bool IsSimilarImageSession(AnalysisSession? session) =>
-        session is { Tool: ToolKind.SimilarImages, ToolOptions: SimilarImageToolOptions };
+    private static bool IsSimilarityActionSession(AnalysisSession? session) => session switch
+    {
+        { Tool: ToolKind.SimilarImages, ToolOptions: SimilarImageToolOptions } => true,
+        { Tool: ToolKind.SimilarVideos, ToolOptions: SimilarVideoToolOptions } => true,
+        _ => false,
+    };
 
     private bool IsCurrentSimilarityItem(
         AnalysisSession session,
         SimilarityItemViewModel item) =>
-        IsSimilarImageSession(session) &&
+        IsSimilarityActionSession(session) &&
         ReferenceEquals(_sessionStore.CurrentSession, session) &&
         IsCanonicalSimilarityItem(item);
 
@@ -1888,6 +1902,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
 
     private void ResetSimilarityPreview()
     {
+        _previewRequestGeneration++;
         _previewCancellation?.Cancel();
         _previewCancellation?.Dispose();
         _previewCancellation = null;

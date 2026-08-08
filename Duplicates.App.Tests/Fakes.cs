@@ -175,6 +175,43 @@ internal sealed class FakeImageSampleProvider : IImageSampleProvider
     }
 }
 
+internal sealed class FakeVideoSampleProvider : IVideoSampleProvider
+{
+    public Func<string, CancellationToken, Task<VideoSample>> CachedHandler { get; set; } =
+        (_, _) => Task.FromResult(Video());
+
+    public Func<string, CancellationToken, Task<VideoSample>> FreshHandler { get; set; } =
+        (_, _) => Task.FromResult(Video());
+
+    public List<string> CachedPaths { get; } = [];
+
+    public List<string> FreshPaths { get; } = [];
+
+    public Task<VideoSample> GetSampleAsync(string path, CancellationToken cancellationToken)
+    {
+        CachedPaths.Add(path);
+        return CachedHandler(path, cancellationToken);
+    }
+
+    public Task<VideoSample> GetFreshSampleAsync(string path, CancellationToken cancellationToken)
+    {
+        FreshPaths.Add(path);
+        return FreshHandler(path, cancellationToken);
+    }
+
+    public static VideoSample Video(byte value = 0) => new(
+        1920,
+        1080,
+        16d / 9d,
+        TimeSpan.FromSeconds(10),
+        1_000_000,
+        30,
+        "H264",
+        Enumerable.Range(0, 5)
+            .Select(index => Enumerable.Repeat((byte)(value + index), 1024).ToArray())
+            .ToArray());
+}
+
 internal sealed class FakeResultExportService : IResultExportService
 {
     public ResultExportSnapshot? Snapshot { get; private set; }

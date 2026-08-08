@@ -370,6 +370,53 @@ public sealed class AnalysisViewModelTests
         Assert.Equal(8, Assert.IsType<SimilarImageToolOptions>(store.CurrentSession!.ToolOptions).MaximumHammingDistance);
     }
 
+    [Theory]
+    [InlineData(SimilarityPreset.Strict, 5)]
+    [InlineData(SimilarityPreset.Balanced, 9)]
+    [InlineData(SimilarityPreset.Broad, 13)]
+    public async Task SimilarVideos_UsesNativePresetAndStoresExactImmutableRunOptions(
+        SimilarityPreset preset,
+        int expectedDistance)
+    {
+        ToolOptions? requestedOptions = null;
+        var service = new FakeAnalysisService
+        {
+            Run = (_, _, options, _, _) =>
+            {
+                requestedOptions = options;
+                return Task.FromResult(NewResult());
+            },
+        };
+        var store = new AnalysisSessionStore();
+        var viewModel = new AnalysisViewModel(service, store, NewScope());
+        viewModel.SelectTool(ToolKind.SimilarVideos);
+
+        Assert.Equal(SimilarityPreset.Balanced, viewModel.VideoSimilarityPreset);
+        viewModel.VideoSimilarityPreset = preset;
+
+        Assert.Equal(
+            $"{preset} five-frame Windows media matching allows a mean frame distance up to {expectedDistance}.",
+            viewModel.OptionsSummary);
+        Assert.Equal(Visibility.Visible, viewModel.SimilarVideoOptionsVisibility);
+        Assert.Equal(Visibility.Collapsed, viewModel.SimilarImageOptionsVisibility);
+
+        await viewModel.StartAnalysisCommand.ExecuteAsync(null);
+
+        var options = Assert.IsType<SimilarVideoToolOptions>(requestedOptions);
+        Assert.Equal(expectedDistance, options.MaximumMeanFrameDistance);
+        Assert.Same(options, Assert.IsType<AnalysisSession>(store.CurrentSession).ToolOptions);
+    }
+
+    [Fact]
+    public void SimilarVideos_LegacySessionDefaultUsesBalancedDistanceNine()
+    {
+        var store = new AnalysisSessionStore();
+
+        store.SetCompleted(ToolKind.SimilarVideos, new AnalysisScope(), NewResult());
+
+        Assert.Equal(9, Assert.IsType<SimilarVideoToolOptions>(store.CurrentSession!.ToolOptions).MaximumMeanFrameDistance);
+    }
+
     [Fact]
     public void BigFiles_PresetsUseExactByteValuesAndNoOptionStorageToolsHideOptions()
     {

@@ -30,23 +30,33 @@ public sealed class AnalysisService : IAnalysisService
 {
     private readonly IFileFormatProbe? _fileFormatProbe;
     private readonly IImageSampleProvider? _imageSampleProvider;
+    private readonly IVideoSampleProvider? _videoSampleProvider;
 
     public AnalysisService()
-        : this(null, null)
+        : this(null, null, null)
     {
     }
 
     public AnalysisService(IFileFormatProbe? fileFormatProbe)
-        : this(fileFormatProbe, null)
+        : this(fileFormatProbe, null, null)
     {
     }
 
     public AnalysisService(
         IFileFormatProbe? fileFormatProbe,
         IImageSampleProvider? imageSampleProvider)
+        : this(fileFormatProbe, imageSampleProvider, null)
+    {
+    }
+
+    public AnalysisService(
+        IFileFormatProbe? fileFormatProbe,
+        IImageSampleProvider? imageSampleProvider,
+        IVideoSampleProvider? videoSampleProvider)
     {
         _fileFormatProbe = fileFormatProbe;
         _imageSampleProvider = imageSampleProvider;
+        _videoSampleProvider = videoSampleProvider;
     }
 
     public async Task<AnalysisResult> RunAsync(
@@ -79,6 +89,11 @@ public sealed class AnalysisService : IAnalysisService
             throw new ArgumentOutOfRangeException(nameof(toolOptions));
         }
 
+        if (toolOptions is SimilarVideoToolOptions { MaximumMeanFrameDistance: < 0 or > 13 })
+        {
+            throw new ArgumentOutOfRangeException(nameof(toolOptions));
+        }
+
         if (tool == ToolKind.BrokenFiles && _fileFormatProbe is null)
         {
             throw new NotSupportedException(
@@ -86,6 +101,12 @@ public sealed class AnalysisService : IAnalysisService
         }
 
         if (tool == ToolKind.SimilarImages && _imageSampleProvider is null)
+        {
+            throw new NotSupportedException(
+                $"The {ToolDescriptor.For(tool).Title} analyzer is not installed yet.");
+        }
+
+        if (tool == ToolKind.SimilarVideos && _videoSampleProvider is null)
         {
             throw new NotSupportedException(
                 $"The {ToolDescriptor.For(tool).Title} analyzer is not installed yet.");
@@ -128,6 +149,11 @@ public sealed class AnalysisService : IAnalysisService
                     inventory,
                     new SimilarImageOptions(options.MaximumHammingDistance),
                     cancellationToken).ConfigureAwait(false),
+            (ToolKind.SimilarVideos, SimilarVideoToolOptions options) => await new SimilarVideoAnalyzer(
+                _videoSampleProvider!).AnalyzeAsync(
+                    inventory,
+                    new SimilarVideoOptions(options.MaximumMeanFrameDistance),
+                    cancellationToken).ConfigureAwait(false),
             _ => throw new NotSupportedException(
                 $"The {ToolDescriptor.For(tool).Title} analyzer is not installed yet."),
         };
@@ -143,6 +169,8 @@ public sealed class AnalysisService : IAnalysisService
         {
             (ToolKind.SimilarImages, not null) => new SimilarImageAnalyzer(_imageSampleProvider)
                 .RevalidateAsync(item, cancellationToken),
+            (ToolKind.SimilarVideos, _) when _videoSampleProvider is not null =>
+                new SimilarVideoAnalyzer(_videoSampleProvider).RevalidateAsync(item, cancellationToken),
             _ => throw new NotSupportedException($"Revalidation is not available for {tool}."),
         };
 
@@ -155,6 +183,10 @@ public sealed class AnalysisService : IAnalysisService
                 new SimilarImageAnalyzer(_imageSampleProvider).Regroup(
                     items,
                     new SimilarImageOptions(imageOptions.MaximumHammingDistance)),
+            (ToolKind.SimilarVideos, SimilarVideoToolOptions videoOptions, _) when _videoSampleProvider is not null =>
+                new SimilarVideoAnalyzer(_videoSampleProvider).Regroup(
+                    items,
+                    new SimilarVideoOptions(videoOptions.MaximumMeanFrameDistance)),
             _ => throw new NotSupportedException($"Regrouping is not available for {tool} with these options."),
         };
 }

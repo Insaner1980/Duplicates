@@ -20,7 +20,10 @@ public sealed class AppServices
         MusicMetadataProvider = new WindowsMusicMetadataProvider();
         MediaPreviewLoader = new WindowsMediaPreviewLoader();
         FileFormatProbe = new WindowsFileFormatProbe();
-        AnalysisService = new AnalysisService(FileFormatProbe, ImageSampleProvider);
+        AnalysisService = new AnalysisService(
+            fileFormatProbe: FileFormatProbe,
+            imageSampleProvider: ImageSampleProvider,
+            videoSampleProvider: VideoSampleProvider);
         FileActionService = new FileActionService(SettingsService);
         ResultExportService = new ResultExportService();
         PathScopeViewModel = new PathScopeViewModel();

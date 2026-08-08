@@ -266,21 +266,32 @@ public sealed class NativeWinUiContractTests
     }
 
     [Fact]
-    public void AnalysisPage_UsesOneNativeSimilarImagePresetComboBox()
+    public void AnalysisPage_UsesSeparateNativeImageAndVideoPresetComboBoxes()
     {
         XDocument page = LoadXaml(@"Views\AnalysisPage.xaml");
-        XElement combo = page.Descendants(Presentation + "ComboBox")
+        XElement imageCombo = page.Descendants(Presentation + "ComboBox")
             .Single(element => (string?)element.Attribute("Header") == "Image similarity");
+        XElement videoCombo = page.Descendants(Presentation + "ComboBox")
+            .Single(element => (string?)element.Attribute("Header") == "Video similarity");
 
         Assert.Equal(
             "{Binding ImageSimilarityPreset, Mode=TwoWay}",
-            (string?)combo.Attribute("SelectedIndex"));
+            (string?)imageCombo.Attribute("SelectedIndex"));
         Assert.Equal(
             "{Binding SimilarImageOptionsVisibility}",
-            (string?)combo.Parent?.Attribute("Visibility"));
+            (string?)imageCombo.Parent?.Attribute("Visibility"));
         Assert.Equal(
             new[] { "Strict", "Balanced", "Broad" },
-            combo.Elements(Presentation + "ComboBoxItem").Select(item => (string?)item.Attribute("Content")));
+            imageCombo.Elements(Presentation + "ComboBoxItem").Select(item => (string?)item.Attribute("Content")));
+        Assert.Equal(
+            "{Binding VideoSimilarityPreset, Mode=TwoWay}",
+            (string?)videoCombo.Attribute("SelectedIndex"));
+        Assert.Equal(
+            "{Binding SimilarVideoOptionsVisibility}",
+            (string?)videoCombo.Parent?.Attribute("Visibility"));
+        Assert.Equal(
+            new[] { "Strict", "Balanced", "Broad" },
+            videoCombo.Elements(Presentation + "ComboBoxItem").Select(item => (string?)item.Attribute("Content")));
     }
 
     [Fact]

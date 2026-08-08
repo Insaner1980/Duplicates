@@ -47,7 +47,7 @@ public sealed class AnalysisSessionStore
     {
         ToolKind.BigFiles => new LargeFileToolOptions(1_073_741_824),
         ToolKind.SimilarImages => new SimilarImageToolOptions(8),
-        ToolKind.SimilarVideos => new SimilarVideoToolOptions(10),
+        ToolKind.SimilarVideos => new SimilarVideoToolOptions(9),
         ToolKind.MusicDuplicates => new MusicDuplicateToolOptions(TimeSpan.FromSeconds(2)),
         _ => new NoToolOptions(),
     };

@@ -217,6 +217,240 @@ public sealed class AnalysisResultsViewModelTests
     }
 
     [Fact]
+    public async Task SimilarVideos_PreviewAndActionSelectionStayIndependentAndExposeVideoDetails()
+    {
+        var store = new AnalysisSessionStore();
+        var previewLoader = new RecordingPreviewLoader();
+        var viewModel = new AnalysisResultsViewModel(
+            store,
+            new FakeFileActionService(),
+            null,
+            new VideoSimilarityAnalysisService(),
+            previewLoader);
+        SimilarityGroup source = NewVideoGroup(
+            NewVideoItem(@"C:\videos\reference.mp4", 0, width: 1920, height: 1080, bitrate: 2_000_000),
+            NewVideoItem(@"C:\videos\candidate.mp4", LowBits(4), width: 1280, height: 720, bitrate: 1_000_000));
+        store.SetCompleted(
+            ToolKind.SimilarVideos,
+            new AnalysisScope(),
+            new SimilarVideoToolOptions(9),
+            NewResult(groups: [source]));
+        SimilarityGroupViewModel group = Assert.Single(viewModel.Groups);
+        SimilarityItemViewModel candidate = group.Items.Single(item => !item.IsReference);
+
+        Assert.All(group.Items, static item => Assert.False(item.IsSelected));
+        Assert.Contains("1920 × 1080", group.ReferenceItem.MediaDetailsText);
+        Assert.Contains("bps", group.ReferenceItem.MediaDetailsText);
+        Assert.Contains("30 FPS", group.ReferenceItem.MediaDetailsText);
+        Assert.Contains("H264", group.ReferenceItem.MediaDetailsText);
+
+        viewModel.SelectedResult = group;
+        Assert.True(SpinWait.SpinUntil(() => previewLoader.Calls.Count == 1, TimeSpan.FromSeconds(1)));
+        Assert.Equal(ToolKind.SimilarVideos, previewLoader.Calls[0].Tool);
+        Assert.Same(group.ReferenceItem.Source, previewLoader.Calls[0].Item);
+
+        candidate.IsSelected = true;
+        await viewModel.SelectSimilarityPreviewItemCommand.ExecuteAsync(candidate);
+
+        Assert.True(candidate.IsSelected);
+        Assert.False(group.ReferenceItem.IsSelected);
+        Assert.Same(candidate, viewModel.SelectedSimilarityPreviewItem);
+        Assert.Equal(1, viewModel.SelectedItemCount);
+        Assert.True(viewModel.CanActOnSelection);
+        Assert.False(viewModel.CanRenameSelection);
+    }
+
+    [Fact]
+    public async Task SimilarVideos_ExportIncludesDisplayMetadataWithoutVideoEvidenceHashes()
+    {
+        var exporter = new FakeResultExportService();
+        var store = new AnalysisSessionStore();
+        var viewModel = new AnalysisResultsViewModel(store, null, exporter);
+        SimilarityGroup group = NewVideoGroup(
+            NewVideoItem(@"C:\videos\reference.mp4", 0, width: 1920, height: 1080),
+            NewVideoItem(@"C:\videos\candidate.mp4", LowBits(4), width: 1280, height: 720));
+        store.SetCompleted(
+            ToolKind.SimilarVideos,
+            new AnalysisScope(),
+            new SimilarVideoToolOptions(9),
+            NewResult(groups: [group]));
+
+        await viewModel.ExportAsync(ResultExportFormat.Json, @"C:\exports\videos.json", CancellationToken.None);
+
+        ResultExportSnapshot snapshot = Assert.IsType<ResultExportSnapshot>(exporter.Snapshot);
+        Assert.All(snapshot.Items, item =>
+        {
+            Assert.Equal("Video", item.Metadata["Type"]);
+            Assert.True(item.Metadata.ContainsKey("MeanFrameDistance"));
+            Assert.DoesNotContain(item.Metadata.Keys, key => key.StartsWith("FrameHash", StringComparison.Ordinal));
+        });
+    }
+
+    [Fact]
+    public async Task SimilarVideos_DeleteReferenceRegroupsGloballyWithNewReferenceAndReboundPreview()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            SimilarityItem reference = WriteVideoItem(root, "a.mp4", 0, width: 300, height: 300);
+            SimilarityItem bridge = WriteVideoItem(root, "b.mp4", LowBits(9), width: 200, height: 200, bitrate: 30);
+            SimilarityItem tail = WriteVideoItem(root, "c.mp4", LowBits(18), width: 100, height: 100, bitrate: 40);
+            var analysis = new VideoSimilarityAnalysisService();
+            var actions = new FakeFileActionService
+            {
+                NextSummary = new DeleteSummary(1, reference.SizeBytes, [], [reference.FullPath]),
+            };
+            var loader = new RecordingPreviewLoader();
+            var store = new AnalysisSessionStore();
+            var viewModel = new AnalysisResultsViewModel(store, actions, null, analysis, loader);
+            store.SetCompleted(
+                ToolKind.SimilarVideos,
+                new AnalysisScope(),
+                new SimilarVideoToolOptions(9),
+                NewResult(groups: [NewVideoGroup(reference, bridge, tail)]));
+            SimilarityGroupViewModel initial = viewModel.Groups[0];
+            SimilarityItemViewModel referenceViewModel = initial.ReferenceItem;
+            SimilarityItemViewModel tailViewModel = initial.Items.Single(item => item.FullPath == tail.FullPath);
+            referenceViewModel.IsSelected = true;
+            await viewModel.SelectSimilarityPreviewItemCommand.ExecuteAsync(tailViewModel);
+
+            DeleteSummary summary = await viewModel.DeleteSelectedAsync(CancellationToken.None);
+
+            Assert.Equal(1, summary.DeletedCount);
+            Assert.Equal([reference.FullPath], analysis.RevalidatedPaths);
+            SimilarityGroupViewModel regrouped = Assert.Single(viewModel.Groups);
+            Assert.Equal(bridge.FullPath, regrouped.ReferenceItem.FullPath);
+            Assert.Equal("0", regrouped.ReferenceItem.Source.Metadata["MeanFrameDistance"]);
+            Assert.Equal(100d, regrouped.ReferenceItem.Source.SimilarityPercent);
+            Assert.Equal("9", regrouped.Items.Single(item => item.FullPath == tail.FullPath).Source.Metadata["MeanFrameDistance"]);
+            Assert.Equal(tail.FullPath, viewModel.SelectedSimilarityPreviewItem?.FullPath);
+            Assert.Equal(tail.FullPath, viewModel.PreviewPath);
+            Assert.All(regrouped.Items, static item => Assert.False(item.IsSelected));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task SimilarVideos_WholeGroupMayBeDeletedWithoutASurvivorRule()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            SimilarityItem reference = WriteVideoItem(root, "reference.mp4", 0, width: 200, height: 200);
+            SimilarityItem candidate = WriteVideoItem(root, "candidate.mp4", LowBits(4));
+            var analysis = new VideoSimilarityAnalysisService();
+            var actions = new FakeFileActionService
+            {
+                NextSummary = new DeleteSummary(
+                    2,
+                    reference.SizeBytes + candidate.SizeBytes,
+                    [],
+                    [reference.FullPath, candidate.FullPath]),
+            };
+            IReadOnlyList<FileActionTarget>? dispatched = null;
+            actions.OnDelete = (targets, _) => dispatched = targets;
+            var store = new AnalysisSessionStore();
+            var viewModel = new AnalysisResultsViewModel(store, actions, null, analysis, new RecordingPreviewLoader());
+            store.SetCompleted(
+                ToolKind.SimilarVideos,
+                new AnalysisScope(),
+                new SimilarVideoToolOptions(9),
+                NewResult(groups: [NewVideoGroup(reference, candidate)]));
+            foreach (SimilarityItemViewModel item in viewModel.Groups[0].Items)
+            {
+                item.IsSelected = true;
+            }
+
+            DeleteSummary summary = await viewModel.DeleteSelectedAsync(CancellationToken.None);
+
+            Assert.Equal(2, summary.DeletedCount);
+            Assert.Equal(
+                [reference.FullPath, candidate.FullPath],
+                Assert.IsAssignableFrom<IReadOnlyList<FileActionTarget>>(dispatched).Select(static target => target.FullPath));
+            Assert.Empty(viewModel.Groups);
+            Assert.Equal(2, analysis.RevalidatedPaths.Count);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task SimilarVideos_PartialMoveRegroupsArticulationAndPreservesDecodeFailureSelection()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            SimilarityItem first = WriteVideoItem(root, "a.mp4", 0, width: 300, height: 300);
+            SimilarityItem articulation = WriteVideoItem(root, "b.mp4", LowBits(9), width: 200, height: 200);
+            SimilarityItem tail = WriteVideoItem(root, "c.mp4", LowBits(18), width: 100, height: 100);
+            SimilarityItem otherReference = WriteVideoItem(root, "x.mp4", ulong.MaxValue, width: 200, height: 200);
+            SimilarityItem failed = WriteVideoItem(root, "y.mp4", ulong.MaxValue ^ 1, width: 100, height: 100);
+            var analysis = new VideoSimilarityAnalysisService
+            {
+                Revalidate = item => string.Equals(item.FullPath, failed.FullPath, StringComparison.OrdinalIgnoreCase)
+                    ? Task.FromException<bool>(new IOException("decode"))
+                    : Task.FromResult(true),
+            };
+            string destination = Path.Combine(root, "moved");
+            var actions = new FakeFileActionService
+            {
+                NextMoveSummary = new FileOperationSummary(
+                    [new FileOperationResult(articulation.FullPath, Path.Combine(destination, "b.mp4"), null)],
+                    articulation.SizeBytes),
+            };
+            var store = new AnalysisSessionStore();
+            var viewModel = new AnalysisResultsViewModel(store, actions, null, analysis, new RecordingPreviewLoader());
+            var skip = new SkippedPath { Path = Path.Combine(root, "skipped.mp4"), Reason = "Could not decode video." };
+            store.SetCompleted(
+                ToolKind.SimilarVideos,
+                new AnalysisScope(),
+                new SimilarVideoToolOptions(9),
+                NewResult(
+                    groups: [NewVideoGroup(first, articulation, tail), NewVideoGroup(otherReference, failed)],
+                    skippedPaths: [skip]));
+            SimilarityItemViewModel articulationViewModel = viewModel.Groups
+                .SelectMany(static group => group.Items)
+                .Single(item => item.FullPath == articulation.FullPath);
+            SimilarityItemViewModel failedViewModel = viewModel.Groups
+                .SelectMany(static group => group.Items)
+                .Single(item => item.FullPath == failed.FullPath);
+            articulationViewModel.IsSelected = true;
+            failedViewModel.IsSelected = true;
+            viewModel.SearchText = "y.mp4";
+            viewModel.SelectedSortIndex = 1;
+
+            FileOperationSummary summary = await viewModel.MoveSelectedAsync(
+                destination,
+                MoveCollisionBehavior.Skip,
+                CancellationToken.None);
+
+            Assert.Single(summary.Results, static result => result.Succeeded);
+            FileOperationResult failedResult = Assert.Single(summary.Results, static result => !result.Succeeded);
+            Assert.Equal(failed.FullPath, failedResult.SourcePath);
+            Assert.Equal("Could not decode video.", failedResult.Failure?.Reason);
+            SimilarityGroupViewModel remaining = Assert.Single(viewModel.Groups);
+            Assert.Equal(otherReference.FullPath, remaining.ReferenceItem.FullPath);
+            Assert.True(remaining.Items.Single(item => item.FullPath == failed.FullPath).IsSelected);
+            Assert.Equal(1, viewModel.SelectedItemCount);
+            Assert.Equal("y.mp4", viewModel.SearchText);
+            Assert.Equal(1, viewModel.SelectedSortIndex);
+            Assert.Same(skip, store.CurrentSession!.Result.SkippedPaths[0]);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void NewAnalysisClearsSessionFiltersSelectionsAndPreview()
     {
         var store = new AnalysisSessionStore();
@@ -2313,6 +2547,56 @@ public sealed class AnalysisResultsViewModelTests
             Evidence = new ImageSimilarityEvidence(0, 100, 100, "JPEG"),
         };
 
+    private static SimilarityGroup NewVideoGroup(params SimilarityItem[] items) => Assert.Single(
+        new SimilarVideoAnalyzer(new FakeVideoSampleProvider()).Regroup(
+            items,
+            new SimilarVideoOptions(9)));
+
+    private static SimilarityItem WriteVideoItem(
+        string root,
+        string name,
+        ulong hash,
+        int width = 100,
+        int height = 100,
+        uint bitrate = 100)
+    {
+        string path = Path.Combine(root, name);
+        File.WriteAllBytes(path, [1, 2, 3, 4, 5]);
+        DateTime modifiedUtc = new(2026, 8, 8, 12, 0, 0, DateTimeKind.Utc);
+        File.SetLastWriteTimeUtc(path, modifiedUtc);
+        return NewVideoItem(path, hash, width, height, bitrate, new FileInfo(path).Length, modifiedUtc);
+    }
+
+    private static SimilarityItem NewVideoItem(
+        string path,
+        ulong hash,
+        int width = 100,
+        int height = 100,
+        uint bitrate = 100,
+        long size = 10,
+        DateTime? modifiedUtc = null) => new()
+        {
+            FullPath = path,
+            SizeBytes = size,
+            ModifiedUtc = modifiedUtc ?? new DateTime(2026, 8, 8, 12, 0, 0, DateTimeKind.Utc),
+            SimilarityPercent = 0,
+            Evidence = new VideoSimilarityEvidence(
+                hash,
+                hash,
+                hash,
+                hash,
+                hash,
+                width,
+                height,
+                (double)width / height,
+                TimeSpan.FromSeconds(10),
+                bitrate,
+                30,
+                "H264"),
+        };
+
+    private static ulong LowBits(int count) => (1UL << count) - 1;
+
     private static string ResultPath(object item) => item switch
     {
         PathFindingViewModel finding => finding.FullPath,
@@ -2351,5 +2635,55 @@ public sealed class AnalysisResultsViewModelTests
         public void OpenFile(string path) => throw new NotSupportedException();
 
         public void RevealInExplorer(string path) => throw new NotSupportedException();
+    }
+
+    private sealed class VideoSimilarityAnalysisService : IAnalysisService
+    {
+        public Func<SimilarityItem, Task<bool>> Revalidate { get; init; } = _ => Task.FromResult(true);
+
+        public List<string> RevalidatedPaths { get; } = [];
+
+        public Task<AnalysisResult> RunAsync(
+            ToolKind tool,
+            AnalysisScope scope,
+            ToolOptions toolOptions,
+            IProgress<AnalysisProgress>? progress,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<bool> RevalidateSimilarityItemAsync(
+            ToolKind tool,
+            SimilarityItem item,
+            CancellationToken cancellationToken)
+        {
+            Assert.Equal(ToolKind.SimilarVideos, tool);
+            RevalidatedPaths.Add(item.FullPath);
+            return Revalidate(item);
+        }
+
+        public IReadOnlyList<SimilarityGroup> RegroupSimilarityItems(
+            ToolKind tool,
+            ToolOptions options,
+            IReadOnlyList<SimilarityItem> items)
+        {
+            Assert.Equal(ToolKind.SimilarVideos, tool);
+            var videoOptions = Assert.IsType<SimilarVideoToolOptions>(options);
+            return new SimilarVideoAnalyzer(new FakeVideoSampleProvider()).Regroup(
+                items,
+                new SimilarVideoOptions(videoOptions.MaximumMeanFrameDistance));
+        }
+    }
+
+    private sealed class RecordingPreviewLoader : IMediaPreviewLoader
+    {
+        public List<(ToolKind Tool, SimilarityItem Item)> Calls { get; } = [];
+
+        public Task<MediaPreviewData> LoadAsync(
+            ToolKind tool,
+            SimilarityItem item,
+            CancellationToken cancellationToken)
+        {
+            Calls.Add((tool, item));
+            return Task.FromResult(new MediaPreviewData(1, 1, [1, 1, 1, 255]));
+        }
     }
 }

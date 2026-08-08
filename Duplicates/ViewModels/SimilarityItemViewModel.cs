@@ -32,6 +32,11 @@ public sealed partial class SimilarityItemViewModel : ObservableObject
     public string MediaDetailsText => Source.Evidence switch
     {
         ImageSimilarityEvidence image => $"{image.Width:N0} × {image.Height:N0}, {image.Format}",
+        VideoSimilarityEvidence video =>
+            $"{video.Width.ToString(CultureInfo.InvariantCulture)} × {video.Height.ToString(CultureInfo.InvariantCulture)}, " +
+            $"{video.Duration.ToString("c", CultureInfo.InvariantCulture)}, " +
+            $"{video.Bitrate:N0} bps, " +
+            $"{video.FramesPerSecond:0.##} FPS, {video.Codec}",
         _ => string.Empty,
     };
 

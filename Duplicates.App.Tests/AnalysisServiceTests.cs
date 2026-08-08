@@ -231,6 +231,72 @@ public sealed class AnalysisServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task SimilarVideos_UsesInjectedProviderAndExposesFreshRevalidationAndPureRegroupArms()
+    {
+        string first = Path.Combine(_root, "first.mp4");
+        string second = Path.Combine(_root, "second.mkv");
+        await File.WriteAllBytesAsync(first, [1]);
+        await File.WriteAllBytesAsync(second, [2]);
+        var provider = new FakeVideoSampleProvider();
+        var service = new AnalysisService(
+            fileFormatProbe: null,
+            imageSampleProvider: null,
+            videoSampleProvider: provider);
+        var options = new SimilarVideoToolOptions(9);
+
+        AnalysisResult result = await service.RunAsync(
+            ToolKind.SimilarVideos,
+            new AnalysisScope { IncludedFiles = [second, first] },
+            options,
+            progress: null,
+            CancellationToken.None);
+
+        SimilarityGroup group = Assert.Single(result.Groups);
+        Assert.Equal(2, group.Items.Count);
+        Assert.Equal([first, second], provider.CachedPaths);
+        Assert.True(result.Elapsed >= TimeSpan.Zero);
+
+        Assert.True(await service.RevalidateSimilarityItemAsync(
+            ToolKind.SimilarVideos,
+            group.Items[0],
+            CancellationToken.None));
+        Assert.Equal([group.Items[0].FullPath], provider.FreshPaths);
+
+        IReadOnlyList<SimilarityGroup> regrouped = service.RegroupSimilarityItems(
+            ToolKind.SimilarVideos,
+            options,
+            group.Items);
+        Assert.Equal(
+            group.Items.Select(static item => item.FullPath),
+            Assert.Single(regrouped).Items.Select(static item => item.FullPath));
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(14)]
+    public async Task SimilarVideos_RejectsMissingProviderAndInvalidOptionsBeforeInventory(int invalidDistance)
+    {
+        var reports = new List<AnalysisProgress>();
+        var missing = new AnalysisService();
+        await Assert.ThrowsAsync<NotSupportedException>(() => missing.RunAsync(
+            ToolKind.SimilarVideos,
+            new AnalysisScope { IncludedFolders = [Path.Combine(_root, "missing")] },
+            new SimilarVideoToolOptions(9),
+            new RecordingProgress(reports),
+            CancellationToken.None));
+
+        var configured = new AnalysisService(null, null, new FakeVideoSampleProvider());
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => configured.RunAsync(
+            ToolKind.SimilarVideos,
+            new AnalysisScope { IncludedFolders = [Path.Combine(_root, "missing")] },
+            new SimilarVideoToolOptions(invalidDistance),
+            new RecordingProgress(reports),
+            CancellationToken.None));
+
+        Assert.Empty(reports);
+    }
+
+    [Fact]
     public async Task SimilarImageServiceArms_FailClosedForMissingProviderAndWrongToolOptionPairs()
     {
         var missing = new AnalysisService();
@@ -280,6 +346,11 @@ public sealed class AnalysisServiceTests : IDisposable
             services.ImageSampleProvider,
             typeof(AnalysisService)
                 .GetField("_imageSampleProvider", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .GetValue(services.AnalysisService));
+        Assert.Same(
+            services.VideoSampleProvider,
+            typeof(AnalysisService)
+                .GetField("_videoSampleProvider", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
                 .GetValue(services.AnalysisService));
         Assert.Same(
             services.AnalysisService,
