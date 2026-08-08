@@ -457,6 +457,18 @@ public sealed class MediaFingerprintCacheTests : IDisposable
         Assert.True(File.Exists(foreign));
     }
 
+    [Fact]
+    public async Task Clear_ExistingDirectoryAtCachePathSurfacesDeletionFailure()
+    {
+        Directory.CreateDirectory(_cachePath);
+        var cache = new MediaFingerprintCache(_cachePath);
+
+        Exception? exception = await Record.ExceptionAsync(() =>
+            cache.ClearAsync(CancellationToken.None));
+
+        Assert.IsType<UnauthorizedAccessException>(exception);
+    }
+
     private async Task<string> WriteSourceAsync(string name, byte[] bytes)
     {
         string path = Path.Combine(_root, name);

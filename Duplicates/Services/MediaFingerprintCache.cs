@@ -225,9 +225,12 @@ public sealed class MediaFingerprintCache
             _imageEntries = new(StringComparer.OrdinalIgnoreCase);
             _videoEntries = new(StringComparer.OrdinalIgnoreCase);
             _loaded = true;
-            if (File.Exists(CachePath))
+            try
             {
                 File.Delete(CachePath);
+            }
+            catch (DirectoryNotFoundException)
+            {
             }
 
             DeleteOwnedTemporaryFiles(cancellationToken);
