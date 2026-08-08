@@ -426,7 +426,17 @@ public sealed class WindowsMediaProviderTests : IDisposable
 
         for (int iteration = 0; iteration < 3; iteration++)
         {
-            VideoSample sample = await provider.GetFreshSampleAsync(video.Path, CancellationToken.None);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            VideoSample sample;
+            try
+            {
+                sample = await provider.GetFreshSampleAsync(video.Path, timeout.Token)
+                    .WaitAsync(TimeSpan.FromSeconds(45));
+            }
+            catch (Exception ex) when (ex is OperationCanceledException or TimeoutException)
+            {
+                throw new TimeoutException($"Video provider stalled during iteration {iteration + 1}.", ex);
+            }
 
             Assert.Equal(5, sample.LuminanceFrames32x32.Count);
             MoveAwayAndBack(video.Path);
