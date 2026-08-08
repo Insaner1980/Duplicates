@@ -891,6 +891,11 @@ public sealed class AnalysisResultsViewModelTests
             Assert.Equal(path, fileActions.LastRenameTarget?.FullPath);
             Assert.Equal(FileActionTargetKind.File, fileActions.LastRenameTarget?.Kind);
             Assert.Equal(new FileInfo(path).Length, fileActions.LastRenameTarget?.SizeBytes);
+            BadExtensionContentConstraint constraint = Assert.IsType<BadExtensionContentConstraint>(
+                fileActions.LastRenameTarget?.ExpectedBadExtensionContent);
+            Assert.Equal(finding.Source.ModifiedUtc, constraint.ModifiedUtc);
+            Assert.Equal("PNG", constraint.DetectedType);
+            Assert.Equal(".png", constraint.RecommendedExtension);
             Assert.Equal("photo.png", fileActions.LastRenameName);
             Assert.Empty(viewModel.Findings);
         }
@@ -1083,6 +1088,128 @@ public sealed class AnalysisResultsViewModelTests
 
             Assert.Equal(0, fileActions.RenameCallCount);
             Assert.True(finding.IsSelected);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task BadExtensionsRename_SessionChangedDuringSignatureReadRejectsWithoutDispatch()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string path = await WritePngAsync(Path.Combine(root, "photo.txt"));
+
+        try
+        {
+            var detectionStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var detectionResult = new TaskCompletionSource<DetectedFileType?>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            Func<string, CancellationToken, ValueTask<DetectedFileType?>> detectAsync = (_, cancellationToken) =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                detectionStarted.SetResult();
+                return new ValueTask<DetectedFileType?>(detectionResult.Task);
+            };
+            var store = new AnalysisSessionStore();
+            var fileActions = new FakeFileActionService();
+            var viewModel = new AnalysisResultsViewModel(
+                store,
+                fileActions,
+                new FakeResultExportService(),
+                detectAsync);
+            store.SetCompleted(
+                ToolKind.BadExtensions,
+                new AnalysisScope(),
+                new NoToolOptions(),
+                NewResult([NewBadExtensionFinding(path)]));
+            PathFindingViewModel originalFinding = Assert.Single(viewModel.Findings);
+
+            Task<FileOperationResult> rename = viewModel.RenameFindingAsync(
+                originalFinding,
+                "photo.png",
+                CancellationToken.None);
+            await detectionStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            store.SetCompleted(
+                ToolKind.BadExtensions,
+                new AnalysisScope(),
+                new NoToolOptions(),
+                NewResult([NewBadExtensionFinding(path)]));
+            PathFindingViewModel replacementFinding = Assert.Single(viewModel.Findings);
+            replacementFinding.IsSelected = true;
+            detectionResult.SetResult(new DetectedFileType(
+                "PNG",
+                new HashSet<string>([".png"], StringComparer.OrdinalIgnoreCase),
+                ".png"));
+
+            FileOperationResult result = await rename;
+
+            Assert.False(result.Succeeded);
+            Assert.Equal("File changed since scan.", result.Failure?.Reason);
+            Assert.Equal(0, fileActions.RenameCallCount);
+            Assert.Same(replacementFinding, Assert.Single(viewModel.Findings));
+            Assert.True(replacementFinding.IsSelected);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task BadExtensionsRename_SessionChangedDuringServiceAwaitDoesNotRemoveReplacementFinding()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string path = await WritePngAsync(Path.Combine(root, "photo.txt"));
+
+        try
+        {
+            var renameStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var continueRename = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var store = new AnalysisSessionStore();
+            var fileActions = new FakeFileActionService
+            {
+                RenameHandler = async (target, newName, cancellationToken) =>
+                {
+                    renameStarted.SetResult();
+                    await continueRename.Task.WaitAsync(cancellationToken);
+                    return new FileOperationResult(
+                        target.FullPath,
+                        Path.Combine(Path.GetDirectoryName(target.FullPath)!, newName),
+                        null);
+                },
+            };
+            var viewModel = new AnalysisResultsViewModel(store, fileActions, new FakeResultExportService());
+            store.SetCompleted(
+                ToolKind.BadExtensions,
+                new AnalysisScope(),
+                new NoToolOptions(),
+                NewResult([NewBadExtensionFinding(path)]));
+            PathFindingViewModel originalFinding = Assert.Single(viewModel.Findings);
+
+            Task<FileOperationResult> rename = viewModel.RenameFindingAsync(
+                originalFinding,
+                "photo.png",
+                CancellationToken.None);
+            await renameStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            store.SetCompleted(
+                ToolKind.BadExtensions,
+                new AnalysisScope(),
+                new NoToolOptions(),
+                NewResult([NewBadExtensionFinding(path)]));
+            PathFindingViewModel replacementFinding = Assert.Single(viewModel.Findings);
+            replacementFinding.IsSelected = true;
+            continueRename.SetResult();
+
+            FileOperationResult result = await rename;
+
+            Assert.True(result.Succeeded);
+            Assert.Equal(1, fileActions.RenameCallCount);
+            Assert.Same(replacementFinding, Assert.Single(viewModel.Findings));
+            Assert.True(replacementFinding.IsSelected);
         }
         finally
         {

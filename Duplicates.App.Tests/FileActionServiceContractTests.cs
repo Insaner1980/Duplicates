@@ -536,6 +536,65 @@ public sealed class FileActionServiceContractTests
         Assert.Equal([2], File.ReadAllBytes(collision));
     }
 
+    [Fact]
+    public async Task RenameAsync_MatchingBadExtensionConstraintRenamesFile()
+    {
+        using var fixture = new TemporaryDirectory();
+        string source = fixture.WriteFile(
+            "photo.txt",
+            [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+        var file = new FileInfo(source);
+        FileActionService service = CreateService(DeletionMode.Permanent);
+
+        FileOperationResult result = await service.RenameAsync(
+            new FileActionTarget(
+                source,
+                file.Length,
+                FileActionTargetKind.File,
+                ExpectedBadExtensionContent: new BadExtensionContentConstraint(
+                    file.LastWriteTimeUtc,
+                    "PNG",
+                    ".png")),
+            "photo.png",
+            CancellationToken.None);
+
+        Assert.True(result.Succeeded);
+        Assert.False(File.Exists(source));
+        Assert.True(File.Exists(fixture.PathFor("photo.png")));
+    }
+
+    [Fact]
+    public async Task RenameAsync_BadExtensionConstraintRejectsSameLengthSignatureRewrite()
+    {
+        using var fixture = new TemporaryDirectory();
+        string source = fixture.WriteFile(
+            "photo.txt",
+            [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+        var file = new FileInfo(source);
+        DateTime scanModifiedUtc = file.LastWriteTimeUtc;
+        var target = new FileActionTarget(
+            source,
+            file.Length,
+            FileActionTargetKind.File,
+            ExpectedBadExtensionContent: new BadExtensionContentConstraint(
+                scanModifiedUtc,
+                "PNG",
+                ".png"));
+        File.WriteAllBytes(source, [0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x00, 0x00, 0x00]);
+        File.SetLastWriteTimeUtc(source, scanModifiedUtc);
+        FileActionService service = CreateService(DeletionMode.Permanent);
+
+        FileOperationResult result = await service.RenameAsync(
+            target,
+            "photo.png",
+            CancellationToken.None);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal("The source no longer matches the scan result.", result.Failure?.Reason);
+        Assert.True(File.Exists(source));
+        Assert.False(File.Exists(fixture.PathFor("photo.png")));
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("..")]

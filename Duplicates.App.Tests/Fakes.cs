@@ -51,6 +51,8 @@ internal sealed class FakeFileActionService : IFileActionService
 
     public string? LastRenameName { get; private set; }
 
+    public Func<FileActionTarget, string, CancellationToken, Task<FileOperationResult>>? RenameHandler { get; set; }
+
     public Action<IReadOnlyList<FileActionTarget>, IProgress<DeleteProgress>?>? OnDelete { get; set; }
 
     public Action<IReadOnlyList<FileActionTarget>, string, MoveCollisionBehavior, IProgress<FileOperationProgress>?>? OnMove { get; set; }
@@ -95,6 +97,11 @@ internal sealed class FakeFileActionService : IFileActionService
         RenameCallCount++;
         LastRenameTarget = target;
         LastRenameName = newName;
+        if (RenameHandler is not null)
+        {
+            return RenameHandler(target, newName, cancellationToken);
+        }
+
         return Task.FromResult(NextRenameResult ?? new FileOperationResult(
             target.FullPath,
             Path.Combine(Path.GetDirectoryName(target.FullPath)!, newName),

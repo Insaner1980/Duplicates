@@ -17,6 +17,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
     private readonly AnalysisSessionStore _sessionStore;
     private readonly IFileActionService? _fileActionService;
     private readonly IResultExportService? _resultExportService;
+    private readonly Func<string, CancellationToken, ValueTask<DetectedFileType?>> _detectFileAsync;
     private readonly List<PathFindingViewModel> _allFindings = [];
     private readonly List<SimilarityGroupViewModel> _allGroups = [];
 
@@ -29,10 +30,20 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         AnalysisSessionStore sessionStore,
         IFileActionService? fileActionService,
         IResultExportService? resultExportService)
+        : this(sessionStore, fileActionService, resultExportService, FileSignatureDetector.DetectFileAsync)
+    {
+    }
+
+    public AnalysisResultsViewModel(
+        AnalysisSessionStore sessionStore,
+        IFileActionService? fileActionService,
+        IResultExportService? resultExportService,
+        Func<string, CancellationToken, ValueTask<DetectedFileType?>> detectFileAsync)
     {
         _sessionStore = sessionStore;
         _fileActionService = fileActionService;
         _resultExportService = resultExportService;
+        _detectFileAsync = detectFileAsync;
         _sessionStore.ResultChanged += ResultsChanged;
     }
 
@@ -266,7 +277,8 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         string newName,
         CancellationToken cancellationToken)
     {
-        if (!IsRenameToolSupported || !_allFindings.Contains(finding))
+        AnalysisSession? initiatingSession = _sessionStore.CurrentSession;
+        if (!SupportsRename(initiatingSession) || !_allFindings.Contains(finding))
         {
             throw new InvalidOperationException("Actions are not available for these results yet.");
         }
@@ -281,6 +293,15 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
                 finding,
                 newName,
                 cancellationToken);
+            if (!ReferenceEquals(_sessionStore.CurrentSession, initiatingSession) ||
+                initiatingSession is not { Tool: ToolKind.BadExtensions, ToolOptions: NoToolOptions } ||
+                !_allFindings.Contains(finding))
+            {
+                return new FileOperationResult(
+                    finding.FullPath,
+                    null,
+                    ChangedFailure(finding.FullPath));
+            }
         }
         else if (!TryMapFinding(finding, out target, out failure))
         {
@@ -293,7 +314,9 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         }
 
         FileOperationResult result = await fileActions.RenameAsync(target!, newName, cancellationToken);
-        if (result.Succeeded)
+        if (result.Succeeded &&
+            ReferenceEquals(_sessionStore.CurrentSession, initiatingSession) &&
+            _allFindings.Contains(finding))
         {
             RemoveSuccessfulPaths(new HashSet<string>([result.SourcePath], StringComparer.OrdinalIgnoreCase));
         }
@@ -494,7 +517,9 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         SelectionChanged();
     }
 
-    private bool IsBulkMutationToolSupported => _sessionStore.CurrentSession switch
+    private bool IsBulkMutationToolSupported => SupportsBulkMutation(_sessionStore.CurrentSession);
+
+    private static bool SupportsBulkMutation(AnalysisSession? session) => session switch
     {
         { Tool: ToolKind.EmptyFiles or ToolKind.EmptyFolders or ToolKind.BigFiles } => true,
         { Tool: ToolKind.TemporaryFiles, ToolOptions: TemporaryFileToolOptions } => true,
@@ -502,9 +527,9 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         _ => false,
     };
 
-    private bool IsRenameToolSupported =>
-        IsBulkMutationToolSupported ||
-        _sessionStore.CurrentSession is { Tool: ToolKind.BadExtensions, ToolOptions: NoToolOptions };
+    private static bool SupportsRename(AnalysisSession? session) =>
+        SupportsBulkMutation(session) ||
+        session is { Tool: ToolKind.BadExtensions, ToolOptions: NoToolOptions };
 
     private void EnsureSelectedMutationIsSupported()
     {
@@ -778,7 +803,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         }
     }
 
-    private static async ValueTask<(FileActionTarget? Target, FileActionFailure? Failure)>
+    private async ValueTask<(FileActionTarget? Target, FileActionFailure? Failure)>
         TryMapBadExtensionRenameAsync(
             PathFindingViewModel finding,
             string newName,
@@ -806,7 +831,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
                 return (null, ChangedFailure(finding.FullPath));
             }
 
-            DetectedFileType? detected = await FileSignatureDetector.DetectFileAsync(
+            DetectedFileType? detected = await _detectFileAsync(
                 finding.FullPath,
                 cancellationToken);
             attributes = File.GetAttributes(finding.FullPath);
@@ -836,7 +861,14 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
             }
 
             return (
-                new FileActionTarget(finding.FullPath, file.Length, FileActionTargetKind.File),
+                new FileActionTarget(
+                    finding.FullPath,
+                    file.Length,
+                    FileActionTargetKind.File,
+                    ExpectedBadExtensionContent: new BadExtensionContentConstraint(
+                        expectedModifiedUtc,
+                        detected.Name,
+                        recommendation)),
                 null);
         }
         catch (Exception ex) when (IsFileSystemFailure(ex))

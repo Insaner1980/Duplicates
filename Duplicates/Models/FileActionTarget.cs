@@ -1,10 +1,16 @@
 namespace Duplicates.Models;
 
+public sealed record BadExtensionContentConstraint(
+    DateTime ModifiedUtc,
+    string DetectedType,
+    string RecommendedExtension);
+
 public sealed record FileActionTarget(
     string FullPath,
     long SizeBytes,
     FileActionTargetKind Kind,
-    string? ExpectedInvalidLinkReason = null);
+    string? ExpectedInvalidLinkReason = null,
+    BadExtensionContentConstraint? ExpectedBadExtensionContent = null);
 
 public sealed record FileOperationResult(
     string SourcePath,

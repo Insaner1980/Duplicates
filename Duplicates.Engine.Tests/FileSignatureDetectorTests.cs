@@ -24,7 +24,7 @@ public sealed class FileSignatureDetectorTests
         yield return Case("RAR", [0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x01, 0x00], [0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x02, 0x00], [".rar"], ".rar");
         yield return Case("7z", [0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C], [0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1D], [".7z"], ".7z");
         yield return Case("MP3", Bytes("ID3"), Bytes("ID4"), [".mp3"], ".mp3");
-        yield return Case("MP3", [0xFF, 0xFB, 0x90], [0xFF, 0xF9, 0x90], [".mp3"], ".mp3");
+        yield return Case("MP3", [0xFF, 0xFB, 0x90, 0x00], [0xFF, 0xF9, 0x90, 0x00], [".mp3"], ".mp3");
         yield return Case("FLAC", Bytes("fLaC"), Bytes("fLaD"), [".flac"], ".flac");
         yield return Case("WAV", Riff("WAVE"), Riff("WAVF"), [".wav"], ".wav");
         yield return Case("Ogg", Bytes("OggS"), Bytes("OggT"), [".ogg", ".oga", ".ogv", ".opus"], ".ogg");
@@ -86,6 +86,8 @@ public sealed class FileSignatureDetectorTests
         Assert.Null(FileSignatureDetector.Detect([0xFF, 0xFB, 0x00], "free-bitrate.mp3"));
         Assert.Null(FileSignatureDetector.Detect([0xFF, 0xFB, 0xF0], "bad-bitrate.mp3"));
         Assert.Null(FileSignatureDetector.Detect([0xFF, 0xFB, 0x9C], "bad-sample-rate.mp3"));
+        Assert.Null(FileSignatureDetector.Detect([0xFF, 0xFB, 0x90], "truncated-frame.mp3"));
+        Assert.Null(FileSignatureDetector.Detect([0xFF, 0xFB, 0x90, 0x02], "reserved-emphasis.mp3"));
     }
 
     [Fact]

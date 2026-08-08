@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
 using System.Security;
+using Duplicates.Engine.Analysis;
 using Duplicates.Engine.Analysis.Analyzers;
 using Duplicates.Models;
 using Microsoft.VisualBasic.FileIO;
@@ -175,12 +176,11 @@ public sealed class FileActionService : IFileActionService
         ValidateLeafName(newName);
 
         return Task.Run(
-            () =>
+            async () =>
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 try
                 {
-                    RevalidateTarget(target);
                     string? parent = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(target.FullPath));
                     if (string.IsNullOrWhiteSpace(parent))
                     {
@@ -193,6 +193,10 @@ public sealed class FileActionService : IFileActionService
                         throw new IOException("A file or folder with the same name already exists.");
                     }
 
+                    await RevalidateRenameTargetAsync(
+                        target,
+                        newName,
+                        cancellationToken).ConfigureAwait(false);
                     MoveTarget(target, destination);
                     return new FileOperationResult(target.FullPath, destination, null);
                 }
@@ -205,6 +209,47 @@ public sealed class FileActionService : IFileActionService
                 }
             },
             cancellationToken);
+    }
+
+    private static async ValueTask RevalidateRenameTargetAsync(
+        FileActionTarget target,
+        string newName,
+        CancellationToken cancellationToken)
+    {
+        RevalidateTarget(target);
+        BadExtensionContentConstraint? constraint = target.ExpectedBadExtensionContent;
+        if (constraint is null)
+        {
+            return;
+        }
+
+        var file = new FileInfo(target.FullPath);
+        if (target.Kind != FileActionTargetKind.File || file.LastWriteTimeUtc != constraint.ModifiedUtc)
+        {
+            throw new IOException("The source no longer matches the scan result.");
+        }
+
+        DetectedFileType? detected = await FileSignatureDetector.DetectFileAsync(
+            target.FullPath,
+            cancellationToken).ConfigureAwait(false);
+        RevalidateTarget(target);
+        file.Refresh();
+        if (file.LastWriteTimeUtc != constraint.ModifiedUtc ||
+            detected?.RecommendedExtension is not string recommendation ||
+            !string.Equals(detected.Name, constraint.DetectedType, StringComparison.Ordinal) ||
+            !string.Equals(recommendation, constraint.RecommendedExtension, StringComparison.Ordinal))
+        {
+            throw new IOException("The source no longer matches the scan result.");
+        }
+
+        string currentExtension = Path.GetExtension(target.FullPath);
+        string recommendedName = Path.GetFileNameWithoutExtension(target.FullPath) + recommendation;
+        if (detected.AllowedExtensions.Any(extension =>
+                string.Equals(extension, currentExtension, StringComparison.OrdinalIgnoreCase)) ||
+            !string.Equals(newName, recommendedName, StringComparison.Ordinal))
+        {
+            throw new IOException("The source no longer matches the scan result.");
+        }
     }
 
     public void OpenFile(string path)

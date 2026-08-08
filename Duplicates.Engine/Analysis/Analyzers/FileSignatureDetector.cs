@@ -370,7 +370,10 @@ namespace Duplicates.Engine.Analysis.Analyzers
 
         private static bool IsMpegAudioFrame(ReadOnlySpan<byte> header)
         {
-            if (header.Length < 3 || header[0] != 0xFF || (header[1] & 0xE0) != 0xE0)
+            if (header.Length < 4 ||
+                header[0] != 0xFF ||
+                (header[1] & 0xE0) != 0xE0 ||
+                (header[3] & 0x03) == 0x02)
             {
                 return false;
             }
