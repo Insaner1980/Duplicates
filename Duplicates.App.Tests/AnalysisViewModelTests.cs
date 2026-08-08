@@ -517,46 +517,64 @@ public sealed class AnalysisViewModelTests
 
         try
         {
-            var service = new AnalysisService();
-            int callerThread = Environment.CurrentManagedThreadId;
-            var reportThreads = new List<int>();
-            var progress = new CapturingProgress<AnalysisProgress>(
-                _ => reportThreads.Add(Environment.CurrentManagedThreadId));
-            AnalysisScope scope = new() { IncludedFiles = [largePath, emptyPath, temporaryPath] };
+            var execution = await Task.Factory.StartNew(
+                async () =>
+                {
+                    var service = new AnalysisService();
+                    int callerThread = Environment.CurrentManagedThreadId;
+                    var reportThreads = new List<int>();
+                    var progress = new CapturingProgress<AnalysisProgress>(
+                        _ => reportThreads.Add(Environment.CurrentManagedThreadId));
+                    AnalysisScope scope = new()
+                    {
+                        IncludedFiles = [largePath, emptyPath, temporaryPath],
+                    };
 
-            AnalysisResult largeResult = await service.RunAsync(
-                ToolKind.BigFiles,
-                scope,
-                new LargeFileToolOptions(3),
-                progress,
-                CancellationToken.None);
-            AnalysisResult emptyResult = await service.RunAsync(
-                ToolKind.EmptyFiles,
-                scope,
-                new NoToolOptions(),
-                progress: null,
-                CancellationToken.None);
-            AnalysisResult emptyFolderResult = await service.RunAsync(
-                ToolKind.EmptyFolders,
-                new AnalysisScope { IncludedFolders = [root] },
-                new NoToolOptions(),
-                progress: null,
-                CancellationToken.None);
-            AnalysisResult temporaryResult = await service.RunAsync(
-                ToolKind.TemporaryFiles,
-                scope,
-                new TemporaryFileToolOptions(TimeSpan.FromDays(7), utcNow),
-                progress: null,
-                CancellationToken.None);
+                    AnalysisResult largeResult = await service.RunAsync(
+                        ToolKind.BigFiles,
+                        scope,
+                        new LargeFileToolOptions(3),
+                        progress,
+                        CancellationToken.None);
+                    AnalysisResult emptyResult = await service.RunAsync(
+                        ToolKind.EmptyFiles,
+                        scope,
+                        new NoToolOptions(),
+                        progress: null,
+                        CancellationToken.None);
+                    AnalysisResult emptyFolderResult = await service.RunAsync(
+                        ToolKind.EmptyFolders,
+                        new AnalysisScope { IncludedFolders = [root] },
+                        new NoToolOptions(),
+                        progress: null,
+                        CancellationToken.None);
+                    AnalysisResult temporaryResult = await service.RunAsync(
+                        ToolKind.TemporaryFiles,
+                        scope,
+                        new TemporaryFileToolOptions(TimeSpan.FromDays(7), utcNow),
+                        progress: null,
+                        CancellationToken.None);
 
-            Assert.Equal(largePath, Assert.Single(largeResult.Findings).FullPath);
-            Assert.Equal(emptyPath, Assert.Single(emptyResult.Findings).FullPath);
-            Assert.Equal(emptyFolderPath, Assert.Single(emptyFolderResult.Findings).FullPath);
-            Assert.Equal(temporaryPath, Assert.Single(temporaryResult.Findings).FullPath);
-            Assert.NotEmpty(reportThreads);
-            Assert.DoesNotContain(callerThread, reportThreads);
-            Assert.True(largeResult.Elapsed >= TimeSpan.Zero);
-            Assert.True(emptyResult.Elapsed >= TimeSpan.Zero);
+                    return (
+                        CallerThread: callerThread,
+                        ReportThreads: reportThreads,
+                        LargeResult: largeResult,
+                        EmptyResult: emptyResult,
+                        EmptyFolderResult: emptyFolderResult,
+                        TemporaryResult: temporaryResult);
+                },
+                CancellationToken.None,
+                TaskCreationOptions.LongRunning,
+                TaskScheduler.Default).Unwrap();
+
+            Assert.Equal(largePath, Assert.Single(execution.LargeResult.Findings).FullPath);
+            Assert.Equal(emptyPath, Assert.Single(execution.EmptyResult.Findings).FullPath);
+            Assert.Equal(emptyFolderPath, Assert.Single(execution.EmptyFolderResult.Findings).FullPath);
+            Assert.Equal(temporaryPath, Assert.Single(execution.TemporaryResult.Findings).FullPath);
+            Assert.NotEmpty(execution.ReportThreads);
+            Assert.DoesNotContain(execution.CallerThread, execution.ReportThreads);
+            Assert.True(execution.LargeResult.Elapsed >= TimeSpan.Zero);
+            Assert.True(execution.EmptyResult.Elapsed >= TimeSpan.Zero);
         }
         finally
         {
