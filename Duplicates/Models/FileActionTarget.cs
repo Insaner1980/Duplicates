@@ -3,7 +3,8 @@ namespace Duplicates.Models;
 public sealed record FileActionTarget(
     string FullPath,
     long SizeBytes,
-    FileActionTargetKind Kind);
+    FileActionTargetKind Kind,
+    string? ExpectedInvalidLinkReason = null);
 
 public sealed record FileOperationResult(
     string SourcePath,

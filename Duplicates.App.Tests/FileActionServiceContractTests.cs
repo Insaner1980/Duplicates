@@ -1,9 +1,11 @@
 using System.Security.Principal;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using Duplicates.Engine.Models;
 using Duplicates.Models;
 using Duplicates.Services;
+using Microsoft.VisualBasic.FileIO;
 using Xunit.Sdk;
 
 namespace Duplicates.App.Tests;
@@ -118,6 +120,107 @@ public sealed class FileActionServiceContractTests
         Assert.True(File.Exists(fileTarget));
         Assert.True(Directory.Exists(directoryTarget));
         Assert.True(File.Exists(Path.Combine(directoryTarget, "keep.txt")));
+    }
+
+    [Fact]
+    public async Task DeleteAsync_ExpectedMissingLinkRejectsNowValidReplacement()
+    {
+        using var fixture = new TemporaryDirectory();
+        string target = fixture.WriteFile("target.txt", [1]);
+        string link = fixture.PathFor("link.txt");
+        CreateFileSymbolicLinkOrSkip(link, target);
+        FileActionService service = CreateService(DeletionMode.Permanent);
+
+        DeleteSummary summary = await service.DeleteAsync(
+            [new FileActionTarget(link, 0, FileActionTargetKind.FileLink, "Link target is missing.")],
+            null,
+            CancellationToken.None);
+
+        Assert.Equal(0, summary.DeletedCount);
+        Assert.Equal(link, Assert.Single(summary.Failures).Path);
+        Assert.True(File.Exists(link));
+        Assert.True(File.Exists(target));
+    }
+
+    [Fact]
+    public async Task MoveAsync_ExpectedMissingLinkRejectsNowValidReplacement()
+    {
+        using var fixture = new TemporaryDirectory();
+        string target = fixture.WriteFile("target.txt", [1]);
+        string link = fixture.PathFor("link.txt");
+        string destination = fixture.CreateDirectory("destination");
+        CreateFileSymbolicLinkOrSkip(link, target);
+        FileActionService service = CreateService(DeletionMode.Permanent);
+
+        FileOperationSummary summary = await service.MoveAsync(
+            [new FileActionTarget(link, 0, FileActionTargetKind.FileLink, "Link target is missing.")],
+            destination,
+            MoveCollisionBehavior.Skip,
+            null,
+            CancellationToken.None);
+
+        Assert.False(Assert.Single(summary.Results).Succeeded);
+        Assert.True(File.Exists(link));
+        Assert.False(File.Exists(Path.Combine(destination, "link.txt")));
+        Assert.True(File.Exists(target));
+    }
+
+    [Fact]
+    public async Task RenameAsync_ExpectedMissingLinkRejectsNowValidReplacement()
+    {
+        using var fixture = new TemporaryDirectory();
+        string target = fixture.WriteFile("target.txt", [1]);
+        string link = fixture.PathFor("link.txt");
+        CreateFileSymbolicLinkOrSkip(link, target);
+        FileActionService service = CreateService(DeletionMode.Permanent);
+
+        FileOperationResult result = await service.RenameAsync(
+            new FileActionTarget(link, 0, FileActionTargetKind.FileLink, "Link target is missing."),
+            "renamed.txt",
+            CancellationToken.None);
+
+        Assert.False(result.Succeeded);
+        Assert.True(File.Exists(link));
+        Assert.False(File.Exists(fixture.PathFor("renamed.txt")));
+        Assert.True(File.Exists(target));
+    }
+
+    [Fact]
+    public async Task RenameAsync_ExpectedMissingLinkRejectsUnresolvedClassification()
+    {
+        using var fixture = new TemporaryDirectory();
+        string link = fixture.PathFor("loop-link");
+        CreateFileSymbolicLinkOrSkip(link, "loop-link");
+        FileActionService service = CreateService(DeletionMode.Permanent);
+
+        FileOperationResult result = await service.RenameAsync(
+            new FileActionTarget(link, 0, FileActionTargetKind.FileLink, "Link target is missing."),
+            "renamed-link",
+            CancellationToken.None);
+
+        Assert.False(result.Succeeded);
+        Assert.NotNull(new FileInfo(link).LinkTarget);
+        Assert.False(File.Exists(fixture.PathFor("renamed-link")));
+    }
+
+    [Fact]
+    public void PermanentDirectoryLinkDeletionPrimitive_IsNonRecursive()
+    {
+        using var fixture = new TemporaryDirectory();
+        string directory = fixture.CreateDirectory("normal-directory");
+        string child = fixture.WriteFile(Path.Combine("normal-directory", "keep.txt"), [1]);
+        MethodInfo deleteTarget = typeof(FileActionService).GetMethod(
+            "DeleteTarget",
+            BindingFlags.NonPublic | BindingFlags.Static) ??
+            throw new InvalidOperationException("DeleteTarget was not found.");
+
+        TargetInvocationException exception = Assert.Throws<TargetInvocationException>(() => deleteTarget.Invoke(
+            null,
+            [new FileActionTarget(directory, 0, FileActionTargetKind.DirectoryLink), RecycleOption.DeletePermanently]));
+
+        Assert.IsType<IOException>(exception.InnerException);
+        Assert.True(Directory.Exists(directory));
+        Assert.True(File.Exists(child));
     }
 
     [Fact]
@@ -363,6 +466,58 @@ public sealed class FileActionServiceContractTests
     }
 
     [Fact]
+    public async Task DeleteAsync_CancellationAfterFirstItemCarriesCompletedSummary()
+    {
+        using var fixture = new TemporaryDirectory();
+        string first = fixture.WriteFile("first.txt", [1]);
+        string second = fixture.WriteFile("second.txt", [2]);
+        FileActionService service = CreateService(DeletionMode.Permanent);
+        using var cancellation = new CancellationTokenSource();
+        var progress = new InlineProgress<DeleteProgress>(report =>
+        {
+            if (report.ProcessedCount == 1)
+            {
+                cancellation.Cancel();
+            }
+        });
+
+        DeleteOperationCanceledException exception = await Assert.ThrowsAsync<DeleteOperationCanceledException>(() =>
+            service.DeleteAsync(
+                [
+                    new FileActionTarget(first, 1, FileActionTargetKind.File),
+                    new FileActionTarget(second, 1, FileActionTargetKind.File),
+                ],
+                progress,
+                cancellation.Token));
+
+        Assert.Equal(1, exception.Summary.DeletedCount);
+        Assert.Equal(1, exception.Summary.DeletedBytes);
+        Assert.Empty(exception.Summary.Failures);
+        Assert.Equal([first], exception.Summary.DeletedPaths);
+        Assert.False(File.Exists(first));
+        Assert.True(File.Exists(second));
+    }
+
+    [Fact]
+    public async Task DeleteAsync_CancellationBeforeFirstItemKeepsStandardCancellationContract()
+    {
+        using var fixture = new TemporaryDirectory();
+        string path = fixture.WriteFile("file.txt", [1]);
+        FileActionService service = CreateService(DeletionMode.Permanent);
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        OperationCanceledException exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            service.DeleteAsync(
+                [new FileActionTarget(path, 1, FileActionTargetKind.File)],
+                null,
+                cancellation.Token));
+
+        Assert.IsNotType<DeleteOperationCanceledException>(exception);
+        Assert.True(File.Exists(path));
+    }
+
+    [Fact]
     public async Task RenameAsync_CollisionReturnsFailureWithoutOverwriting()
     {
         using var fixture = new TemporaryDirectory();
@@ -579,7 +734,10 @@ public sealed class FileActionServiceContractTests
         {
             try
             {
-                foreach (string metadataPath in Directory.EnumerateFiles(recycleDirectory, "$I*", SearchOption.TopDirectoryOnly))
+                foreach (string metadataPath in Directory.EnumerateFiles(
+                    recycleDirectory,
+                    "$I*",
+                    System.IO.SearchOption.TopDirectoryOnly))
                 {
                     if (File.GetLastWriteTimeUtc(metadataPath) < operationStartedUtc)
                     {

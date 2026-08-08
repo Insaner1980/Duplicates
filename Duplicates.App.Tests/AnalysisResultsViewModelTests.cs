@@ -644,6 +644,7 @@ public sealed class AnalysisResultsViewModelTests
             Assert.Equal(link, requested.FullPath);
             Assert.Equal(0, requested.SizeBytes);
             Assert.Equal(FileActionTargetKind.FileLink, requested.Kind);
+            Assert.Equal("Link target is missing.", requested.ExpectedInvalidLinkReason);
             Assert.NotEqual(target, requested.FullPath);
             Assert.Equal(1, summary.DeletedCount);
         }
@@ -689,6 +690,7 @@ public sealed class AnalysisResultsViewModelTests
             FileActionTarget requested = Assert.Single(requestedTargets!);
             Assert.Equal(link, requested.FullPath);
             Assert.Equal(FileActionTargetKind.DirectoryLink, requested.Kind);
+            Assert.Equal("Link target is missing.", requested.ExpectedInvalidLinkReason);
             Assert.NotEqual(target, requested.FullPath);
             Assert.True(Assert.Single(summary.Results).Succeeded);
         }
@@ -728,6 +730,7 @@ public sealed class AnalysisResultsViewModelTests
             Assert.NotNull(fileActions.RenameTarget);
             Assert.Equal(link, fileActions.RenameTarget.FullPath);
             Assert.Equal(FileActionTargetKind.FileLink, fileActions.RenameTarget.Kind);
+            Assert.Equal("Link target is missing.", fileActions.RenameTarget.ExpectedInvalidLinkReason);
             Assert.NotEqual(target, fileActions.RenameTarget.FullPath);
         }
         finally
@@ -817,6 +820,63 @@ public sealed class AnalysisResultsViewModelTests
             Assert.Equal("File changed since scan.", failure.Reason);
             Assert.Equal(0, fileActions.DeleteCallCount);
             Assert.True(finding.IsSelected);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task DeleteCancellation_ReconcilesSuccessfulAnalysisPathsBeforeRethrowing()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string first = Path.Combine(root, "first.txt");
+        string failed = Path.Combine(root, "failed.txt");
+        string unattempted = Path.Combine(root, "unattempted.txt");
+        await File.WriteAllBytesAsync(first, []);
+        await File.WriteAllBytesAsync(failed, []);
+        await File.WriteAllBytesAsync(unattempted, []);
+
+        try
+        {
+            var store = new AnalysisSessionStore();
+            var fileActions = new FakeFileActionService
+            {
+                NextDeleteCancellation = new DeleteOperationCanceledException(
+                    new DeleteSummary(
+                        1,
+                        0,
+                        [new FileActionFailure(failed, "Access denied")],
+                        [first]),
+                    new CancellationToken(canceled: true)),
+            };
+            var viewModel = new AnalysisResultsViewModel(store, fileActions, new FakeResultExportService());
+            store.SetCompleted(
+                ToolKind.EmptyFiles,
+                new AnalysisScope { IncludedFolders = [root] },
+                new NoToolOptions(),
+                NewResult(
+                [
+                    NewFinding(first, 0),
+                    NewFinding(failed, 0),
+                    NewFinding(unattempted, 0),
+                ]));
+            foreach (PathFindingViewModel finding in viewModel.Findings)
+            {
+                finding.IsSelected = true;
+            }
+
+            await Assert.ThrowsAsync<DeleteOperationCanceledException>(() =>
+                viewModel.DeleteSelectedAsync(CancellationToken.None));
+
+            Assert.DoesNotContain(viewModel.Findings, finding => finding.FullPath == first);
+            Assert.Contains(viewModel.Findings, finding => finding.FullPath == failed && finding.IsSelected);
+            Assert.Contains(viewModel.Findings, finding => finding.FullPath == unattempted && finding.IsSelected);
+            Assert.Equal(2, viewModel.SelectedFindings.Count);
+            Assert.Contains("cancelled", viewModel.ActionStatusMessage, StringComparison.OrdinalIgnoreCase);
+            Assert.False(viewModel.IsActionRunning);
         }
         finally
         {

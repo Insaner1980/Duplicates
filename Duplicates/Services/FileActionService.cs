@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
 using System.Security;
+using Duplicates.Engine.Analysis.Analyzers;
 using Duplicates.Models;
 using Microsoft.VisualBasic.FileIO;
 
@@ -39,19 +40,36 @@ public sealed class FileActionService : IFileActionService
                 int deletedCount = 0;
                 long deletedBytes = 0;
                 int processedCount = 0;
+                var deletedPaths = new List<string>();
                 RecycleOption recycleOption = _settingsService.Current.DeletionMode == DeletionMode.RecycleBin
                     ? RecycleOption.SendToRecycleBin
                     : RecycleOption.DeletePermanently;
 
                 foreach (FileActionTarget target in targets)
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        if (processedCount > 0)
+                        {
+                            throw new DeleteOperationCanceledException(
+                                new DeleteSummary(
+                                    deletedCount,
+                                    deletedBytes,
+                                    failures.ToArray(),
+                                    deletedPaths.ToArray()),
+                                cancellationToken);
+                        }
+
+                        cancellationToken.ThrowIfCancellationRequested();
+                    }
+
                     try
                     {
                         RevalidateTarget(target);
                         DeleteTarget(target, recycleOption);
                         deletedCount++;
                         deletedBytes += target.SizeBytes;
+                        deletedPaths.Add(target.FullPath);
                     }
                     catch (Exception ex) when (IsOperationalFailure(ex))
                     {
@@ -64,7 +82,7 @@ public sealed class FileActionService : IFileActionService
                     }
                 }
 
-                return new DeleteSummary(deletedCount, deletedBytes, failures);
+                return new DeleteSummary(deletedCount, deletedBytes, failures, deletedPaths);
             },
             cancellationToken);
     }
@@ -214,7 +232,14 @@ public sealed class FileActionService : IFileActionService
         }
         else if (target.Kind == FileActionTargetKind.DirectoryLink)
         {
-            FileSystem.DeleteDirectory(target.FullPath, UIOption.OnlyErrorDialogs, recycleOption);
+            if (recycleOption == RecycleOption.SendToRecycleBin)
+            {
+                RecycleDirectoryEntry(target.FullPath, requireEmpty: false);
+            }
+            else
+            {
+                Directory.Delete(target.FullPath, recursive: false);
+            }
         }
         else
         {
@@ -273,6 +298,22 @@ public sealed class FileActionService : IFileActionService
         if (actualKind != target.Kind)
         {
             throw new IOException("The source no longer matches the scan result.");
+        }
+
+        if (target.ExpectedInvalidLinkReason is not null &&
+            target.Kind is FileActionTargetKind.FileLink or FileActionTargetKind.DirectoryLink)
+        {
+            FileSystemInfo source = target.Kind == FileActionTargetKind.DirectoryLink
+                ? new DirectoryInfo(target.FullPath)
+                : new FileInfo(target.FullPath);
+            if (source.LinkTarget is null ||
+                !string.Equals(
+                    InvalidLinkAnalyzer.GetInvalidReason(source),
+                    target.ExpectedInvalidLinkReason,
+                    StringComparison.Ordinal))
+            {
+                throw new IOException("The source no longer matches the scan result.");
+            }
         }
 
         if (target.Kind == FileActionTargetKind.File && new FileInfo(target.FullPath).Length != target.SizeBytes)
@@ -349,14 +390,17 @@ public sealed class FileActionService : IFileActionService
         return !ReservedNames.Contains(stem);
     }
 
-    private static void RecycleEmptyDirectory(string path)
+    private static void RecycleEmptyDirectory(string path) =>
+        RecycleDirectoryEntry(path, requireEmpty: true);
+
+    private static void RecycleDirectoryEntry(string path, bool requireEmpty)
     {
         Exception? failure = null;
         var thread = new Thread(() =>
         {
             try
             {
-                RecycleEmptyDirectoryOnSta(path);
+                RecycleDirectoryEntryOnSta(path, requireEmpty);
             }
             catch (Exception ex)
             {
@@ -376,9 +420,9 @@ public sealed class FileActionService : IFileActionService
         }
     }
 
-    private static void RecycleEmptyDirectoryOnSta(string path)
+    private static void RecycleDirectoryEntryOnSta(string path, bool requireEmpty)
     {
-        if (Directory.EnumerateFileSystemEntries(path).Any())
+        if (requireEmpty && Directory.EnumerateFileSystemEntries(path).Any())
         {
             throw new IOException("The directory is no longer empty.");
         }
@@ -401,7 +445,7 @@ public sealed class FileActionService : IFileActionService
             int abortedResult = operation.GetAnyOperationsAborted(out int wasAborted);
             Marshal.ThrowExceptionForHR(performResult);
             Marshal.ThrowExceptionForHR(abortedResult);
-            if (wasAborted != 0 || Directory.Exists(path))
+            if (wasAborted != 0 || PathEntryExists(path))
             {
                 throw new IOException("The Recycle Bin operation did not delete the empty directory.");
             }
@@ -421,6 +465,19 @@ public sealed class FileActionService : IFileActionService
             {
                 Marshal.FinalReleaseComObject(operation);
             }
+        }
+    }
+
+    private static bool PathEntryExists(string path)
+    {
+        try
+        {
+            _ = File.GetAttributes(path);
+            return true;
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return false;
         }
     }
 

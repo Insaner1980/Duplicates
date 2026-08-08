@@ -364,23 +364,21 @@ public sealed partial class ResultsViewModel : ObservableObject
         {
             DeleteProgressText = $"0 of {files.Count:N0} files processed";
             DeleteProgressValue = 0;
-            DeleteSummary summary = await _fileActionService.DeleteAsync(
-                MapTargets(files),
-                new InlineProgress<DeleteProgress>(UpdateDeleteProgress),
-                cancellationToken);
-            var deletedPaths = files
-                .Where(file => !summary.Failures.Any(failure => string.Equals(failure.Path, file.FullPath, StringComparison.OrdinalIgnoreCase)))
-                .Select(static file => file.FullPath)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            DeleteSummary summary;
+            try
+            {
+                summary = await _fileActionService.DeleteAsync(
+                    MapTargets(files),
+                    new InlineProgress<DeleteProgress>(UpdateDeleteProgress),
+                    cancellationToken);
+            }
+            catch (DeleteOperationCanceledException ex)
+            {
+                ApplyDeleteSummary(files, ex.Summary, wasCancelled: true);
+                throw;
+            }
 
-            RemoveSuccessfulPaths(deletedPaths);
-
-            DeleteStatusMessage = summary.Failures.Count == 0
-                ? summary.DeletedCount == 1 ? "1 file deleted." : $"{summary.DeletedCount:N0} files deleted."
-                : $"{summary.DeletedCount:N0} files deleted, {summary.Failures.Count:N0} could not be deleted.";
-            DeleteFailureDetailsText = BuildFailureDetailsText(summary.Failures);
-            ApplySearchAndSort();
-            RefreshAllComputedProperties();
+            ApplyDeleteSummary(files, summary, wasCancelled: false);
             return summary;
         }
         finally
@@ -527,6 +525,29 @@ public sealed partial class ResultsViewModel : ObservableObject
         DeleteProgressValue = progress.TotalCount <= 0
             ? 0
             : Math.Clamp(progress.ProcessedCount * 100d / progress.TotalCount, 0, 100);
+    }
+
+    private void ApplyDeleteSummary(
+        IReadOnlyList<DuplicateFileViewModel> files,
+        DeleteSummary summary,
+        bool wasCancelled)
+    {
+        IEnumerable<string> deletedPaths = summary.DeletedPaths ?? files
+            .Where(file => !summary.Failures.Any(failure =>
+                string.Equals(failure.Path, file.FullPath, StringComparison.OrdinalIgnoreCase)))
+            .Select(static file => file.FullPath);
+        RemoveSuccessfulPaths(deletedPaths.ToHashSet(StringComparer.OrdinalIgnoreCase));
+        DeleteStatusMessage = wasCancelled
+            ? $"Delete cancelled after {summary.DeletedCount:N0} " +
+                (summary.DeletedCount == 1 ? "file deleted." : "files deleted.")
+            : summary.Failures.Count == 0
+                ? summary.DeletedCount == 1
+                    ? "1 file deleted."
+                    : $"{summary.DeletedCount:N0} files deleted."
+                : $"{summary.DeletedCount:N0} files deleted, {summary.Failures.Count:N0} could not be deleted.";
+        DeleteFailureDetailsText = BuildFailureDetailsText(summary.Failures);
+        ApplySearchAndSort();
+        RefreshAllComputedProperties();
     }
 
     private void UpdateFileOperationProgress(FileOperationProgress progress)

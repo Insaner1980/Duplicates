@@ -73,8 +73,10 @@ public sealed class InvalidLinkAnalyzer
             : new LinkFinding(path, immediateTarget, reason, isDirectoryLink);
     }
 
-    private static string? GetInvalidReason(FileSystemInfo source)
+    public static string? GetInvalidReason(FileSystemInfo source)
     {
+        ArgumentNullException.ThrowIfNull(source);
+
         FileSystemInfo? finalTarget;
         try
         {

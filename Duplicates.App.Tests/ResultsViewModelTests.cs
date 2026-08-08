@@ -139,6 +139,48 @@ public sealed class ResultsViewModelTests
     }
 
     [Fact]
+    public async Task DeleteCancellation_ReconcilesSuccessfulExactPathsBeforeRethrowing()
+    {
+        var store = new ResultsStore();
+        var fileActions = new FakeFileActionService();
+        var viewModel = NewViewModel(store, fileActions);
+        store.SetResult(NewResult(
+            NewGroup(1, "one", "one-keep.txt", "one-delete.txt"),
+            NewGroup(2, "two", "two-keep.txt", "two-failed.txt", "two-unattempted.txt")));
+        viewModel.ClearSelectionCommand.Execute(null);
+        IReadOnlyList<DuplicateFileViewModel> files = viewModel.Groups.SelectMany(group => group.Files).ToArray();
+        DuplicateFileViewModel successful = files.Single(file => file.FileName == "one-delete.txt");
+        DuplicateFileViewModel failed = files.Single(file => file.FileName == "two-failed.txt");
+        DuplicateFileViewModel unattempted = files.Single(file => file.FileName == "two-unattempted.txt");
+        successful.IsSelected = true;
+        failed.IsSelected = true;
+        unattempted.IsSelected = true;
+        fileActions.NextDeleteCancellation = new DeleteOperationCanceledException(
+            new DeleteSummary(
+                1,
+                successful.SizeBytes,
+                [new FileActionFailure(failed.FullPath, "Access denied")],
+                [successful.FullPath]),
+            new CancellationToken(canceled: true));
+
+        await Assert.ThrowsAsync<DeleteOperationCanceledException>(() =>
+            viewModel.DeleteSelectedAsync(CancellationToken.None));
+
+        Assert.DoesNotContain(
+            viewModel.Groups.SelectMany(group => group.Files),
+            file => file.FullPath == successful.FullPath);
+        Assert.Contains(
+            viewModel.Groups.SelectMany(group => group.Files),
+            file => file.FullPath == failed.FullPath && file.IsSelected);
+        Assert.Contains(
+            viewModel.Groups.SelectMany(group => group.Files),
+            file => file.FullPath == unattempted.FullPath && file.IsSelected);
+        Assert.Equal(2, viewModel.SelectedFileCount);
+        Assert.Contains("cancelled", viewModel.DeleteStatusMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.False(viewModel.IsDeleting);
+    }
+
+    [Fact]
     public async Task DeleteFileAsync_DeletesOnlyRequestedUnselectedFile()
     {
         var store = new ResultsStore();

@@ -33,6 +33,8 @@ internal sealed class FakeFileActionService : IFileActionService
 {
     public DeleteSummary NextSummary { get; set; } = new(0, 0, []);
 
+    public DeleteOperationCanceledException? NextDeleteCancellation { get; set; }
+
     public FileOperationSummary NextMoveSummary { get; set; } = new([], 0);
 
     public FileOperationCanceledException? NextMoveCancellation { get; set; }
@@ -56,6 +58,11 @@ internal sealed class FakeFileActionService : IFileActionService
     {
         DeleteCallCount++;
         OnDelete?.Invoke(targets, progress);
+        if (NextDeleteCancellation is not null)
+        {
+            throw NextDeleteCancellation;
+        }
+
         return Task.FromResult(NextSummary);
     }
 

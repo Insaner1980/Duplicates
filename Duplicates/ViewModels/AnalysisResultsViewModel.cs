@@ -4,6 +4,7 @@ using System.Security;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Duplicates.Engine.Analysis;
+using Duplicates.Engine.Analysis.Analyzers;
 using Duplicates.Engine.Models;
 using Duplicates.Models;
 using Duplicates.Services;
@@ -195,20 +196,20 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         ActionStatusMessage = "Deleting selected items...";
         try
         {
-            DeleteSummary serviceSummary = selection.Targets.Count == 0
-                ? new DeleteSummary(0, 0, [])
-                : await fileActions.DeleteAsync(selection.Targets, null, cancellationToken);
-            FileActionFailure[] failures = selection.Failures.Concat(serviceSummary.Failures).ToArray();
-            HashSet<string> successfulPaths = selection.Targets
-                .Where(target => !serviceSummary.Failures.Any(failure =>
-                    string.Equals(failure.Path, target.FullPath, StringComparison.OrdinalIgnoreCase)))
-                .Select(static target => target.FullPath)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            RemoveSuccessfulPaths(successfulPaths);
-            ActionStatusMessage = failures.Length == 0
-                ? serviceSummary.DeletedCount == 1 ? "1 item deleted." : $"{serviceSummary.DeletedCount:N0} items deleted."
-                : $"{serviceSummary.DeletedCount:N0} items deleted, {failures.Length:N0} could not be deleted.";
-            return new DeleteSummary(serviceSummary.DeletedCount, serviceSummary.DeletedBytes, failures);
+            DeleteSummary serviceSummary;
+            try
+            {
+                serviceSummary = selection.Targets.Count == 0
+                    ? new DeleteSummary(0, 0, [])
+                    : await fileActions.DeleteAsync(selection.Targets, null, cancellationToken);
+            }
+            catch (DeleteOperationCanceledException ex)
+            {
+                ApplyDeleteSummary(ex.Summary, selection, wasCancelled: true);
+                throw;
+            }
+
+            return ApplyDeleteSummary(serviceSummary, selection, wasCancelled: false);
         }
         finally
         {
@@ -519,6 +520,33 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         return new FileOperationSummary(results, serviceSummary.SucceededBytes);
     }
 
+    private DeleteSummary ApplyDeleteSummary(
+        DeleteSummary serviceSummary,
+        SelectionTargets selection,
+        bool wasCancelled)
+    {
+        FileActionFailure[] failures = selection.Failures.Concat(serviceSummary.Failures).ToArray();
+        IEnumerable<string> successfulPaths = serviceSummary.DeletedPaths ?? selection.Targets
+            .Where(target => !serviceSummary.Failures.Any(failure =>
+                string.Equals(failure.Path, target.FullPath, StringComparison.OrdinalIgnoreCase)))
+            .Select(static target => target.FullPath);
+        HashSet<string> successfulPathSet = successfulPaths.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        RemoveSuccessfulPaths(successfulPathSet);
+        ActionStatusMessage = wasCancelled
+            ? $"Delete cancelled after {serviceSummary.DeletedCount:N0} " +
+                (serviceSummary.DeletedCount == 1 ? "item deleted." : "items deleted.")
+            : failures.Length == 0
+                ? serviceSummary.DeletedCount == 1
+                    ? "1 item deleted."
+                    : $"{serviceSummary.DeletedCount:N0} items deleted."
+                : $"{serviceSummary.DeletedCount:N0} items deleted, {failures.Length:N0} could not be deleted.";
+        return new DeleteSummary(
+            serviceSummary.DeletedCount,
+            serviceSummary.DeletedBytes,
+            failures,
+            successfulPathSet.ToArray());
+    }
+
     private SelectionTargets BuildValidatedSelection()
     {
         var targets = new List<FileActionTarget>();
@@ -709,68 +737,26 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
                 ? new DirectoryInfo(finding.FullPath)
                 : new FileInfo(finding.FullPath);
             if (source.LinkTarget is null ||
-                !string.Equals(GetInvalidLinkReason(source), finding.Source.Reason, StringComparison.Ordinal))
+                !string.Equals(
+                    InvalidLinkAnalyzer.GetInvalidReason(source),
+                    finding.Source.Reason,
+                    StringComparison.Ordinal))
             {
                 failure = ChangedFailure(finding.FullPath);
                 return false;
             }
 
-            target = new FileActionTarget(finding.FullPath, 0, expectedKind.Value);
+            target = new FileActionTarget(
+                finding.FullPath,
+                0,
+                expectedKind.Value,
+                finding.Source.Reason);
             return true;
         }
         catch (Exception ex) when (IsFileSystemFailure(ex))
         {
             failure = ChangedFailure(finding.FullPath);
             return false;
-        }
-    }
-
-    private static string? GetInvalidLinkReason(FileSystemInfo source)
-    {
-        FileSystemInfo? finalTarget;
-        try
-        {
-            finalTarget = source.ResolveLinkTarget(returnFinalTarget: true);
-        }
-        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
-        {
-            return "Link target is missing.";
-        }
-        catch (Exception ex) when (ex is UnauthorizedAccessException or SecurityException)
-        {
-            return "Link target is inaccessible.";
-        }
-        catch (Exception ex) when (IsUnresolvableLink(ex))
-        {
-            return "Link target cannot be resolved.";
-        }
-
-        if (finalTarget is null)
-        {
-            return "Link target cannot be resolved.";
-        }
-
-        if (finalTarget.Exists)
-        {
-            return null;
-        }
-
-        try
-        {
-            _ = File.GetAttributes(finalTarget.FullName);
-            return null;
-        }
-        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
-        {
-            return "Link target is missing.";
-        }
-        catch (Exception ex) when (ex is UnauthorizedAccessException or SecurityException)
-        {
-            return "Link target is inaccessible.";
-        }
-        catch (Exception ex) when (IsUnresolvableLink(ex))
-        {
-            return "Link target cannot be resolved.";
         }
     }
 
@@ -791,9 +777,6 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         value = null;
         return false;
     }
-
-    private static bool IsUnresolvableLink(Exception exception) =>
-        exception is IOException or ArgumentException or NotSupportedException;
 
     private static bool TryMapSimilarityItem(
         SimilarityItemViewModel item,
