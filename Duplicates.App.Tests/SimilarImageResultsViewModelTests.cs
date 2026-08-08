@@ -232,6 +232,72 @@ public sealed class SimilarImageResultsViewModelTests : IDisposable
         Assert.Equal(replacementReference.FullPath, Assert.Single(viewModel.Groups).ReferenceItem.FullPath);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SimilarityAction_SessionSwapAfterSelectionValidationRejectsWholeBatchBeforeDispatch(bool move)
+    {
+        SimilarityItem oldReference = WriteItem("old-reference-race.jpg", 0, width: 200, height: 200);
+        SimilarityItem oldCandidate = WriteItem("old-candidate-race.jpg", 0, width: 100, height: 100);
+        SimilarityItem replacementReference = WriteItem(
+            "replacement-reference-race.jpg",
+            ulong.MaxValue,
+            width: 200,
+            height: 200);
+        SimilarityItem replacementCandidate = WriteItem(
+            "replacement-candidate-race.jpg",
+            ulong.MaxValue,
+            width: 100,
+            height: 100);
+        var analysis = new FakeSimilarityAnalysisService();
+        var fileActions = new FakeFileActionService();
+        var store = new AnalysisSessionStore();
+        var viewModel = NewViewModel(store, fileActions, analysis);
+        store.SetCompleted(
+            ToolKind.SimilarImages,
+            new AnalysisScope(),
+            new SimilarImageToolOptions(8),
+            Result(Regroup([oldReference, oldCandidate])));
+        foreach (SimilarityItemViewModel item in viewModel.Groups[0].Items)
+        {
+            item.IsSelected = true;
+        }
+
+        AnalysisResult replacement = Result(Regroup([replacementReference, replacementCandidate]));
+        viewModel.SimilaritySelectionValidated = () => store.SetCompleted(
+            ToolKind.SimilarImages,
+            new AnalysisScope(),
+            new SimilarImageToolOptions(8),
+            replacement);
+
+        IReadOnlyList<FileActionFailure> failures;
+        if (move)
+        {
+            FileOperationSummary summary = await viewModel.MoveSelectedAsync(
+                _root,
+                MoveCollisionBehavior.Skip,
+                CancellationToken.None);
+            failures = summary.Results.Select(static result => result.Failure!).ToArray();
+        }
+        else
+        {
+            DeleteSummary summary = await viewModel.DeleteSelectedAsync(CancellationToken.None);
+            failures = summary.Failures;
+        }
+
+        Assert.Equal(0, fileActions.DeleteCallCount);
+        Assert.Equal(0, fileActions.MoveCallCount);
+        Assert.Equal(2, failures.Count);
+        Assert.All(failures, static failure => Assert.Equal("File changed since scan.", failure.Reason));
+        Assert.Equal(
+            [oldReference.FullPath, oldCandidate.FullPath],
+            failures.Select(static failure => failure.Path));
+        Assert.Same(replacement, store.CurrentSession!.Result);
+        SimilarityGroupViewModel replacementGroup = Assert.Single(viewModel.Groups);
+        Assert.Equal(replacementReference.FullPath, replacementGroup.ReferenceItem.FullPath);
+        Assert.All(replacementGroup.Items, static item => Assert.False(item.IsSelected));
+    }
+
     [Fact]
     public async Task PartialMove_GloballyRegroupsAndPreservesFailuresPreviewSkippedFilterSortAndExport()
     {

@@ -154,6 +154,43 @@ public sealed class WindowsMediaProviderTests : IDisposable
         await File.WriteAllBytesAsync(path, new byte[info.Length]);
     }
 
+    [Theory]
+    [InlineData((ushort)6)]
+    [InlineData((ushort)8)]
+    public async Task MediaPreviewLoader_ScalesRawPixelsBeforeApplyingExifQuarterTurn(ushort orientation)
+    {
+        string path = await WriteExifOrientedImageAsync($"preview-{orientation}.jpg", orientation);
+        var info = new FileInfo(path);
+        SimilarityItem item = new()
+        {
+            FullPath = path,
+            SizeBytes = info.Length,
+            ModifiedUtc = info.LastWriteTimeUtc,
+            SimilarityPercent = 100,
+            Evidence = new ImageSimilarityEvidence(0, 256, 1024, "JPEG"),
+        };
+
+        MediaPreviewData preview = await new WindowsMediaPreviewLoader().LoadAsync(
+            ToolKind.SimilarImages,
+            item,
+            CancellationToken.None);
+
+        Assert.Equal(128, preview.Width);
+        Assert.Equal(512, preview.Height);
+        Assert.Equal(128 * 512 * 4, preview.Bgra8.Length);
+        (byte B, byte G, byte R)[] expected = orientation == 6
+            ? [(255, 0, 0), (0, 0, 255), (255, 255, 255), (0, 255, 0)]
+            : [(0, 255, 0), (255, 255, 255), (0, 0, 255), (255, 0, 0)];
+        AssertPreviewPixel(preview, preview.Width / 4, preview.Height / 4, expected[0]);
+        AssertPreviewPixel(preview, preview.Width * 3 / 4, preview.Height / 4, expected[1]);
+        AssertPreviewPixel(preview, preview.Width / 4, preview.Height * 3 / 4, expected[2]);
+        AssertPreviewPixel(preview, preview.Width * 3 / 4, preview.Height * 3 / 4, expected[3]);
+
+        MoveAwayAndBack(path);
+        await File.WriteAllBytesAsync(path, new byte[info.Length]);
+        Assert.Equal(info.Length, new FileInfo(path).Length);
+    }
+
     [Fact]
     public async Task MediaPreviewLoader_FailsClosedForNonImageToolOrEvidence()
     {
@@ -347,6 +384,88 @@ public sealed class WindowsMediaProviderTests : IDisposable
         return file.Path;
     }
 
+    private async Task<string> WriteExifOrientedImageAsync(string name, ushort orientation)
+    {
+        const uint width = 1024;
+        const uint height = 256;
+        StorageFolder folder = await StorageFolder.GetFolderFromPathAsync(_root);
+        StorageFile file = await folder.CreateFileAsync(name, CreationCollisionOption.ReplaceExisting);
+        using var stream = await file.OpenAsync(FileAccessMode.ReadWrite);
+        BitmapEncoder? encoder = null;
+        var createOperation = BitmapEncoder.CreateAsync(BitmapEncoder.JpegEncoderId, stream);
+        try
+        {
+            encoder = await createOperation;
+        }
+        finally
+        {
+            MediaLuminanceConverter.ReleaseNativeObject(createOperation);
+        }
+
+        try
+        {
+            byte[] pixels = new byte[checked((int)(width * height * 4))];
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    int offset = ((y * (int)width) + x) * 4;
+                    bool right = x >= width / 2;
+                    bool bottom = y >= height / 2;
+                    (byte blue, byte green, byte red) = (right, bottom) switch
+                    {
+                        (false, false) => ((byte)0, (byte)0, (byte)255),
+                        (true, false) => ((byte)0, (byte)255, (byte)0),
+                        (false, true) => ((byte)255, (byte)0, (byte)0),
+                        _ => ((byte)255, (byte)255, (byte)255),
+                    };
+                    pixels[offset] = blue;
+                    pixels[offset + 1] = green;
+                    pixels[offset + 2] = red;
+                    pixels[offset + 3] = 255;
+                }
+            }
+
+            encoder.SetPixelData(
+                BitmapPixelFormat.Bgra8,
+                BitmapAlphaMode.Ignore,
+                width,
+                height,
+                96,
+                96,
+                pixels);
+            var metadata = new BitmapPropertySet
+            {
+                ["/app1/ifd/{ushort=274}"] = new BitmapTypedValue(orientation, PropertyType.UInt16),
+            };
+            var metadataOperation = encoder.BitmapProperties.SetPropertiesAsync(metadata);
+            try
+            {
+                await metadataOperation;
+            }
+            finally
+            {
+                MediaLuminanceConverter.ReleaseNativeObject(metadataOperation);
+            }
+
+            var flushOperation = encoder.FlushAsync();
+            try
+            {
+                await flushOperation;
+            }
+            finally
+            {
+                MediaLuminanceConverter.ReleaseNativeObject(flushOperation);
+            }
+        }
+        finally
+        {
+            MediaLuminanceConverter.ReleaseNativeObject(encoder);
+        }
+
+        return file.Path;
+    }
+
     private static async Task<StorageFile> WriteAsymmetricImageAsync(StorageFolder folder)
     {
         StorageFile file = await folder.CreateFileAsync("asymmetric.png", CreationCollisionOption.ReplaceExisting);
@@ -409,6 +528,19 @@ public sealed class WindowsMediaProviderTests : IDisposable
         }
 
         return (double)total / (width * height);
+    }
+
+    private static void AssertPreviewPixel(
+        MediaPreviewData preview,
+        int x,
+        int y,
+        (byte B, byte G, byte R) expected)
+    {
+        int offset = ((y * preview.Width) + x) * 4;
+        Assert.InRange(Math.Abs(preview.Bgra8[offset] - expected.B), 0, 40);
+        Assert.InRange(Math.Abs(preview.Bgra8[offset + 1] - expected.G), 0, 40);
+        Assert.InRange(Math.Abs(preview.Bgra8[offset + 2] - expected.R), 0, 40);
+        Assert.Equal(255, preview.Bgra8[offset + 3]);
     }
 
     private static void MoveAwayAndBack(string path)

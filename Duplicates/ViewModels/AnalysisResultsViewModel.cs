@@ -87,6 +87,8 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
 
     public event EventHandler<ToolKind>? NewAnalysisRequested;
 
+    internal Action? SimilaritySelectionValidated { get; set; }
+
     public ObservableCollection<PathFindingViewModel> Findings { get; } = [];
 
     public ObservableCollection<SimilarityGroupViewModel> Groups { get; } = [];
@@ -469,9 +471,12 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
                 snapshot,
                 analysisService,
                 cancellationToken);
+            SimilaritySelectionValidated?.Invoke();
             DeleteSummary serviceSummary;
             try
             {
+                cancellationToken.ThrowIfCancellationRequested();
+                selection = RejectSimilarityTargetsAfterSessionChange(snapshot, selection);
                 serviceSummary = selection.Targets.Count == 0
                     ? new DeleteSummary(0, 0, [])
                     : await fileActions.DeleteAsync(selection.Targets, null, cancellationToken);
@@ -513,9 +518,12 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
                 snapshot,
                 analysisService,
                 cancellationToken);
+            SimilaritySelectionValidated?.Invoke();
             FileOperationSummary serviceSummary;
             try
             {
+                cancellationToken.ThrowIfCancellationRequested();
+                selection = RejectSimilarityTargetsAfterSessionChange(snapshot, selection);
                 serviceSummary = selection.Targets.Count == 0
                     ? new FileOperationSummary([], 0)
                     : await fileActions.MoveAsync(
@@ -622,6 +630,15 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         }
 
         cancellationToken.ThrowIfCancellationRequested();
+        return RejectSimilarityTargetsAfterSessionChange(
+            snapshot,
+            new SelectionTargets(targets, failures, snapshot.SelectedItems.Count));
+    }
+
+    private SelectionTargets RejectSimilarityTargetsAfterSessionChange(
+        SimilarityActionSnapshot snapshot,
+        SelectionTargets selection)
+    {
         if (!ReferenceEquals(_sessionStore.CurrentSession, snapshot.Session) ||
             snapshot.SelectedItems.Any(item => !IsCanonicalSimilarityItem(item)))
         {
@@ -631,7 +648,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
                 snapshot.SelectedItems.Count);
         }
 
-        return new SelectionTargets(targets, failures, snapshot.SelectedItems.Count);
+        return selection;
     }
 
     public async Task<FileOperationResult> RenameFindingAsync(

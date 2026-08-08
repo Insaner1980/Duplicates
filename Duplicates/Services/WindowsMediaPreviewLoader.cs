@@ -49,10 +49,11 @@ public sealed class WindowsMediaPreviewLoader : IMediaPreviewLoader
                 .ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
             (uint width, uint height) = Scale(frame.OrientedPixelWidth, frame.OrientedPixelHeight);
+            (uint scaledWidth, uint scaledHeight) = Scale(frame.PixelWidth, frame.PixelHeight);
             transform = new BitmapTransform
             {
-                ScaledWidth = width,
-                ScaledHeight = height,
+                ScaledWidth = scaledWidth,
+                ScaledHeight = scaledHeight,
                 InterpolationMode = BitmapInterpolationMode.Fant,
             };
             pixelData = await WinRtAsync.AwaitAndCloseAsync(
