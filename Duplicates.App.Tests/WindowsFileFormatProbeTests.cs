@@ -1,5 +1,7 @@
 using System.Buffers.Binary;
 using System.IO.Compression;
+using System.Reflection;
+using System.Runtime.InteropServices;
 using Duplicates.Engine.Analysis;
 using Duplicates.Engine.Analysis.Analyzers;
 using Duplicates.Engine.Analysis.Media;
@@ -84,6 +86,22 @@ public sealed class WindowsFileFormatProbeTests : IDisposable
     }
 
     [Fact]
+    public async Task ProbeAsync_ValidZip64CentralDirectoryIsValid()
+    {
+        string path = await WriteFixtureAsync("valid-zip64.zip", CreateValidZip64());
+        await using (FileStream stream = File.OpenRead(path))
+        using (var archive = new ZipArchive(stream, ZipArchiveMode.Read, leaveOpen: false))
+        {
+            Assert.Single(archive.Entries);
+        }
+
+        FileProbeResult result = await ProbeDetectedAsync(path);
+
+        Assert.Equal(FileProbeStatus.Valid, result.Status);
+        Assert.Null(result.ErrorType);
+    }
+
+    [Fact]
     public async Task ProbeAsync_CorruptZipReturnsStableCentralDirectoryFailure()
     {
         string path = Path.Combine(_root, "corrupt.zip");
@@ -125,6 +143,49 @@ public sealed class WindowsFileFormatProbeTests : IDisposable
 
         Assert.Equal(FileProbeStatus.UnsupportedOrProtected, result.Status);
         Assert.Equal("PasswordProtected", result.ErrorType);
+    }
+
+    [Fact]
+    public async Task ProbeAsync_EncryptedFlagAfterMalformedCentralDirectoryBoundsIsInvalid()
+    {
+        byte[] bytes = CreateZipWithSingleEntry();
+        int endRecordOffset = FindEndOfCentralDirectory(bytes);
+        int centralDirectoryOffset = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(
+            bytes.AsSpan(endRecordOffset + 16)));
+        bytes[centralDirectoryOffset + 8] |= 1;
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(endRecordOffset + 12), 45);
+        string path = await WriteFixtureAsync("malformed-central-directory.zip", bytes);
+
+        await using (FileStream stream = File.OpenRead(path))
+        using (var archive = new ZipArchive(stream, ZipArchiveMode.Read, leaveOpen: false))
+        {
+            Assert.Single(archive.Entries);
+        }
+
+        FileProbeResult result = await ProbeDetectedAsync(path);
+
+        Assert.Equal(FileProbeStatus.Invalid, result.Status);
+        Assert.Equal("ZipCentralDirectoryFailure", result.ErrorType);
+    }
+
+    [Fact]
+    public async Task ProbeAsync_CentralDirectoryBeyondArchiveIsInvalid()
+    {
+        byte[] bytes = CreateZipWithSingleEntry();
+        int endRecordOffset = FindEndOfCentralDirectory(bytes);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(endRecordOffset + 12), (uint)bytes.Length);
+        string path = await WriteFixtureAsync("out-of-bounds-central-directory.zip", bytes);
+
+        await using (FileStream stream = File.OpenRead(path))
+        using (var archive = new ZipArchive(stream, ZipArchiveMode.Read, leaveOpen: false))
+        {
+            Assert.Single(archive.Entries);
+        }
+
+        FileProbeResult result = await ProbeDetectedAsync(path);
+
+        Assert.Equal(FileProbeStatus.Invalid, result.Status);
+        Assert.Equal("ZipCentralDirectoryFailure", result.ErrorType);
     }
 
     [Fact]
@@ -216,6 +277,23 @@ public sealed class WindowsFileFormatProbeTests : IDisposable
     }
 
     [Fact]
+    public void TryClassifyMedia_UnknownComFailureIsUnsupportedContainer()
+    {
+        MethodInfo classifier = typeof(WindowsFileFormatProbe).GetMethod(
+            "TryClassifyMedia",
+            BindingFlags.NonPublic | BindingFlags.Static) ??
+            throw new InvalidOperationException("TryClassifyMedia was not found.");
+        object?[] arguments = [new COMException("Unknown media failure", unchecked((int)0x80004005)), null];
+
+        bool classified = Assert.IsType<bool>(classifier.Invoke(null, arguments));
+        FileProbeResult result = Assert.IsType<FileProbeResult>(arguments[1]);
+
+        Assert.True(classified);
+        Assert.Equal(FileProbeStatus.UnsupportedOrProtected, result.Status);
+        Assert.Equal("UnsupportedContainer", result.ErrorType);
+    }
+
+    [Fact]
     public async Task ProbeAsync_PropagatesCancellation()
     {
         string path = Path.Combine(_root, "cancel.bin");
@@ -258,6 +336,73 @@ public sealed class WindowsFileFormatProbeTests : IDisposable
         BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(40), 1);
         bytes[44] = 128;
         return bytes;
+    }
+
+    private static byte[] CreateValidZip64()
+    {
+        byte[] standardZip = CreateZipWithSingleEntry();
+        int endRecordOffset = FindEndOfCentralDirectory(standardZip);
+        ushort entryCount = BinaryPrimitives.ReadUInt16LittleEndian(standardZip.AsSpan(endRecordOffset + 10));
+        uint centralDirectorySize = BinaryPrimitives.ReadUInt32LittleEndian(standardZip.AsSpan(endRecordOffset + 12));
+        uint centralDirectoryOffset = BinaryPrimitives.ReadUInt32LittleEndian(standardZip.AsSpan(endRecordOffset + 16));
+
+        const int zip64EndRecordLength = 56;
+        const int zip64LocatorLength = 20;
+        const int endRecordLength = 22;
+        byte[] zip64 = new byte[endRecordOffset + zip64EndRecordLength + zip64LocatorLength + endRecordLength];
+        standardZip.AsSpan(0, endRecordOffset).CopyTo(zip64);
+
+        int zip64EndRecordOffset = endRecordOffset;
+        BinaryPrimitives.WriteUInt32LittleEndian(zip64.AsSpan(zip64EndRecordOffset), 0x06064B50);
+        BinaryPrimitives.WriteUInt64LittleEndian(zip64.AsSpan(zip64EndRecordOffset + 4), 44);
+        BinaryPrimitives.WriteUInt16LittleEndian(zip64.AsSpan(zip64EndRecordOffset + 12), 45);
+        BinaryPrimitives.WriteUInt16LittleEndian(zip64.AsSpan(zip64EndRecordOffset + 14), 45);
+        BinaryPrimitives.WriteUInt64LittleEndian(zip64.AsSpan(zip64EndRecordOffset + 24), entryCount);
+        BinaryPrimitives.WriteUInt64LittleEndian(zip64.AsSpan(zip64EndRecordOffset + 32), entryCount);
+        BinaryPrimitives.WriteUInt64LittleEndian(zip64.AsSpan(zip64EndRecordOffset + 40), centralDirectorySize);
+        BinaryPrimitives.WriteUInt64LittleEndian(zip64.AsSpan(zip64EndRecordOffset + 48), centralDirectoryOffset);
+
+        int zip64LocatorOffset = zip64EndRecordOffset + zip64EndRecordLength;
+        BinaryPrimitives.WriteUInt32LittleEndian(zip64.AsSpan(zip64LocatorOffset), 0x07064B50);
+        BinaryPrimitives.WriteUInt64LittleEndian(zip64.AsSpan(zip64LocatorOffset + 8), (ulong)zip64EndRecordOffset);
+        BinaryPrimitives.WriteUInt32LittleEndian(zip64.AsSpan(zip64LocatorOffset + 16), 1);
+
+        int zipEndRecordOffset = zip64LocatorOffset + zip64LocatorLength;
+        BinaryPrimitives.WriteUInt32LittleEndian(zip64.AsSpan(zipEndRecordOffset), 0x06054B50);
+        BinaryPrimitives.WriteUInt16LittleEndian(zip64.AsSpan(zipEndRecordOffset + 8), ushort.MaxValue);
+        BinaryPrimitives.WriteUInt16LittleEndian(zip64.AsSpan(zipEndRecordOffset + 10), ushort.MaxValue);
+        BinaryPrimitives.WriteUInt32LittleEndian(zip64.AsSpan(zipEndRecordOffset + 12), uint.MaxValue);
+        BinaryPrimitives.WriteUInt32LittleEndian(zip64.AsSpan(zipEndRecordOffset + 16), uint.MaxValue);
+        return zip64;
+    }
+
+    private static byte[] CreateZipWithSingleEntry()
+    {
+        using var stream = new MemoryStream();
+        using (var archive = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            ZipArchiveEntry entry = archive.CreateEntry("item.txt");
+            using Stream writer = entry.Open();
+            writer.Write("content"u8);
+        }
+
+        return stream.ToArray();
+    }
+
+    private static int FindEndOfCentralDirectory(byte[] bytes)
+    {
+        const int endRecordLength = 22;
+        for (int offset = bytes.Length - endRecordLength; offset >= 0; offset--)
+        {
+            if (BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(offset)) == 0x06054B50 &&
+                offset + endRecordLength + BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(offset + 20)) ==
+                    bytes.Length)
+            {
+                return offset;
+            }
+        }
+
+        throw new InvalidDataException("ZIP end record is missing.");
     }
 
     private static void SetZipEncryptionFlags(byte[] bytes)

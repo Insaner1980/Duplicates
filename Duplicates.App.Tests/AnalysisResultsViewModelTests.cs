@@ -11,6 +11,15 @@ namespace Duplicates.App.Tests;
 
 public sealed class AnalysisResultsViewModelTests
 {
+    public static TheoryData<Type> HeaderReadFailureTypes => new()
+    {
+        typeof(IOException),
+        typeof(UnauthorizedAccessException),
+        typeof(System.Security.SecurityException),
+        typeof(ArgumentException),
+        typeof(NotSupportedException),
+    };
+
     [Fact]
     public void NewSessionMapsFindingsGroupsAndSkippedPathsWithoutSelectingActions()
     {
@@ -1686,6 +1695,94 @@ public sealed class AnalysisResultsViewModelTests
             Assert.Equal(source.ModifiedUtc, target.ExpectedModifiedUtc);
             Assert.Empty(probe.Calls);
             Assert.Empty(viewModel.Findings);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(HeaderReadFailureTypes))]
+    public async Task BrokenFilesDelete_HeaderReadFailureRevalidationDispatchesForEverySourceFailure(
+        Type exceptionType)
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            string path = Path.Combine(root, "unreadable.bin");
+            await File.WriteAllBytesAsync(path, [1, 2, 3]);
+            PathFinding source = NewBrokenFinding(
+                path,
+                FileProbeStatus.Invalid,
+                "HeaderReadFailure",
+                detectedType: null,
+                validator: "Header");
+            Exception sourceFailure = Assert.IsAssignableFrom<Exception>(Activator.CreateInstance(exceptionType));
+            Func<string, CancellationToken, ValueTask<DetectedFileType?>> detectAsync = (_, _) =>
+                new(Task.FromException<DetectedFileType?>(sourceFailure));
+            var probe = BrokenProbe(FileProbeStatus.Valid, null);
+            var fileActions = new FakeFileActionService
+            {
+                NextSummary = new DeleteSummary(1, source.SizeBytes!.Value, [], [path]),
+            };
+            IReadOnlyList<FileActionTarget>? dispatched = null;
+            fileActions.OnDelete = (targets, _) => dispatched = targets;
+            var store = new AnalysisSessionStore();
+            var viewModel = new AnalysisResultsViewModel(store, fileActions, null, detectAsync, probe);
+            store.SetCompleted(ToolKind.BrokenFiles, new AnalysisScope(), new NoToolOptions(), NewResult([source]));
+            viewModel.Findings[0].IsSelected = true;
+
+            DeleteSummary summary = await viewModel.DeleteSelectedAsync(CancellationToken.None);
+
+            Assert.Equal(1, summary.DeletedCount);
+            Assert.Equal(path, Assert.Single(dispatched!).FullPath);
+            Assert.Empty(probe.Calls);
+            Assert.Empty(viewModel.Findings);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task BrokenFilesDelete_HeaderReadFailureAfterMutationRejectsChangedFile()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            string path = Path.Combine(root, "changed.bin");
+            await File.WriteAllBytesAsync(path, [1, 2, 3]);
+            PathFinding source = NewBrokenFinding(
+                path,
+                FileProbeStatus.Invalid,
+                "HeaderReadFailure",
+                detectedType: null,
+                validator: "Header");
+            Func<string, CancellationToken, ValueTask<DetectedFileType?>> detectAsync = (candidate, _) =>
+            {
+                File.AppendAllBytes(candidate, [4]);
+                return new ValueTask<DetectedFileType?>(Task.FromException<DetectedFileType?>(
+                    new System.Security.SecurityException("Header read failed.")));
+            };
+            var probe = BrokenProbe(FileProbeStatus.Valid, null);
+            var fileActions = new FakeFileActionService();
+            var store = new AnalysisSessionStore();
+            var viewModel = new AnalysisResultsViewModel(store, fileActions, null, detectAsync, probe);
+            store.SetCompleted(ToolKind.BrokenFiles, new AnalysisScope(), new NoToolOptions(), NewResult([source]));
+            PathFindingViewModel finding = Assert.Single(viewModel.Findings);
+            finding.IsSelected = true;
+
+            DeleteSummary summary = await viewModel.DeleteSelectedAsync(CancellationToken.None);
+
+            Assert.Equal(0, fileActions.DeleteCallCount);
+            Assert.Equal("File changed since scan.", Assert.Single(summary.Failures).Reason);
+            Assert.Empty(probe.Calls);
+            Assert.Same(finding, Assert.Single(viewModel.Findings));
+            Assert.True(finding.IsSelected);
         }
         finally
         {

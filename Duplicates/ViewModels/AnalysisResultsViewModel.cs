@@ -854,7 +854,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
                     finding.FullPath,
                     cancellationToken);
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            catch (Exception ex) when (IsFileSystemFailure(ex))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 probeResult = new FileProbeResult(

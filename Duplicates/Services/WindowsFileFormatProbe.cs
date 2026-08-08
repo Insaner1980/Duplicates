@@ -32,6 +32,8 @@ public sealed class WindowsFileFormatProbe : IFileFormatProbe
     private const int WinCodecErrUnsupportedOperation = unchecked((int)0x88982F81);
     private const uint ZipCentralDirectoryHeaderSignature = 0x02014B50;
     private const uint ZipEndOfCentralDirectorySignature = 0x06054B50;
+    private const uint Zip64EndOfCentralDirectorySignature = 0x06064B50;
+    private const uint Zip64EndOfCentralDirectoryLocatorSignature = 0x07064B50;
 
     public async Task<FileProbeResult> ProbeAsync(
         string path,
@@ -239,6 +241,7 @@ public sealed class WindowsFileFormatProbe : IFileFormatProbe
         {
             InvalidDataException or ArgumentException => Invalid("MediaOpenFailure"),
             NotSupportedException => Unsupported("UnsupportedContainer"),
+            COMException => Unsupported("UnsupportedContainer"),
             _ => null,
         };
         return result is not null;
@@ -279,49 +282,66 @@ public sealed class WindowsFileFormatProbe : IFileFormatProbe
             throw new InvalidDataException();
         }
 
+        long endRecordPosition = stream.Length - tailLength + endRecordOffset;
         ReadOnlySpan<byte> endRecord = tail.AsSpan(endRecordOffset, endRecordLength);
         ushort diskNumber = BinaryPrimitives.ReadUInt16LittleEndian(endRecord[4..]);
         ushort centralDirectoryDisk = BinaryPrimitives.ReadUInt16LittleEndian(endRecord[6..]);
         ushort diskEntryCount = BinaryPrimitives.ReadUInt16LittleEndian(endRecord[8..]);
-        ushort entryCount = BinaryPrimitives.ReadUInt16LittleEndian(endRecord[10..]);
-        uint centralDirectorySize = BinaryPrimitives.ReadUInt32LittleEndian(endRecord[12..]);
-        uint centralDirectoryOffset = BinaryPrimitives.ReadUInt32LittleEndian(endRecord[16..]);
+        ushort entryCount16 = BinaryPrimitives.ReadUInt16LittleEndian(endRecord[10..]);
+        uint centralDirectorySize32 = BinaryPrimitives.ReadUInt32LittleEndian(endRecord[12..]);
+        uint centralDirectoryOffset32 = BinaryPrimitives.ReadUInt32LittleEndian(endRecord[16..]);
         if (diskNumber != 0 ||
             centralDirectoryDisk != 0 ||
-            diskEntryCount != entryCount ||
-            entryCount == ushort.MaxValue ||
-            centralDirectorySize == uint.MaxValue ||
-            centralDirectoryOffset == uint.MaxValue ||
-            (ulong)centralDirectoryOffset + centralDirectorySize > (ulong)stream.Length)
+            diskEntryCount != entryCount16)
         {
             throw new NotSupportedException();
         }
 
-        long centralDirectoryEnd = (long)centralDirectoryOffset + centralDirectorySize;
-        stream.Position = centralDirectoryOffset;
+        ulong entryCount = entryCount16;
+        ulong centralDirectorySize = centralDirectorySize32;
+        ulong centralDirectoryOffset = centralDirectoryOffset32;
+        if (entryCount16 == ushort.MaxValue ||
+            centralDirectorySize32 == uint.MaxValue ||
+            centralDirectoryOffset32 == uint.MaxValue)
+        {
+            (entryCount, centralDirectorySize, centralDirectoryOffset) = ReadZip64EndRecord(
+                stream,
+                endRecordPosition);
+        }
+
+        if (centralDirectoryOffset > (ulong)stream.Length ||
+            centralDirectorySize > (ulong)stream.Length - centralDirectoryOffset)
+        {
+            throw new InvalidDataException();
+        }
+
+        long centralDirectoryEnd = checked((long)(centralDirectoryOffset + centralDirectorySize));
+        stream.Position = checked((long)centralDirectoryOffset);
         byte[] header = new byte[46];
-        for (int entryIndex = 0; entryIndex < entryCount; entryIndex++)
+        bool hasEncryptedEntry = false;
+        for (ulong entryIndex = 0; entryIndex < entryCount; entryIndex++)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (centralDirectoryEnd - stream.Position < header.Length)
+            {
+                throw new InvalidDataException();
+            }
+
             stream.ReadExactly(header);
             if (BinaryPrimitives.ReadUInt32LittleEndian(header) != ZipCentralDirectoryHeaderSignature)
             {
                 throw new InvalidDataException();
             }
 
-            if ((BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(8)) & 1) != 0)
-            {
-                return true;
-            }
-
             int variableLength = BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(28)) +
                 BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(30)) +
                 BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(32));
-            if (stream.Position + variableLength > centralDirectoryEnd)
+            if (centralDirectoryEnd - stream.Position < variableLength)
             {
                 throw new InvalidDataException();
             }
 
+            hasEncryptedEntry |= (BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(8)) & 1) != 0;
             stream.Seek(variableLength, SeekOrigin.Current);
         }
 
@@ -330,7 +350,71 @@ public sealed class WindowsFileFormatProbe : IFileFormatProbe
             throw new InvalidDataException();
         }
 
-        return false;
+        return hasEncryptedEntry;
+    }
+
+    private static (ulong EntryCount, ulong CentralDirectorySize, ulong CentralDirectoryOffset) ReadZip64EndRecord(
+        Stream stream,
+        long endRecordPosition)
+    {
+        const int locatorLength = 20;
+        const int minimumEndRecordLength = 56;
+        long locatorPosition = endRecordPosition - locatorLength;
+        if (locatorPosition < 0)
+        {
+            throw new InvalidDataException();
+        }
+
+        byte[] locator = new byte[locatorLength];
+        stream.Position = locatorPosition;
+        stream.ReadExactly(locator);
+        if (BinaryPrimitives.ReadUInt32LittleEndian(locator) != Zip64EndOfCentralDirectoryLocatorSignature)
+        {
+            throw new InvalidDataException();
+        }
+
+        uint recordDisk = BinaryPrimitives.ReadUInt32LittleEndian(locator.AsSpan(4));
+        ulong recordPosition = BinaryPrimitives.ReadUInt64LittleEndian(locator.AsSpan(8));
+        uint diskCount = BinaryPrimitives.ReadUInt32LittleEndian(locator.AsSpan(16));
+        if (recordDisk != 0 || diskCount != 1)
+        {
+            throw new NotSupportedException();
+        }
+
+        if (recordPosition > (ulong)locatorPosition ||
+            (ulong)locatorPosition - recordPosition < minimumEndRecordLength)
+        {
+            throw new InvalidDataException();
+        }
+
+        byte[] record = new byte[minimumEndRecordLength];
+        stream.Position = checked((long)recordPosition);
+        stream.ReadExactly(record);
+        if (BinaryPrimitives.ReadUInt32LittleEndian(record) != Zip64EndOfCentralDirectorySignature)
+        {
+            throw new InvalidDataException();
+        }
+
+        ulong recordSize = BinaryPrimitives.ReadUInt64LittleEndian(record.AsSpan(4));
+        if (recordSize < minimumEndRecordLength - 12 ||
+            recordSize != (ulong)locatorPosition - recordPosition - 12)
+        {
+            throw new InvalidDataException();
+        }
+
+        uint diskNumber = BinaryPrimitives.ReadUInt32LittleEndian(record.AsSpan(16));
+        uint centralDirectoryDisk = BinaryPrimitives.ReadUInt32LittleEndian(record.AsSpan(20));
+        ulong diskEntryCount = BinaryPrimitives.ReadUInt64LittleEndian(record.AsSpan(24));
+        ulong entryCount = BinaryPrimitives.ReadUInt64LittleEndian(record.AsSpan(32));
+        if (diskNumber != 0 || centralDirectoryDisk != 0 || diskEntryCount != entryCount)
+        {
+            throw new NotSupportedException();
+        }
+
+        return (
+            entryCount,
+            BinaryPrimitives.ReadUInt64LittleEndian(record.AsSpan(40)),
+            BinaryPrimitives.ReadUInt64LittleEndian(record.AsSpan(48)));
     }
 
     private static bool IsFileSystemFailure(Exception exception) =>
