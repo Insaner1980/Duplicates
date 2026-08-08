@@ -326,6 +326,12 @@ public sealed class AnalysisViewModelTests
         Assert.Equal(Visibility.Collapsed, viewModel.LargeFileOptionsVisibility);
         Assert.Equal(Visibility.Collapsed, viewModel.TemporaryFileOptionsVisibility);
 
+        viewModel.SelectTool(ToolKind.BadNames);
+
+        Assert.Equal(Visibility.Collapsed, viewModel.OptionsVisibility);
+        Assert.Equal(Visibility.Collapsed, viewModel.LargeFileOptionsVisibility);
+        Assert.Equal(Visibility.Collapsed, viewModel.TemporaryFileOptionsVisibility);
+
         viewModel.SelectTool(ToolKind.EmptyFolders);
 
         Assert.Equal(Visibility.Collapsed, viewModel.OptionsVisibility);

@@ -152,6 +152,13 @@
                 Icon="View"
                 Label="Preview" />
             <AppBarButton
+                AccessKey="R"
+                AutomationProperties.Name="Rename selected analysis result"
+                Icon="Edit"
+                IsEnabled="{Binding CanRenameSelection}"
+                Label="Rename selected"
+                Click="RenameSelected_Click" />
+            <AppBarButton
                 AccessKey="D"
                 AutomationProperties.Name="Delete selected analysis results"
                 Foreground="{ThemeResource DangerBrush}"
@@ -264,5 +271,43 @@
                     SelectionMode="Single" />
             </SplitView>
         </Grid>
+
+        <ContentDialog
+            x:Name="RenameDialog"
+            CloseButtonText="Cancel"
+            DefaultButton="Close"
+            IsPrimaryButtonEnabled="False"
+            PrimaryButtonText="Rename"
+            Title="Rename file">
+            <StackPanel Spacing="12">
+                <TextBlock FontWeight="SemiBold" Text="Current file" />
+                <TextBlock
+                    x:Name="RenameCurrentPathTextBlock"
+                    AutomationProperties.Name="Current full path"
+                    IsTextSelectionEnabled="True"
+                    TextWrapping="Wrap" />
+                <TextBlock FontWeight="SemiBold" Text="Reasons" />
+                <TextBlock
+                    x:Name="RenameReasonsTextBlock"
+                    AutomationProperties.Name="Reasons"
+                    TextWrapping="Wrap" />
+                <TextBox
+                    x:Name="RenameNameTextBox"
+                    AutomationProperties.Name="New file name"
+                    Header="New file name"
+                    TextChanged="RenameNameTextBox_TextChanged" />
+                <TextBlock FontWeight="SemiBold" Text="Destination" />
+                <TextBlock
+                    x:Name="RenameDestinationTextBlock"
+                    AutomationProperties.Name="Destination preview"
+                    IsTextSelectionEnabled="True"
+                    TextWrapping="Wrap" />
+                <TextBlock
+                    x:Name="RenameValidationTextBlock"
+                    AutomationProperties.LiveSetting="Polite"
+                    AutomationProperties.Name="Rename validity"
+                    TextWrapping="Wrap" />
+            </StackPanel>
+        </ContentDialog>
     </Grid>
 </Page>

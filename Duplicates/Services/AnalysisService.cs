@@ -64,6 +64,9 @@ public sealed class AnalysisService : IAnalysisService
             (ToolKind.BadExtensions, NoToolOptions) => await new BadExtensionAnalyzer().AnalyzeAsync(
                 inventory,
                 cancellationToken).ConfigureAwait(false),
+            (ToolKind.BadNames, NoToolOptions) => await new BadNameAnalyzer().AnalyzeAsync(
+                inventory,
+                cancellationToken).ConfigureAwait(false),
             (ToolKind.TemporaryFiles, TemporaryFileToolOptions options) => await new TemporaryFileAnalyzer().AnalyzeAsync(
                 inventory,
                 new TemporaryFileOptions(options.MinimumAge, options.UtcNow),

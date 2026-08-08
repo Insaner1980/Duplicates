@@ -340,6 +340,44 @@ public sealed class NativeWinUiContractTests
     }
 
     [Fact]
+    public void AnalysisResultsPage_UsesAccessibleNativeRenameDialog()
+    {
+        XDocument page = LoadXaml(@"Views\AnalysisResultsPage.xaml");
+        XElement dialog = page
+            .Descendants(Presentation + "ContentDialog")
+            .Single(element => (string?)element.Attribute(Xaml + "Name") == "RenameDialog");
+
+        Assert.Equal("Rename file", (string?)dialog.Attribute("Title"));
+        Assert.Equal("Rename", (string?)dialog.Attribute("PrimaryButtonText"));
+        Assert.Equal("Cancel", (string?)dialog.Attribute("CloseButtonText"));
+        Assert.Equal("False", (string?)dialog.Attribute("IsPrimaryButtonEnabled"));
+
+        XElement nameInput = Assert.Single(dialog.Descendants(Presentation + "TextBox"));
+        Assert.Equal("RenameNameTextBox", (string?)nameInput.Attribute(Xaml + "Name"));
+        Assert.Equal("New file name", (string?)nameInput.Attribute("AutomationProperties.Name"));
+        Assert.Equal("RenameNameTextBox_TextChanged", (string?)nameInput.Attribute("TextChanged"));
+
+        string[] accessibleDetails = dialog
+            .Descendants(Presentation + "TextBlock")
+            .Select(text => (string?)text.Attribute("AutomationProperties.Name"))
+            .Where(static name => name is not null)
+            .Cast<string>()
+            .ToArray();
+        Assert.Contains("Current full path", accessibleDetails);
+        Assert.Contains("Reasons", accessibleDetails);
+        Assert.Contains("Destination preview", accessibleDetails);
+        Assert.Contains("Rename validity", accessibleDetails);
+
+        Assert.Contains(
+            page.Descendants(Presentation + "AppBarButton"),
+            button =>
+                (string?)button.Attribute("Label") == "Rename selected" &&
+                (string?)button.Attribute("AutomationProperties.Name") == "Rename selected analysis result" &&
+                (string?)button.Attribute("IsEnabled") == "{Binding CanRenameSelection}" &&
+                (string?)button.Attribute("Click") == "RenameSelected_Click");
+    }
+
+    [Fact]
     public void SettingsPage_UsesRecommendedSettingsControlsAndNumberBox()
     {
         XDocument page = LoadXaml(@"Views\SettingsPage.xaml");

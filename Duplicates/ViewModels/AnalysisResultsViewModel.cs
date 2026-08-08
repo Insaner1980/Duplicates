@@ -76,6 +76,8 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(CanActOnSelection))]
+    [NotifyPropertyChangedFor(nameof(CanRenameSelection))]
+    [NotifyPropertyChangedFor(nameof(RenameSelection))]
     public partial bool IsActionRunning { get; set; }
 
     public Visibility BeforeFirstAnalysisVisibility => _sessionStore.CurrentSession is null
@@ -128,6 +130,16 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         IsBulkMutationToolSupported &&
         SelectedFindings.Count > 0 &&
         SelectedSimilarityItems.Count == 0;
+
+    public bool CanRenameSelection =>
+        !IsActionRunning &&
+        SupportsRenameDialog(_sessionStore.CurrentSession) &&
+        SelectedFindings.Count == 1 &&
+        SelectedSimilarityItems.Count == 0;
+
+    public PathFindingViewModel? RenameSelection => CanRenameSelection
+        ? SelectedFindings[0]
+        : null;
 
     public IReadOnlyList<PathFindingViewModel> SelectedFindings =>
         _allFindings.Where(static item => item.IsSelected).ToArray();
@@ -278,9 +290,17 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         CancellationToken cancellationToken)
     {
         AnalysisSession? initiatingSession = _sessionStore.CurrentSession;
-        if (!SupportsRename(initiatingSession) || !_allFindings.Contains(finding))
+        if (!SupportsRename(initiatingSession))
         {
             throw new InvalidOperationException("Actions are not available for these results yet.");
+        }
+
+        if (!_allFindings.Contains(finding))
+        {
+            return new FileOperationResult(
+                finding.FullPath,
+                null,
+                ChangedFailure(finding.FullPath));
         }
 
         IFileActionService fileActions = _fileActionService ??
@@ -295,6 +315,20 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
                 cancellationToken);
             if (!ReferenceEquals(_sessionStore.CurrentSession, initiatingSession) ||
                 initiatingSession is not { Tool: ToolKind.BadExtensions, ToolOptions: NoToolOptions } ||
+                !_allFindings.Contains(finding))
+            {
+                return new FileOperationResult(
+                    finding.FullPath,
+                    null,
+                    ChangedFailure(finding.FullPath));
+            }
+        }
+        else if (_sessionStore.CurrentSession?.Tool == ToolKind.BadNames)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!TryMapBadNameRename(finding, newName, out target, out failure) ||
+                !ReferenceEquals(_sessionStore.CurrentSession, initiatingSession) ||
+                initiatingSession is not { Tool: ToolKind.BadNames, ToolOptions: NoToolOptions } ||
                 !_allFindings.Contains(finding))
             {
                 return new FileOperationResult(
@@ -322,6 +356,71 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         }
 
         return result;
+    }
+
+    public bool TryValidateRenameCandidate(
+        PathFindingViewModel finding,
+        string newName,
+        out string destinationPath,
+        out string validationMessage)
+    {
+        destinationPath = string.Empty;
+        validationMessage = string.Empty;
+        AnalysisSession? session = _sessionStore.CurrentSession;
+        if (!SupportsRenameDialog(session) || !_allFindings.Contains(finding))
+        {
+            validationMessage = "The finding is no longer current.";
+            return false;
+        }
+
+        string? parent = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(finding.FullPath));
+        if (string.IsNullOrWhiteSpace(parent))
+        {
+            validationMessage = "The destination cannot be verified.";
+            return false;
+        }
+
+        destinationPath = Path.Combine(parent, newName);
+
+        if (newName.Contains(Path.DirectorySeparatorChar) ||
+            newName.Contains(Path.AltDirectorySeparatorChar) ||
+            BadNameAnalyzer.Detect(Path.Combine(parent, newName), newName) is not null)
+        {
+            validationMessage = "Enter a valid Windows file name.";
+            return false;
+        }
+
+        string currentName = Path.GetFileName(finding.FullPath);
+        if (string.Equals(newName, currentName, StringComparison.OrdinalIgnoreCase))
+        {
+            validationMessage = "Choose a different file name.";
+            return false;
+        }
+
+        if (session?.Tool == ToolKind.BadExtensions &&
+            !string.Equals(newName, finding.Suggestion, StringComparison.Ordinal))
+        {
+            validationMessage = "Use the recommended file name.";
+            return false;
+        }
+
+        try
+        {
+            if (Directory.EnumerateFileSystemEntries(parent).Any(path =>
+                    !string.Equals(path, finding.FullPath, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(Path.GetFileName(path), newName, StringComparison.OrdinalIgnoreCase)))
+            {
+                validationMessage = "A file or folder with the same name already exists.";
+                return false;
+            }
+        }
+        catch (Exception ex) when (IsFileSystemFailure(ex))
+        {
+            validationMessage = "The destination cannot be verified.";
+            return false;
+        }
+
+        return true;
     }
 
     public Task ExportAsync(
@@ -502,6 +601,8 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         OnPropertyChanged(nameof(SelectedFindings));
         OnPropertyChanged(nameof(SelectedSimilarityItems));
         OnPropertyChanged(nameof(CanActOnSelection));
+        OnPropertyChanged(nameof(CanRenameSelection));
+        OnPropertyChanged(nameof(RenameSelection));
     }
 
     private void NotifyResultStateChanged()
@@ -529,7 +630,10 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
 
     private static bool SupportsRename(AnalysisSession? session) =>
         SupportsBulkMutation(session) ||
-        session is { Tool: ToolKind.BadExtensions, ToolOptions: NoToolOptions };
+        session is { Tool: ToolKind.BadExtensions or ToolKind.BadNames, ToolOptions: NoToolOptions };
+
+    private static bool SupportsRenameDialog(AnalysisSession? session) =>
+        session is { Tool: ToolKind.BadExtensions or ToolKind.BadNames, ToolOptions: NoToolOptions };
 
     private void EnsureSelectedMutationIsSupported()
     {
@@ -794,6 +898,53 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
                 0,
                 expectedKind.Value,
                 finding.Source.Reason);
+            return true;
+        }
+        catch (Exception ex) when (IsFileSystemFailure(ex))
+        {
+            failure = ChangedFailure(finding.FullPath);
+            return false;
+        }
+    }
+
+    private bool TryMapBadNameRename(
+        PathFindingViewModel finding,
+        string newName,
+        out FileActionTarget? target,
+        out FileActionFailure? failure)
+    {
+        target = null;
+        failure = null;
+        try
+        {
+            if (finding.Source.Kind != PathFindingKind.File ||
+                finding.Source.SizeBytes is not long expectedSize ||
+                finding.Source.ModifiedUtc is not DateTime expectedModifiedUtc ||
+                !TryGetExactMetadata(finding.Source.Metadata, "CurrentName", out string? expectedCurrentName))
+            {
+                failure = ChangedFailure(finding.FullPath);
+                return false;
+            }
+
+            FileAttributes attributes = File.GetAttributes(finding.FullPath);
+            var file = new FileInfo(finding.FullPath);
+            string currentName = Path.GetFileName(finding.FullPath);
+            if (attributes.HasFlag(FileAttributes.Directory) ||
+                attributes.HasFlag(FileAttributes.ReparsePoint) ||
+                file.Length != expectedSize ||
+                file.LastWriteTimeUtc != expectedModifiedUtc ||
+                !string.Equals(currentName, expectedCurrentName, StringComparison.Ordinal) ||
+                BadNameAnalyzer.Detect(finding.FullPath, currentName) is null ||
+                !TryValidateRenameCandidate(finding, newName, out _, out _))
+            {
+                failure = ChangedFailure(finding.FullPath);
+                return false;
+            }
+
+            target = new FileActionTarget(
+                finding.FullPath,
+                file.Length,
+                FileActionTargetKind.File);
             return true;
         }
         catch (Exception ex) when (IsFileSystemFailure(ex))

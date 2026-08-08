@@ -10,6 +10,8 @@ namespace Duplicates.Views;
 
 public sealed partial class AnalysisResultsPage : Page
 {
+    private PathFindingViewModel? _renameFinding;
+
     public AnalysisResultsPage()
     {
         InitializeComponent();
@@ -93,6 +95,72 @@ public sealed partial class AnalysisResultsPage : Page
         {
             ViewModel.ActionStatusMessage = ex.Message;
         }
+    }
+
+    private async void RenameSelected_Click(object sender, RoutedEventArgs e)
+    {
+        PathFindingViewModel? finding = ViewModel.RenameSelection;
+        if (finding is null)
+        {
+            return;
+        }
+
+        _renameFinding = finding;
+        RenameDialog.XamlRoot = XamlRoot;
+        RenameCurrentPathTextBlock.Text = finding.FullPath;
+        RenameReasonsTextBlock.Text = finding.Reason.Replace(
+            "; ",
+            Environment.NewLine,
+            StringComparison.Ordinal);
+        RenameNameTextBox.Text = finding.Suggestion;
+        UpdateRenameDialogState();
+
+        ContentDialogResult dialogResult = await RenameDialog.ShowAsync();
+        string requestedName = RenameNameTextBox.Text;
+        _renameFinding = null;
+        if (dialogResult != ContentDialogResult.Primary)
+        {
+            return;
+        }
+
+        try
+        {
+            FileOperationResult result = await ViewModel.RenameFindingAsync(
+                finding,
+                requestedName,
+                CancellationToken.None);
+            ViewModel.ActionStatusMessage = result.Succeeded
+                ? "File renamed."
+                : result.Failure?.Reason ?? "The file could not be renamed.";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or
+            ArgumentException or InvalidOperationException)
+        {
+            ViewModel.ActionStatusMessage = ex.Message;
+        }
+    }
+
+    private void RenameNameTextBox_TextChanged(object sender, TextChangedEventArgs e) =>
+        UpdateRenameDialogState();
+
+    private void UpdateRenameDialogState()
+    {
+        if (_renameFinding is null)
+        {
+            RenameDestinationTextBlock.Text = string.Empty;
+            RenameValidationTextBlock.Text = string.Empty;
+            RenameDialog.IsPrimaryButtonEnabled = false;
+            return;
+        }
+
+        bool isValid = ViewModel.TryValidateRenameCandidate(
+            _renameFinding,
+            RenameNameTextBox.Text,
+            out string destinationPath,
+            out string validationMessage);
+        RenameDestinationTextBlock.Text = destinationPath;
+        RenameValidationTextBlock.Text = isValid ? "Ready to rename." : validationMessage;
+        RenameDialog.IsPrimaryButtonEnabled = isValid;
     }
 
     private async void Export_Click(object sender, RoutedEventArgs e)

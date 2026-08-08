@@ -53,7 +53,7 @@ public sealed partial class AnalysisViewModel : ObservableObject
         _ => "No additional options are required.",
     };
 
-    public Visibility OptionsVisibility => Tool is ToolKind.EmptyFolders or ToolKind.EmptyFiles
+    public Visibility OptionsVisibility => Tool is ToolKind.EmptyFolders or ToolKind.EmptyFiles or ToolKind.BadNames
         ? Visibility.Collapsed
         : Visibility.Visible;
 

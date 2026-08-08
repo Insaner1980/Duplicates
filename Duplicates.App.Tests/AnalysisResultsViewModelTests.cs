@@ -863,6 +863,344 @@ public sealed class AnalysisResultsViewModelTests
     }
 
     [Fact]
+    public async Task BadNamesDeleteAndMove_FailClosedWithoutServiceDispatch()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string path = Path.Combine(root, " bad.txt");
+        await File.WriteAllBytesAsync(path, [1, 2, 3]);
+
+        try
+        {
+            var store = new AnalysisSessionStore();
+            var fileActions = new FakeFileActionService();
+            var viewModel = new AnalysisResultsViewModel(store, fileActions, new FakeResultExportService());
+            store.SetCompleted(
+                ToolKind.BadNames,
+                new AnalysisScope { IncludedFolders = [root] },
+                new NoToolOptions(),
+                NewResult([NewBadNameFinding(path)]));
+            PathFindingViewModel finding = Assert.Single(viewModel.Findings);
+            finding.IsSelected = true;
+
+            Assert.False(viewModel.CanActOnSelection);
+            Assert.True(viewModel.CanRenameSelection);
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                viewModel.DeleteSelectedAsync(CancellationToken.None));
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                viewModel.MoveSelectedAsync(root, MoveCollisionBehavior.Skip, CancellationToken.None));
+            Assert.Equal(0, fileActions.DeleteCallCount);
+            Assert.Equal(0, fileActions.MoveCallCount);
+            Assert.True(finding.IsSelected);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task BadNamesRename_RevalidatesSafeDistinctNameAndRemovesCanonicalFinding()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string path = Path.Combine(root, " bad.txt");
+        await File.WriteAllBytesAsync(path, [1, 2, 3]);
+
+        try
+        {
+            var store = new AnalysisSessionStore();
+            var fileActions = new FakeFileActionService();
+            var viewModel = new AnalysisResultsViewModel(store, fileActions, new FakeResultExportService());
+            store.SetCompleted(
+                ToolKind.BadNames,
+                new AnalysisScope { IncludedFolders = [root] },
+                new NoToolOptions(),
+                NewResult([NewBadNameFinding(path)]));
+            PathFindingViewModel finding = Assert.Single(viewModel.Findings);
+            finding.IsSelected = true;
+
+            FileOperationResult result = await viewModel.RenameFindingAsync(
+                finding,
+                "bad.txt",
+                CancellationToken.None);
+
+            Assert.True(result.Succeeded);
+            Assert.Equal(1, fileActions.RenameCallCount);
+            Assert.Equal(path, fileActions.LastRenameTarget?.FullPath);
+            Assert.Equal(FileActionTargetKind.File, fileActions.LastRenameTarget?.Kind);
+            Assert.Equal(new FileInfo(path).Length, fileActions.LastRenameTarget?.SizeBytes);
+            Assert.Null(fileActions.LastRenameTarget?.ExpectedBadExtensionContent);
+            Assert.Equal("bad.txt", fileActions.LastRenameName);
+            Assert.Empty(viewModel.Findings);
+            Assert.False(viewModel.CanRenameSelection);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task BadNamesRenameCandidateValidation_RequiresSafeDistinctCollisionFreeLeaf()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string path = Path.Combine(root, " bad.txt");
+        await File.WriteAllBytesAsync(path, [1]);
+        await File.WriteAllBytesAsync(Path.Combine(root, "taken.txt"), [2]);
+
+        try
+        {
+            var store = new AnalysisSessionStore();
+            var viewModel = new AnalysisResultsViewModel(store);
+            store.SetCompleted(
+                ToolKind.BadNames,
+                new AnalysisScope(),
+                new NoToolOptions(),
+                NewResult([NewBadNameFinding(path)]));
+            PathFindingViewModel finding = Assert.Single(viewModel.Findings);
+
+            Assert.False(viewModel.TryValidateRenameCandidate(finding, "CON.txt", out _, out _));
+            Assert.False(viewModel.TryValidateRenameCandidate(finding, " bad.txt", out _, out _));
+            Assert.False(viewModel.TryValidateRenameCandidate(finding, @"folder\bad.txt", out _, out _));
+            Assert.False(viewModel.TryValidateRenameCandidate(finding, "TAKEN.TXT", out _, out string collision));
+            Assert.Contains("already exists", collision, StringComparison.OrdinalIgnoreCase);
+            Assert.True(viewModel.TryValidateRenameCandidate(
+                finding,
+                "bad.txt",
+                out string destination,
+                out string message));
+            Assert.Equal(Path.Combine(root, "bad.txt"), destination);
+            Assert.Equal(string.Empty, message);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task BadNamesRename_RejectsStaleReplacedUnsafeAndCollidingNamesWithoutDispatch()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+
+        try
+        {
+            string changedLength = Path.Combine(root, " length.txt");
+            await File.WriteAllBytesAsync(changedLength, [1]);
+            PathFinding changedLengthFinding = NewBadNameFinding(changedLength);
+            await File.AppendAllBytesAsync(changedLength, [2]);
+
+            string changedTime = Path.Combine(root, " time.txt");
+            await File.WriteAllBytesAsync(changedTime, [1]);
+            PathFinding changedTimeFinding = NewBadNameFinding(changedTime);
+            File.SetLastWriteTimeUtc(changedTime, changedTimeFinding.ModifiedUtc!.Value.AddSeconds(2));
+
+            string replacedName = Path.Combine(root, " replaced.txt");
+            await File.WriteAllBytesAsync(replacedName, [1]);
+            PathFinding replacedNameFinding = NewBadNameFinding(replacedName) with
+            {
+                Metadata = new Dictionary<string, string> { ["CurrentName"] = "different.txt" },
+            };
+
+            string noLongerBad = Path.Combine(root, "good.txt");
+            await File.WriteAllBytesAsync(noLongerBad, [1]);
+            PathFinding noLongerBadFinding = NewBadNameFinding(noLongerBad);
+
+            string unsafeRequest = Path.Combine(root, " unsafe.txt");
+            await File.WriteAllBytesAsync(unsafeRequest, [1]);
+            PathFinding unsafeRequestFinding = NewBadNameFinding(unsafeRequest);
+
+            string collision = Path.Combine(root, " collision.txt");
+            await File.WriteAllBytesAsync(collision, [1]);
+            PathFinding collisionFinding = NewBadNameFinding(collision);
+            await File.WriteAllBytesAsync(Path.Combine(root, "COLLISION.TXT"), [9]);
+
+            await AssertBadNameRenameRejectedAsync(changedLengthFinding, "length.txt");
+            await AssertBadNameRenameRejectedAsync(changedTimeFinding, "time.txt");
+            await AssertBadNameRenameRejectedAsync(replacedNameFinding, "replaced.txt");
+            await AssertBadNameRenameRejectedAsync(noLongerBadFinding, "renamed.txt");
+            await AssertBadNameRenameRejectedAsync(unsafeRequestFinding, "CON.txt");
+            await AssertBadNameRenameRejectedAsync(unsafeRequestFinding, " unsafe.txt");
+            await AssertBadNameRenameRejectedAsync(unsafeRequestFinding, @"folder\unsafe.txt");
+            await AssertBadNameRenameRejectedAsync(collisionFinding, "collision.txt");
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+
+        static async Task AssertBadNameRenameRejectedAsync(PathFinding source, string requestedName)
+        {
+            var store = new AnalysisSessionStore();
+            var fileActions = new FakeFileActionService();
+            var viewModel = new AnalysisResultsViewModel(store, fileActions, new FakeResultExportService());
+            store.SetCompleted(
+                ToolKind.BadNames,
+                new AnalysisScope(),
+                new NoToolOptions(),
+                NewResult([source]));
+            PathFindingViewModel finding = Assert.Single(viewModel.Findings);
+            finding.IsSelected = true;
+
+            FileOperationResult result = await viewModel.RenameFindingAsync(
+                finding,
+                requestedName,
+                CancellationToken.None);
+
+            Assert.False(result.Succeeded);
+            Assert.Equal("File changed since scan.", result.Failure?.Reason);
+            Assert.Equal(0, fileActions.RenameCallCount);
+            Assert.Same(finding, Assert.Single(viewModel.Findings));
+            Assert.True(finding.IsSelected);
+        }
+    }
+
+    [Fact]
+    public async Task BadNamesRename_RejectsReparsePointWithoutDispatch()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string target = Path.Combine(root, " target.txt");
+        await File.WriteAllBytesAsync(target, [1]);
+        string link = Path.Combine(root, " link.txt");
+        CreateFileSymbolicLinkOrSkip(link, target);
+
+        try
+        {
+            var store = new AnalysisSessionStore();
+            var fileActions = new FakeFileActionService();
+            var viewModel = new AnalysisResultsViewModel(store, fileActions, new FakeResultExportService());
+            store.SetCompleted(
+                ToolKind.BadNames,
+                new AnalysisScope(),
+                new NoToolOptions(),
+                NewResult([NewBadNameFinding(link)]));
+            PathFindingViewModel finding = Assert.Single(viewModel.Findings);
+
+            FileOperationResult result = await viewModel.RenameFindingAsync(
+                finding,
+                "link.txt",
+                CancellationToken.None);
+
+            Assert.False(result.Succeeded);
+            Assert.Equal("File changed since scan.", result.Failure?.Reason);
+            Assert.Equal(0, fileActions.RenameCallCount);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task BadNamesRename_OldFindingAfterSessionReplacementRejectsWithoutDispatch()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string path = Path.Combine(root, " bad.txt");
+        await File.WriteAllBytesAsync(path, [1]);
+
+        try
+        {
+            var store = new AnalysisSessionStore();
+            var fileActions = new FakeFileActionService();
+            var viewModel = new AnalysisResultsViewModel(store, fileActions, new FakeResultExportService());
+            store.SetCompleted(
+                ToolKind.BadNames,
+                new AnalysisScope(),
+                new NoToolOptions(),
+                NewResult([NewBadNameFinding(path)]));
+            PathFindingViewModel oldFinding = Assert.Single(viewModel.Findings);
+
+            store.SetCompleted(
+                ToolKind.BadNames,
+                new AnalysisScope(),
+                new NoToolOptions(),
+                NewResult([NewBadNameFinding(path)]));
+            PathFindingViewModel replacementFinding = Assert.Single(viewModel.Findings);
+            replacementFinding.IsSelected = true;
+
+            FileOperationResult result = await viewModel.RenameFindingAsync(
+                oldFinding,
+                "bad.txt",
+                CancellationToken.None);
+
+            Assert.False(result.Succeeded);
+            Assert.Equal("File changed since scan.", result.Failure?.Reason);
+            Assert.Equal(0, fileActions.RenameCallCount);
+            Assert.Same(replacementFinding, Assert.Single(viewModel.Findings));
+            Assert.True(replacementFinding.IsSelected);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task BadNamesRename_SessionChangedDuringServiceAwaitDoesNotRemoveReplacementFinding()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string path = Path.Combine(root, " bad.txt");
+        await File.WriteAllBytesAsync(path, [1]);
+
+        try
+        {
+            var renameStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var continueRename = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var store = new AnalysisSessionStore();
+            var fileActions = new FakeFileActionService
+            {
+                RenameHandler = async (target, newName, cancellationToken) =>
+                {
+                    renameStarted.SetResult();
+                    await continueRename.Task.WaitAsync(cancellationToken);
+                    return new FileOperationResult(
+                        target.FullPath,
+                        Path.Combine(Path.GetDirectoryName(target.FullPath)!, newName),
+                        null);
+                },
+            };
+            var viewModel = new AnalysisResultsViewModel(store, fileActions, new FakeResultExportService());
+            store.SetCompleted(
+                ToolKind.BadNames,
+                new AnalysisScope(),
+                new NoToolOptions(),
+                NewResult([NewBadNameFinding(path)]));
+            PathFindingViewModel originalFinding = Assert.Single(viewModel.Findings);
+
+            Task<FileOperationResult> rename = viewModel.RenameFindingAsync(
+                originalFinding,
+                "bad.txt",
+                CancellationToken.None);
+            await renameStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            store.SetCompleted(
+                ToolKind.BadNames,
+                new AnalysisScope(),
+                new NoToolOptions(),
+                NewResult([NewBadNameFinding(path)]));
+            PathFindingViewModel replacementFinding = Assert.Single(viewModel.Findings);
+            replacementFinding.IsSelected = true;
+            continueRename.SetResult();
+
+            FileOperationResult result = await rename;
+
+            Assert.True(result.Succeeded);
+            Assert.Equal(1, fileActions.RenameCallCount);
+            Assert.Same(replacementFinding, Assert.Single(viewModel.Findings));
+            Assert.True(replacementFinding.IsSelected);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task BadExtensionsRename_RevalidatesAndDispatchesRecommendedNameOnly()
     {
         string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
@@ -1314,6 +1652,25 @@ public sealed class AnalysisResultsViewModelTests
                 ["CurrentExtension"] = currentExtension,
                 ["ProperExtension"] = ".png",
                 ["DetectedType"] = "PNG",
+            },
+        };
+    }
+
+    private static PathFinding NewBadNameFinding(string path)
+    {
+        var file = new FileInfo(path);
+        return new PathFinding
+        {
+            FullPath = path,
+            Kind = PathFindingKind.File,
+            Reason = "Has leading or trailing whitespace",
+            Suggestion = Path.GetFileName(path).Trim(),
+            SizeBytes = file.Length,
+            CreatedUtc = file.CreationTimeUtc,
+            ModifiedUtc = file.LastWriteTimeUtc,
+            Metadata = new Dictionary<string, string>
+            {
+                ["CurrentName"] = Path.GetFileName(path),
             },
         };
     }
