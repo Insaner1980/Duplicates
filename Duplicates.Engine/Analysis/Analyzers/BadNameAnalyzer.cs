@@ -147,16 +147,7 @@ public sealed class BadNameAnalyzer
     }
 
     private static string EnsureSafeSuggestion(string suggestion)
-    {
-        if (!HasDefinedRisk(suggestion))
-        {
-            return suggestion;
-        }
-
-        string inspectedSuggestion = NormalizeForInspection(suggestion);
-        string fallback = BuildSuggestion(CreateSafeSegments(inspectedSuggestion));
-        return HasDefinedRisk(fallback) ? "file" : fallback;
-    }
+        => HasDefinedRisk(suggestion) ? "file" : suggestion;
 
     private static bool HasDefinedRisk(string name)
     {
@@ -240,14 +231,57 @@ public sealed class BadNameAnalyzer
                 : new NameSegment(original, inspected));
         }
 
-        while (segments.Count > 0 && IsWhitespaceSegment(segments[0]))
+        while (segments.Count > 0)
         {
-            segments.RemoveAt(0);
+            NameSegment segment = segments[0];
+            int safeStart = 0;
+            while (safeStart < segment.Inspected.Length &&
+                char.IsWhiteSpace(segment.Inspected[safeStart]))
+            {
+                safeStart++;
+            }
+
+            if (safeStart == 0)
+            {
+                break;
+            }
+
+            if (safeStart == segment.Inspected.Length)
+            {
+                segments.RemoveAt(0);
+                continue;
+            }
+
+            string safeRemainder = segment.Inspected[safeStart..];
+            segments[0] = new NameSegment(safeRemainder, safeRemainder);
+            break;
         }
 
-        while (segments.Count > 0 && IsUnsafeTrailingSegment(segments[^1]))
+        while (segments.Count > 0)
         {
-            segments.RemoveAt(segments.Count - 1);
+            NameSegment segment = segments[^1];
+            int safeEnd = segment.Inspected.Length;
+            while (safeEnd > 0 &&
+                (char.IsWhiteSpace(segment.Inspected[safeEnd - 1]) ||
+                    segment.Inspected[safeEnd - 1] == '.'))
+            {
+                safeEnd--;
+            }
+
+            if (safeEnd == segment.Inspected.Length)
+            {
+                break;
+            }
+
+            if (safeEnd == 0)
+            {
+                segments.RemoveAt(segments.Count - 1);
+                continue;
+            }
+
+            string safePrefix = segment.Inspected[..safeEnd];
+            segments[^1] = new NameSegment(safePrefix, safePrefix);
+            break;
         }
 
         return segments;
@@ -275,13 +309,6 @@ public sealed class BadNameAnalyzer
 
     private static string JoinInspected(IEnumerable<NameSegment> segments) =>
         string.Concat(segments.Select(static segment => segment.Inspected));
-
-    private static bool IsWhitespaceSegment(NameSegment segment) =>
-        segment.Inspected.Length > 0 && segment.Inspected.All(char.IsWhiteSpace);
-
-    private static bool IsUnsafeTrailingSegment(NameSegment segment) =>
-        segment.Inspected.Length > 0 &&
-        segment.Inspected.All(static character => char.IsWhiteSpace(character) || character == '.');
 
     private static string TrimUnsafeEnds(string name)
     {

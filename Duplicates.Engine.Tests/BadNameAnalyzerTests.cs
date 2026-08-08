@@ -167,6 +167,8 @@ public sealed class BadNameAnalyzerTests
     [InlineData("bad：name.txt", "bad_name.txt")]
     [InlineData("report⒈", "report1")]
     [InlineData("¨name.txt", "\u0308name.txt")]
+    [InlineData("cafe\u0301-report⒈", "cafe\u0301-report1")]
+    [InlineData("¨cafe\u0301name.txt", "\u0308cafe\u0301name.txt")]
     public void Detect_CompatibilityUnsafeSuggestionsAreSafe(
         string currentName,
         string expectedSuggestion)
@@ -218,6 +220,8 @@ public sealed class BadNameAnalyzerTests
     [InlineData("bad：name.txt")]
     [InlineData("report⒈")]
     [InlineData("¨name.txt")]
+    [InlineData("cafe\u0301-report⒈")]
+    [InlineData("¨cafe\u0301name.txt")]
     public void Detect_PositiveCasesAlwaysProduceSafeSuggestions(string currentName)
     {
         BadNameFinding finding = Assert.IsType<BadNameFinding>(Detect(currentName));
