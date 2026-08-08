@@ -1,0 +1,224 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="Duplicates.Views.ExifRemoverPage"
+    x:Name="PageRoot"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:Duplicates.Views.Controls">
+    <Page.Resources>
+        <DataTemplate x:Key="ExifResultTemplate">
+            <Grid Padding="8,10" RowSpacing="4">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <TextBlock
+                    Style="{ThemeResource BodyStrongTextBlockStyle}"
+                    Text="{Binding SourcePath}"
+                    TextWrapping="Wrap"
+                    ToolTipService.ToolTip="{Binding SourcePath}" />
+                <TextBlock
+                    Grid.Row="1"
+                    Style="{StaticResource MutedTextBlockStyle}"
+                    Text="{Binding Outcome}" />
+                <TextBlock
+                    Grid.Row="2"
+                    Text="{Binding Detail}"
+                    TextWrapping="Wrap" />
+                <TextBlock
+                    Grid.Row="3"
+                    Style="{StaticResource PathTextBlockStyle}"
+                    Text="{Binding OutputPath}"
+                    TextWrapping="Wrap"
+                    ToolTipService.ToolTip="{Binding OutputPath}" />
+                <StackPanel Grid.Row="4" Spacing="{StaticResource SpacingSmall}">
+                    <TextBlock
+                        Style="{StaticResource PathTextBlockStyle}"
+                        Text="{Binding RecoveryPathsText}"
+                        TextWrapping="Wrap" />
+                    <StackPanel
+                        Orientation="Horizontal"
+                        Spacing="{StaticResource SpacingSmall}"
+                        Visibility="{Binding OutputActionsVisibility}">
+                        <Button
+                            AutomationProperties.Name="Open cleaned image"
+                            Command="{Binding DataContext.OpenOutputCommand, ElementName=PageRoot}"
+                            CommandParameter="{Binding}"
+                            Content="Open" />
+                        <Button
+                            AutomationProperties.Name="Reveal cleaned image in Explorer"
+                            Command="{Binding DataContext.RevealOutputCommand, ElementName=PageRoot}"
+                            CommandParameter="{Binding}"
+                            Content="Reveal in Explorer" />
+                    </StackPanel>
+                </StackPanel>
+            </Grid>
+        </DataTemplate>
+    </Page.Resources>
+
+    <Grid Background="{ThemeResource BgBaseBrush}">
+        <VisualStateManager.VisualStateGroups>
+            <VisualStateGroup x:Name="WindowWidthStates">
+                <VisualState x:Name="Small">
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="0" />
+                    </VisualState.StateTriggers>
+                    <VisualState.Setters>
+                        <Setter Target="HeaderActionRail.(Grid.Row)" Value="1" />
+                    </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="Medium">
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="641" />
+                    </VisualState.StateTriggers>
+                </VisualState>
+            </VisualStateGroup>
+        </VisualStateManager.VisualStateGroups>
+
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Grid
+            MaxWidth="{StaticResource ContentMaxWidth}"
+            Padding="{StaticResource PageHeaderPadding}"
+            HorizontalAlignment="Stretch">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <StackPanel Spacing="6">
+                <TextBlock
+                    AutomationProperties.HeadingLevel="Level1"
+                    Style="{ThemeResource TitleTextBlockStyle}"
+                    Text="EXIF remover" />
+                <TextBlock
+                    Style="{StaticResource MutedTextBlockStyle}"
+                    Text="Remove personal image metadata without re-encoding pixels."
+                    TextWrapping="Wrap" />
+            </StackPanel>
+            <Grid
+                x:Name="HeaderActionRail"
+                Grid.ColumnSpan="2"
+                MaxWidth="{StaticResource ScanWorkAreaMaxWidth}"
+                HorizontalAlignment="Stretch">
+                <Button
+                    HorizontalAlignment="Right"
+                    VerticalAlignment="Center"
+                    AccessKey="C"
+                    Click="CleanImages_Click"
+                    IsEnabled="{Binding CanStartCleaning}"
+                    Style="{StaticResource AccentButtonStyle}">
+                    <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpacingSmall}">
+                        <SymbolIcon Symbol="Accept" />
+                        <TextBlock Text="Clean images" />
+                    </StackPanel>
+                </Button>
+            </Grid>
+        </Grid>
+
+        <ScrollViewer
+            Grid.Row="1"
+            HorizontalScrollBarVisibility="Disabled"
+            HorizontalScrollMode="Disabled">
+            <Grid
+                MaxWidth="{StaticResource ContentMaxWidth}"
+                Padding="{StaticResource PageContentPadding}"
+                HorizontalAlignment="Stretch">
+                <StackPanel Spacing="{StaticResource SpacingExtraLarge}">
+                    <InfoBar
+                        AutomationProperties.LiveSetting="Polite"
+                        AutomationProperties.Name="EXIF cleaning status"
+                        IsOpen="{Binding IsStatusOpen}"
+                        Message="{Binding StatusMessage}"
+                        Severity="{Binding StatusSeverity}" />
+
+                    <controls:PathScopeEditor
+                        x:Name="PathScopeEditor"
+                        MaxWidth="{StaticResource ScanWorkAreaMaxWidth}"
+                        HorizontalAlignment="Stretch"
+                        DataContext="{Binding PathScope}"
+                        FileTypeFilter=".jpg,.jpeg,.tif,.tiff" />
+
+                    <Expander
+                        MaxWidth="{StaticResource ScanWorkAreaMaxWidth}"
+                        HorizontalAlignment="Stretch"
+                        Header="Privacy options"
+                        IsExpanded="True">
+                        <StackPanel Padding="0,12,0,0" Spacing="{StaticResource SpacingMedium}">
+                            <ToggleSwitch Header="Remove GPS location" IsOn="{Binding RemoveGps, Mode=TwoWay}" />
+                            <ToggleSwitch Header="Remove camera and lens identifiers" IsOn="{Binding RemoveDeviceIdentifiers, Mode=TwoWay}" />
+                            <ToggleSwitch Header="Remove dates and times" IsOn="{Binding RemoveDates, Mode=TwoWay}" />
+                            <ToggleSwitch Header="Remove author and description" IsOn="{Binding RemoveAuthorAndDescription, Mode=TwoWay}" />
+                            <ToggleSwitch Header="Remove embedded thumbnail" IsOn="{Binding RemoveEmbeddedThumbnail, Mode=TwoWay}" />
+                            <ToggleSwitch Header="Remove XMP and IPTC metadata" IsOn="{Binding RemoveXmpAndIptc, Mode=TwoWay}" />
+                            <ToggleSwitch Header="Replace original after verification" IsOn="{Binding ReplaceOriginal, Mode=TwoWay}" />
+                            <InfoBar
+                                IsClosable="False"
+                                IsOpen="{Binding ReplaceOriginal}"
+                                Message="The verified cleaned image will replace the original. The original is sent to the Recycle Bin only after replacement succeeds."
+                                Severity="Warning" />
+                        </StackPanel>
+                    </Expander>
+
+                    <StackPanel
+                        AutomationProperties.LiveSetting="Polite"
+                        MaxWidth="{StaticResource ScanWorkAreaMaxWidth}"
+                        HorizontalAlignment="Stretch"
+                        Spacing="{StaticResource SpacingMedium}">
+                        <TextBlock
+                            AutomationProperties.HeadingLevel="Level2"
+                            Style="{StaticResource SectionHeaderTextBlockStyle}"
+                            Text="Cleaning progress" />
+                        <TextBlock Style="{ThemeResource CaptionTextBlockStyle}" Text="Overall progress" />
+                        <ProgressBar Maximum="100" Value="{Binding ProgressValue}" />
+                        <TextBlock Style="{ThemeResource CaptionTextBlockStyle}" Text="Current image" />
+                        <ProgressBar Maximum="100" Value="{Binding CurrentFileProgress}" />
+                        <TextBlock
+                            Style="{StaticResource PathTextBlockStyle}"
+                            Text="{Binding CurrentPath}"
+                            TextWrapping="Wrap"
+                            ToolTipService.ToolTip="{Binding CurrentPath}" />
+                        <Button
+                            HorizontalAlignment="Right"
+                            Command="{Binding CancelCleaningCommand}"
+                            IsEnabled="{Binding IsCleaning}">
+                            <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpacingSmall}">
+                                <SymbolIcon Symbol="Cancel" />
+                                <TextBlock Text="Cancel" />
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
+
+                    <StackPanel Spacing="{StaticResource SpacingMedium}">
+                        <TextBlock
+                            AutomationProperties.HeadingLevel="Level2"
+                            Style="{StaticResource SectionHeaderTextBlockStyle}"
+                            Text="Results" />
+                        <ListView
+                            AutomationProperties.Name="EXIF cleaning results"
+                            ItemTemplate="{StaticResource ExifResultTemplate}"
+                            ItemsSource="{Binding Results}"
+                            ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                            ScrollViewer.HorizontalScrollMode="Disabled"
+                            SelectionMode="None">
+                            <ListView.ItemContainerStyle>
+                                <Style TargetType="ListViewItem">
+                                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                </Style>
+                            </ListView.ItemContainerStyle>
+                        </ListView>
+                    </StackPanel>
+                </StackPanel>
+            </Grid>
+        </ScrollViewer>
+    </Grid>
+</Page>

@@ -6,6 +6,7 @@ using Duplicates.Engine.Analysis;
 using Duplicates.Models;
 using Duplicates.Services;
 using Duplicates.Views;
+using Duplicates.Views.Controls;
 
 namespace Duplicates.App.Tests;
 
@@ -925,6 +926,146 @@ public sealed class NativeWinUiContractTests
     }
 
     [Fact]
+    public void PathScopeEditor_FileFilterDefaultsToWildcardAndNormalizesExtensions()
+    {
+        Assert.Equal(["*"], PathScopeEditor.ParseFileTypeFilter(null));
+        Assert.Equal(["*"], PathScopeEditor.ParseFileTypeFilter("  "));
+        Assert.Equal(
+            [".jpg", ".jpeg", ".tif", ".tiff"],
+            PathScopeEditor.ParseFileTypeFilter("jpg, .JPEG; tif .tiff, .jpg"));
+    }
+
+    [Theory]
+    [InlineData("C:\\Images\\photo.JPG", ".jpg,.jpeg,.tif,.tiff", true)]
+    [InlineData("C:\\Images\\scan.tIfF", ".jpg,.jpeg,.tif,.tiff", true)]
+    [InlineData("C:\\Images\\graphic.png", ".jpg,.jpeg,.tif,.tiff", false)]
+    [InlineData("C:\\Images\\anything.bin", "*", true)]
+    public void PathScopeEditor_FileFilterPredicateIsSharedByPickerAndDrop(
+        string path,
+        string filter,
+        bool expected)
+    {
+        Assert.Equal(expected, PathScopeEditor.IsFileTypeAllowed(path, filter));
+    }
+
+    [Fact]
+    public void ExifRemoverPage_UsesNativeResponsiveCleaningControls()
+    {
+        XDocument page = LoadXaml(@"Views\ExifRemoverPage.xaml");
+        XElement scopeEditor = Assert.Single(
+            page.Descendants(),
+            element => element.Name.LocalName == "PathScopeEditor");
+        Assert.Equal(".jpg,.jpeg,.tif,.tiff", (string?)scopeEditor.Attribute("FileTypeFilter"));
+
+        Assert.Single(page.Descendants(Presentation + "Expander"));
+        XElement[] toggles = page.Descendants(Presentation + "ToggleSwitch").ToArray();
+        Assert.Equal(7, toggles.Length);
+        string[] optionBindings =
+        [
+            "{Binding RemoveGps, Mode=TwoWay}",
+            "{Binding RemoveDeviceIdentifiers, Mode=TwoWay}",
+            "{Binding RemoveDates, Mode=TwoWay}",
+            "{Binding RemoveAuthorAndDescription, Mode=TwoWay}",
+            "{Binding RemoveEmbeddedThumbnail, Mode=TwoWay}",
+            "{Binding RemoveXmpAndIptc, Mode=TwoWay}",
+            "{Binding ReplaceOriginal, Mode=TwoWay}",
+        ];
+        Assert.Equal(
+            optionBindings,
+            toggles.Select(toggle => (string?)toggle.Attribute("IsOn")));
+
+        XElement replacementWarning = page
+            .Descendants(Presentation + "InfoBar")
+            .Single(infoBar => (string?)infoBar.Attribute("Severity") == "Warning");
+        Assert.Equal("{Binding ReplaceOriginal}", (string?)replacementWarning.Attribute("IsOpen"));
+        Assert.Equal("False", (string?)replacementWarning.Attribute("IsClosable"));
+
+        XElement[] accentButtons = page
+            .Descendants(Presentation + "Button")
+            .Where(button => (string?)button.Attribute("Style") == "{StaticResource AccentButtonStyle}")
+            .ToArray();
+        XElement cleanButton = Assert.Single(accentButtons);
+        Assert.Equal("C", (string?)cleanButton.Attribute("AccessKey"));
+        Assert.Contains(
+            cleanButton.Descendants(Presentation + "TextBlock"),
+            text => (string?)text.Attribute("Text") == "Clean images");
+        XElement cancelButton = page
+            .Descendants(Presentation + "Button")
+            .Single(button => button.Descendants(Presentation + "TextBlock")
+                .Any(text => (string?)text.Attribute("Text") == "Cancel"));
+        Assert.Null(cancelButton.Attribute("Style"));
+
+        Assert.Equal(2, page.Descendants(Presentation + "ProgressBar").Count());
+        Assert.Equal(
+            ["{Binding ProgressValue}", "{Binding CurrentFileProgress}"],
+            page.Descendants(Presentation + "ProgressBar")
+                .Select(progress => (string?)progress.Attribute("Value")));
+        Assert.Single(page.Descendants(Presentation + "ListView"));
+        XElement resultTemplate = page
+            .Descendants(Presentation + "DataTemplate")
+            .Single(template => (string?)template.Attribute(Xaml + "Key") == "ExifResultTemplate");
+        foreach (string binding in new[] { "{Binding SourcePath}", "{Binding OutputPath}" })
+        {
+            XElement path = resultTemplate
+                .Descendants(Presentation + "TextBlock")
+                .Single(text => (string?)text.Attribute("Text") == binding);
+            Assert.Equal("Wrap", (string?)path.Attribute("TextWrapping"));
+            Assert.Null(path.Attribute("TextTrimming"));
+        }
+        Assert.Contains(
+            resultTemplate.Descendants(Presentation + "TextBlock"),
+            text => (string?)text.Attribute("Text") == "{Binding Detail}");
+        Assert.Contains(
+            resultTemplate.Descendants(Presentation + "TextBlock"),
+            text => (string?)text.Attribute("Text") == "{Binding RecoveryPathsText}");
+
+        XElement[] resultActions = resultTemplate.Descendants(Presentation + "Button").ToArray();
+        Assert.Equal(2, resultActions.Length);
+        Assert.Equal(
+            ["Open cleaned image", "Reveal cleaned image in Explorer"],
+            resultActions.Select(button => (string?)button.Attribute("AutomationProperties.Name")));
+        Assert.Equal(
+            [
+                "{Binding DataContext.OpenOutputCommand, ElementName=PageRoot}",
+                "{Binding DataContext.RevealOutputCommand, ElementName=PageRoot}",
+            ],
+            resultActions.Select(button => (string?)button.Attribute("Command")));
+
+        XElement scrollViewer = Assert.Single(page.Descendants(Presentation + "ScrollViewer"));
+        Assert.Equal("Disabled", (string?)scrollViewer.Attribute("HorizontalScrollMode"));
+        Assert.Equal("Disabled", (string?)scrollViewer.Attribute("HorizontalScrollBarVisibility"));
+        Assert.Contains(
+            page.Descendants(Presentation + "AdaptiveTrigger"),
+            trigger => (string?)trigger.Attribute("MinWindowWidth") == "641");
+        Assert.True(
+            page.Descendants().Count(element =>
+                (string?)element.Attribute("AutomationProperties.LiveSetting") == "Polite") >= 2);
+    }
+
+    [Fact]
+    public void MainWindow_RoutesExifRemoverDirectlyAndUsesTheTypedPageAsOperationOwner()
+    {
+        Type? pageType = typeof(MainWindow).Assembly.GetType("Duplicates.Views.ExifRemoverPage");
+        Assert.NotNull(pageType);
+        MethodInfo? resolver = typeof(MainWindow).GetMethod(
+            "ResolveDirectToolPage",
+            BindingFlags.NonPublic | BindingFlags.Static);
+        MethodInfo? owner = typeof(MainWindow).GetMethod(
+            "IsOwningPage",
+            BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(resolver);
+        Assert.NotNull(owner);
+
+        Assert.Equal(pageType, resolver.Invoke(null, [ToolKind.ExifRemover]));
+        Assert.True(Assert.IsType<bool>(owner.Invoke(
+            null,
+            [AppOperationKind.ExifCleaning, pageType])));
+        Assert.False(Assert.IsType<bool>(owner.Invoke(
+            null,
+            [AppOperationKind.ExifCleaning, typeof(ExifRemoverPage)])));
+    }
+
+    [Fact]
     public void Manifest_RemainsNonElevatedForSymbolicLinkCreation()
     {
         string path = Path.Combine(AppContext.BaseDirectory, "UiSource", "app.manifest");
@@ -981,5 +1122,9 @@ public sealed class NativeWinUiContractTests
     {
         var lineInfo = (IXmlLineInfo)element;
         return $"{path}:{lineInfo.LineNumber}";
+    }
+
+    private sealed class ExifRemoverPage
+    {
     }
 }

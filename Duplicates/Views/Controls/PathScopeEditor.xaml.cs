@@ -14,6 +14,8 @@ public sealed partial class PathScopeEditor : UserControl
         InitializeComponent();
     }
 
+    public string FileTypeFilter { get; set; } = "*";
+
     private PathScopeViewModel? Scope => DataContext as PathScopeViewModel;
 
     private async void AddIncludedFolder_Click(object sender, RoutedEventArgs e) => await AddFolderAsync(excluded: false);
@@ -64,12 +66,20 @@ public sealed partial class PathScopeEditor : UserControl
             CommitButtonText = excluded ? "Exclude Files" : "Select Files",
             ViewMode = PickerViewMode.List,
         };
-        picker.FileTypeFilter.Add("*");
+        foreach (string fileType in ParseFileTypeFilter(FileTypeFilter))
+        {
+            picker.FileTypeFilter.Add(fileType);
+        }
 
         IReadOnlyList<PickFileResult> results = await picker.PickMultipleFilesAsync();
         bool added = false;
         foreach (PickFileResult result in results)
         {
+            if (!IsFileTypeAllowed(result.Path, FileTypeFilter))
+            {
+                continue;
+            }
+
             added |= excluded ? Scope.ExcludePath(result.Path) : Scope.AddFile(result.Path);
         }
 
@@ -101,9 +111,38 @@ public sealed partial class PathScopeEditor : UserControl
             added |= Scope.AddFolder(folder.Path);
         }
 
+        foreach (StorageFile file in items.OfType<StorageFile>())
+        {
+            if (IsFileTypeAllowed(file.Path, FileTypeFilter))
+            {
+                added |= Scope.AddFile(file.Path);
+            }
+        }
+
         if (added)
         {
             IncludedPathsList.Focus(FocusState.Programmatic);
         }
+    }
+
+    internal static string[] ParseFileTypeFilter(string? filter)
+    {
+        string[] values = (filter ?? string.Empty)
+            .Split([',', ';', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(static value => value == "*"
+                ? value
+                : value.StartsWith('.') ? value.ToLowerInvariant() : $".{value.ToLowerInvariant()}")
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        return values.Length == 0 || values.Contains("*", StringComparer.Ordinal)
+            ? ["*"]
+            : values;
+    }
+
+    internal static bool IsFileTypeAllowed(string path, string? filter)
+    {
+        string[] allowedTypes = ParseFileTypeFilter(filter);
+        return allowedTypes[0] == "*" ||
+            allowedTypes.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase);
     }
 }

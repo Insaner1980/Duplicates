@@ -109,7 +109,7 @@
                         Text="Included paths" />
                     <TextBlock
                         Style="{StaticResource MutedTextBlockStyle}"
-                        Text="Drop folders here or choose folders and individual files to scan." />
+                        Text="Drop folders or matching files here, or choose paths to scan." />
                 </StackPanel>
                 <StackPanel
                     Grid.Column="1"

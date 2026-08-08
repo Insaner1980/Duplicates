@@ -96,9 +96,10 @@ public sealed partial class MainWindow : Window
         }
 
         _lastNavigationItem = requestedItem;
-        if (kind == ToolKind.DuplicateFiles)
+        Type? directPage = ResolveDirectToolPage(kind);
+        if (directPage is not null)
         {
-            NavigateTo(typeof(ScanPage));
+            NavigateTo(directPage);
             return;
         }
 
@@ -161,9 +162,16 @@ public sealed partial class MainWindow : Window
         AppOperationKind.AnalysisRun => pageType == typeof(AnalysisPage),
         AppOperationKind.ExactResultsAction => pageType == typeof(ResultsPage),
         AppOperationKind.AnalysisResultsAction => pageType == typeof(AnalysisResultsPage),
-        AppOperationKind.ExifCleaning => pageType?.Name == "ExifRemoverPage",
+        AppOperationKind.ExifCleaning => pageType == typeof(ExifRemoverPage),
         AppOperationKind.VideoOptimization => pageType?.Name == "VideoOptimizerPage",
         _ => false,
+    };
+
+    private static Type? ResolveDirectToolPage(ToolKind tool) => tool switch
+    {
+        ToolKind.DuplicateFiles => typeof(ScanPage),
+        ToolKind.ExifRemover => typeof(ExifRemoverPage),
+        _ => null,
     };
 
     private void RestoreNavigationSelection(object? item)

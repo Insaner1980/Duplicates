@@ -31,6 +31,10 @@ public sealed class AppServices
         var fileLinkPlatform = new FileLinkNative();
         RecycleBinService = new RecycleBinService(fileLinkPlatform);
         FileLinkService = new FileLinkService(fileLinkPlatform, RecycleBinService);
+        ExifCleanerService = new ExifCleanerService(
+            new WicMetadataBackend(),
+            new ExifFileTransactions(),
+            RecycleBinService);
         PathScopeViewModel = new PathScopeViewModel();
 
         ScanViewModel = new ScanViewModel(
@@ -59,6 +63,11 @@ public sealed class AppServices
             FileFormatProbe,
             AnalysisService,
             MediaPreviewLoader,
+            OperationCoordinator);
+        ExifRemoverViewModel = new ExifRemoverViewModel(
+            ExifCleanerService,
+            PathScopeViewModel,
+            FileActionService,
             OperationCoordinator);
         SettingsViewModel = new SettingsViewModel(SettingsService);
     }
@@ -95,6 +104,8 @@ public sealed class AppServices
 
     public IFileLinkService FileLinkService { get; }
 
+    public IExifCleanerService ExifCleanerService { get; }
+
     public PathScopeViewModel PathScopeViewModel { get; }
 
     public ScanViewModel ScanViewModel { get; }
@@ -104,6 +115,8 @@ public sealed class AppServices
     public AnalysisViewModel AnalysisViewModel { get; }
 
     public AnalysisResultsViewModel AnalysisResultsViewModel { get; }
+
+    public ExifRemoverViewModel ExifRemoverViewModel { get; }
 
     public SettingsViewModel SettingsViewModel { get; }
 }
