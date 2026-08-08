@@ -610,6 +610,220 @@ public sealed class AnalysisResultsViewModelTests
         }
     }
 
+    [Fact]
+    public async Task InvalidLinkDelete_DispatchesOnlyMissingFileLinkEntry()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string target = Path.Combine(root, "missing-target.txt");
+        string link = Path.Combine(root, "broken-link");
+        CreateFileSymbolicLinkOrSkip(link, target);
+
+        try
+        {
+            var store = new AnalysisSessionStore();
+            var fileActions = new FakeFileActionService
+            {
+                NextSummary = new DeleteSummary(1, 0, []),
+            };
+            IReadOnlyList<FileActionTarget>? requestedTargets = null;
+            fileActions.OnDelete = (targets, _) => requestedTargets = targets;
+            var viewModel = new AnalysisResultsViewModel(store, fileActions, new FakeResultExportService());
+            store.SetCompleted(
+                ToolKind.InvalidLinks,
+                new AnalysisScope { IncludedFolders = [root] },
+                new NoToolOptions(),
+                NewResult([NewLinkFinding(link, "File", target)]));
+            PathFindingViewModel finding = Assert.Single(viewModel.Findings);
+            finding.IsSelected = true;
+            Assert.True(viewModel.CanActOnSelection);
+
+            DeleteSummary summary = await viewModel.DeleteSelectedAsync(CancellationToken.None);
+
+            FileActionTarget requested = Assert.Single(requestedTargets!);
+            Assert.Equal(link, requested.FullPath);
+            Assert.Equal(0, requested.SizeBytes);
+            Assert.Equal(FileActionTargetKind.FileLink, requested.Kind);
+            Assert.NotEqual(target, requested.FullPath);
+            Assert.Equal(1, summary.DeletedCount);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task InvalidLinkMove_DispatchesOnlyMissingDirectoryLinkEntry()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string target = Path.Combine(root, "missing-target");
+        string link = Path.Combine(root, "broken-link");
+        CreateDirectorySymbolicLinkOrSkip(link, target);
+
+        try
+        {
+            var store = new AnalysisSessionStore();
+            var fileActions = new FakeFileActionService
+            {
+                NextMoveSummary = new FileOperationSummary(
+                    [new FileOperationResult(link, Path.Combine(root, "destination", "broken-link"), null)],
+                    0),
+            };
+            IReadOnlyList<FileActionTarget>? requestedTargets = null;
+            fileActions.OnMove = (targets, _, _, _) => requestedTargets = targets;
+            var viewModel = new AnalysisResultsViewModel(store, fileActions, new FakeResultExportService());
+            store.SetCompleted(
+                ToolKind.InvalidLinks,
+                new AnalysisScope { IncludedFolders = [root] },
+                new NoToolOptions(),
+                NewResult([NewLinkFinding(link, "Directory", target)]));
+            Assert.Single(viewModel.Findings).IsSelected = true;
+
+            FileOperationSummary summary = await viewModel.MoveSelectedAsync(
+                Path.Combine(root, "destination"),
+                MoveCollisionBehavior.Skip,
+                CancellationToken.None);
+
+            FileActionTarget requested = Assert.Single(requestedTargets!);
+            Assert.Equal(link, requested.FullPath);
+            Assert.Equal(FileActionTargetKind.DirectoryLink, requested.Kind);
+            Assert.NotEqual(target, requested.FullPath);
+            Assert.True(Assert.Single(summary.Results).Succeeded);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task InvalidLinkRename_DispatchesOnlyMissingLinkEntry()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string target = Path.Combine(root, "missing-target.txt");
+        string link = Path.Combine(root, "broken-link");
+        CreateFileSymbolicLinkOrSkip(link, target);
+
+        try
+        {
+            var store = new AnalysisSessionStore();
+            var fileActions = new RecordingFileActionService();
+            var viewModel = new AnalysisResultsViewModel(store, fileActions, new FakeResultExportService());
+            store.SetCompleted(
+                ToolKind.InvalidLinks,
+                new AnalysisScope { IncludedFolders = [root] },
+                new NoToolOptions(),
+                NewResult([NewLinkFinding(link, "File", target)]));
+            PathFindingViewModel finding = Assert.Single(viewModel.Findings);
+
+            FileOperationResult result = await viewModel.RenameFindingAsync(
+                finding,
+                "renamed-link",
+                CancellationToken.None);
+
+            Assert.True(result.Succeeded);
+            Assert.NotNull(fileActions.RenameTarget);
+            Assert.Equal(link, fileActions.RenameTarget.FullPath);
+            Assert.Equal(FileActionTargetKind.FileLink, fileActions.RenameTarget.Kind);
+            Assert.NotEqual(target, fileActions.RenameTarget.FullPath);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task InvalidLinkDelete_RejectsMetadataSourceAndClassificationChangesFailClosed()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string lowerCaseMetadata = Path.Combine(root, "lowercase-metadata");
+        string wrongKind = Path.Combine(root, "wrong-kind");
+        string noLongerLink = Path.Combine(root, "no-longer-link");
+        string changedClassification = Path.Combine(root, "changed-classification");
+        CreateFileSymbolicLinkOrSkip(lowerCaseMetadata, "missing-lowercase");
+        CreateFileSymbolicLinkOrSkip(wrongKind, "missing-kind");
+        CreateFileSymbolicLinkOrSkip(noLongerLink, "missing-regular");
+        File.Delete(noLongerLink);
+        await File.WriteAllTextAsync(noLongerLink, "replacement");
+        CreateFileSymbolicLinkOrSkip(changedClassification, "changed-classification");
+
+        try
+        {
+            var store = new AnalysisSessionStore();
+            var fileActions = new FakeFileActionService();
+            var viewModel = new AnalysisResultsViewModel(store, fileActions, new FakeResultExportService());
+            store.SetCompleted(
+                ToolKind.InvalidLinks,
+                new AnalysisScope { IncludedFolders = [root] },
+                new NoToolOptions(),
+                NewResult(
+                [
+                    NewLinkFinding(lowerCaseMetadata, "file", "missing-lowercase"),
+                    NewLinkFinding(wrongKind, "Directory", "missing-kind"),
+                    NewLinkFinding(noLongerLink, "File", "missing-regular"),
+                    NewLinkFinding(changedClassification, "File", "missing-before-scan"),
+                ]));
+            foreach (PathFindingViewModel finding in viewModel.Findings)
+            {
+                finding.IsSelected = true;
+            }
+
+            DeleteSummary summary = await viewModel.DeleteSelectedAsync(CancellationToken.None);
+
+            Assert.Equal(4, summary.Failures.Count);
+            Assert.All(summary.Failures, static failure => Assert.Equal("File changed since scan.", failure.Reason));
+            Assert.Equal(0, fileActions.DeleteCallCount);
+            Assert.Equal(4, viewModel.Findings.Count);
+            Assert.All(viewModel.Findings, static finding => Assert.True(finding.IsSelected));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task InvalidLinkDelete_RejectsLinkThatNowResolvesSuccessfully()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string target = Path.Combine(root, "target.txt");
+        string link = Path.Combine(root, "link");
+        await File.WriteAllTextAsync(target, "target");
+        CreateFileSymbolicLinkOrSkip(link, target);
+
+        try
+        {
+            var store = new AnalysisSessionStore();
+            var fileActions = new FakeFileActionService();
+            var viewModel = new AnalysisResultsViewModel(store, fileActions, new FakeResultExportService());
+            store.SetCompleted(
+                ToolKind.InvalidLinks,
+                new AnalysisScope { IncludedFolders = [root] },
+                new NoToolOptions(),
+                NewResult([NewLinkFinding(link, "File", "missing-at-scan")]));
+            PathFindingViewModel finding = Assert.Single(viewModel.Findings);
+            finding.IsSelected = true;
+
+            DeleteSummary summary = await viewModel.DeleteSelectedAsync(CancellationToken.None);
+
+            FileActionFailure failure = Assert.Single(summary.Failures);
+            Assert.Equal(link, failure.Path);
+            Assert.Equal("File changed since scan.", failure.Reason);
+            Assert.Equal(0, fileActions.DeleteCallCount);
+            Assert.True(finding.IsSelected);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     private static AnalysisResult NewResult(
         IReadOnlyList<PathFinding>? findings = null,
         IReadOnlyList<SimilarityGroup>? groups = null,
@@ -660,6 +874,58 @@ public sealed class AnalysisResultsViewModelTests
         };
     }
 
+    private static PathFinding NewLinkFinding(
+        string path,
+        string linkKind,
+        string immediateTarget,
+        string reason = "Link target is missing.") => new()
+        {
+            FullPath = path,
+            Kind = PathFindingKind.Link,
+            Reason = reason,
+            SizeBytes = 0,
+            Metadata = new Dictionary<string, string>
+            {
+                ["LinkKind"] = linkKind,
+                ["ImmediateTarget"] = immediateTarget,
+            },
+        };
+
+    private static void CreateFileSymbolicLinkOrSkip(string linkPath, string targetPath)
+    {
+        try
+        {
+            File.CreateSymbolicLink(linkPath, targetPath);
+        }
+        catch (Exception ex) when (IsLinkCapabilityFailure(ex))
+        {
+            throw Xunit.Sdk.SkipException.ForSkip($"A file symbolic-link fixture cannot be created: {ex.Message}");
+        }
+    }
+
+    private static void CreateDirectorySymbolicLinkOrSkip(string linkPath, string targetPath)
+    {
+        try
+        {
+            Directory.CreateSymbolicLink(linkPath, targetPath);
+        }
+        catch (Exception ex) when (IsLinkCapabilityFailure(ex))
+        {
+            throw Xunit.Sdk.SkipException.ForSkip($"A directory symbolic-link fixture cannot be created: {ex.Message}");
+        }
+    }
+
+    private static bool IsLinkCapabilityFailure(Exception exception)
+    {
+        if (exception is UnauthorizedAccessException or PlatformNotSupportedException)
+        {
+            return true;
+        }
+
+        int nativeError = exception.HResult & 0xFFFF;
+        return exception is IOException && nativeError is 5 or 1314;
+    }
+
     private static SimilarityItem NewSimilarityItem(
         string path,
         double similarity,
@@ -678,4 +944,37 @@ public sealed class AnalysisResultsViewModelTests
         SimilarityGroupViewModel group => group.FullPath,
         _ => throw new InvalidOperationException(),
     };
+
+    private sealed class RecordingFileActionService : IFileActionService
+    {
+        public FileActionTarget? RenameTarget { get; private set; }
+
+        public Task<DeleteSummary> DeleteAsync(
+            IReadOnlyList<FileActionTarget> targets,
+            IProgress<DeleteProgress>? progress,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<FileOperationSummary> MoveAsync(
+            IReadOnlyList<FileActionTarget> targets,
+            string destinationFolder,
+            MoveCollisionBehavior collisionBehavior,
+            IProgress<FileOperationProgress>? progress,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public Task<FileOperationResult> RenameAsync(
+            FileActionTarget target,
+            string newName,
+            CancellationToken cancellationToken)
+        {
+            RenameTarget = target;
+            return Task.FromResult(new FileOperationResult(
+                target.FullPath,
+                Path.Combine(Path.GetDirectoryName(target.FullPath)!, newName),
+                null));
+        }
+
+        public void OpenFile(string path) => throw new NotSupportedException();
+
+        public void RevealInExplorer(string path) => throw new NotSupportedException();
+    }
 }

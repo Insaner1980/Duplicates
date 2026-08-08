@@ -483,6 +483,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
     {
         { Tool: ToolKind.EmptyFiles or ToolKind.EmptyFolders or ToolKind.BigFiles } => true,
         { Tool: ToolKind.TemporaryFiles, ToolOptions: TemporaryFileToolOptions } => true,
+        { Tool: ToolKind.InvalidLinks, ToolOptions: NoToolOptions } => true,
         _ => false,
     };
 
@@ -573,6 +574,11 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         if (session?.Tool == ToolKind.TemporaryFiles)
         {
             return TryMapTemporaryFile(finding, session.ToolOptions, out target, out failure);
+        }
+
+        if (session?.Tool == ToolKind.InvalidLinks)
+        {
+            return TryMapInvalidLink(finding, out target, out failure);
         }
 
         target = null;
@@ -670,6 +676,124 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
             return false;
         }
     }
+
+    private static bool TryMapInvalidLink(
+        PathFindingViewModel finding,
+        out FileActionTarget? target,
+        out FileActionFailure? failure)
+    {
+        target = null;
+        failure = null;
+        try
+        {
+            if (finding.Source.Kind != PathFindingKind.Link ||
+                !TryGetExactMetadata(finding.Source.Metadata, "LinkKind", out string? linkKind))
+            {
+                failure = ChangedFailure(finding.FullPath);
+                return false;
+            }
+
+            FileActionTargetKind? expectedKind = linkKind switch
+            {
+                "File" => FileActionTargetKind.FileLink,
+                "Directory" => FileActionTargetKind.DirectoryLink,
+                _ => null,
+            };
+            if (expectedKind is null || ReadTargetKind(finding.FullPath) != expectedKind.Value)
+            {
+                failure = ChangedFailure(finding.FullPath);
+                return false;
+            }
+
+            FileSystemInfo source = expectedKind.Value == FileActionTargetKind.DirectoryLink
+                ? new DirectoryInfo(finding.FullPath)
+                : new FileInfo(finding.FullPath);
+            if (source.LinkTarget is null ||
+                !string.Equals(GetInvalidLinkReason(source), finding.Source.Reason, StringComparison.Ordinal))
+            {
+                failure = ChangedFailure(finding.FullPath);
+                return false;
+            }
+
+            target = new FileActionTarget(finding.FullPath, 0, expectedKind.Value);
+            return true;
+        }
+        catch (Exception ex) when (IsFileSystemFailure(ex))
+        {
+            failure = ChangedFailure(finding.FullPath);
+            return false;
+        }
+    }
+
+    private static string? GetInvalidLinkReason(FileSystemInfo source)
+    {
+        FileSystemInfo? finalTarget;
+        try
+        {
+            finalTarget = source.ResolveLinkTarget(returnFinalTarget: true);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return "Link target is missing.";
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or SecurityException)
+        {
+            return "Link target is inaccessible.";
+        }
+        catch (Exception ex) when (IsUnresolvableLink(ex))
+        {
+            return "Link target cannot be resolved.";
+        }
+
+        if (finalTarget is null)
+        {
+            return "Link target cannot be resolved.";
+        }
+
+        if (finalTarget.Exists)
+        {
+            return null;
+        }
+
+        try
+        {
+            _ = File.GetAttributes(finalTarget.FullName);
+            return null;
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return "Link target is missing.";
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or SecurityException)
+        {
+            return "Link target is inaccessible.";
+        }
+        catch (Exception ex) when (IsUnresolvableLink(ex))
+        {
+            return "Link target cannot be resolved.";
+        }
+    }
+
+    private static bool TryGetExactMetadata(
+        IReadOnlyDictionary<string, string> metadata,
+        string key,
+        out string? value)
+    {
+        foreach ((string metadataKey, string metadataValue) in metadata)
+        {
+            if (string.Equals(metadataKey, key, StringComparison.Ordinal))
+            {
+                value = metadataValue;
+                return true;
+            }
+        }
+
+        value = null;
+        return false;
+    }
+
+    private static bool IsUnresolvableLink(Exception exception) =>
+        exception is IOException or ArgumentException or NotSupportedException;
 
     private static bool TryMapSimilarityItem(
         SimilarityItemViewModel item,
@@ -806,7 +930,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         fileName.EndsWith(".chk", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsFileSystemFailure(Exception ex) =>
-        ex is IOException or UnauthorizedAccessException or SecurityException or NotSupportedException;
+        ex is IOException or UnauthorizedAccessException or SecurityException or ArgumentException or NotSupportedException;
 
     private static IReadOnlyDictionary<string, string> MergeMetadata(
         IReadOnlyDictionary<string, string> groupMetadata,

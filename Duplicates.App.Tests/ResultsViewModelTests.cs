@@ -512,7 +512,6 @@ public sealed class ResultsViewModelTests
     [Theory]
     [InlineData(ToolKind.TemporaryFiles)]
     [InlineData(ToolKind.BrokenFiles)]
-    [InlineData(ToolKind.InvalidLinks)]
     [InlineData(ToolKind.BadExtensions)]
     [InlineData(ToolKind.BadNames)]
     public async Task AnalysisMutations_UnsupportedToolsFailClosedWithoutCallingFileActions(ToolKind tool)

@@ -58,6 +58,9 @@ public sealed class AnalysisService : IAnalysisService
             (ToolKind.EmptyFolders, NoToolOptions) => await new EmptyFolderAnalyzer().AnalyzeAsync(
                 inventory,
                 cancellationToken).ConfigureAwait(false),
+            (ToolKind.InvalidLinks, NoToolOptions) => await new InvalidLinkAnalyzer().AnalyzeAsync(
+                inventory,
+                cancellationToken).ConfigureAwait(false),
             (ToolKind.TemporaryFiles, TemporaryFileToolOptions options) => await new TemporaryFileAnalyzer().AnalyzeAsync(
                 inventory,
                 new TemporaryFileOptions(options.MinimumAge, options.UtcNow),
