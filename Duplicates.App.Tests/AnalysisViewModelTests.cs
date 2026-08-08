@@ -269,6 +269,40 @@ public sealed class AnalysisViewModelTests
     }
 
     [Fact]
+    public async Task TemporaryFiles_LargeValidTimeSpanIsNormalizedAgainstCapturedUtcNow()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string path = Path.Combine(root, "old.tmp");
+        await File.WriteAllBytesAsync(path, [1]);
+        File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddDays(-8));
+
+        try
+        {
+            var scope = new PathScopeViewModel();
+            Assert.True(scope.AddFile(path));
+            var store = new AnalysisSessionStore();
+            var viewModel = new AnalysisViewModel(new AnalysisService(), store, scope);
+            viewModel.SelectTool(ToolKind.TemporaryFiles);
+            viewModel.TemporaryFileMinimumAgeDays = 1_000_000;
+
+            await viewModel.StartAnalysisCommand.ExecuteAsync(null);
+
+            AnalysisSession session = Assert.IsType<AnalysisSession>(store.CurrentSession);
+            var options = Assert.IsType<TemporaryFileToolOptions>(session.ToolOptions);
+            Assert.Equal(7d, viewModel.TemporaryFileMinimumAgeDays);
+            Assert.Equal("Files at least 7 days old are included.", viewModel.OptionsSummary);
+            Assert.Equal(TimeSpan.FromDays(7), options.MinimumAge);
+            Assert.Equal(path, Assert.Single(session.Result.Findings).FullPath);
+            Assert.Equal(string.Empty, viewModel.StatusMessage);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void BigFiles_PresetsUseExactByteValuesAndNoOptionStorageToolsHideOptions()
     {
         var viewModel = new AnalysisViewModel(

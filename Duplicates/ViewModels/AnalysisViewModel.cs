@@ -214,9 +214,7 @@ public sealed partial class AnalysisViewModel : ObservableObject
     private ToolOptions BuildToolOptions(ToolKind tool) => tool switch
     {
         ToolKind.BigFiles => new LargeFileToolOptions(GetLargeFileMinimumSizeBytes()),
-        ToolKind.TemporaryFiles => new TemporaryFileToolOptions(
-            TimeSpan.FromDays(GetTemporaryFileMinimumAgeDays()),
-            DateTime.UtcNow),
+        ToolKind.TemporaryFiles => BuildTemporaryFileOptions(),
         ToolKind.SimilarImages => new SimilarImageToolOptions(10),
         ToolKind.SimilarVideos => new SimilarVideoToolOptions(10),
         ToolKind.MusicDuplicates => new MusicDuplicateToolOptions(TimeSpan.FromSeconds(2)),
@@ -229,11 +227,27 @@ public sealed partial class AnalysisViewModel : ObservableObject
         LargeFileMinimumSizeValue,
         DefaultLargeFileMinimumSizeBytes);
 
-    private double GetTemporaryFileMinimumAgeDays() =>
-        double.IsFinite(TemporaryFileMinimumAgeDays) &&
-        TemporaryFileMinimumAgeDays < TimeSpan.MaxValue.TotalDays
-            ? Math.Max(0, TemporaryFileMinimumAgeDays)
+    private TemporaryFileToolOptions BuildTemporaryFileOptions()
+    {
+        DateTime utcNow = DateTime.UtcNow;
+        double normalizedDays = GetTemporaryFileMinimumAgeDays(utcNow);
+        TemporaryFileMinimumAgeDays = normalizedDays;
+        return new TemporaryFileToolOptions(TimeSpan.FromDays(normalizedDays), utcNow);
+    }
+
+    private double GetTemporaryFileMinimumAgeDays() => GetTemporaryFileMinimumAgeDays(DateTime.UtcNow);
+
+    private double GetTemporaryFileMinimumAgeDays(DateTime utcNow)
+    {
+        double normalizedDays =
+            double.IsFinite(TemporaryFileMinimumAgeDays) &&
+            TemporaryFileMinimumAgeDays < TimeSpan.MaxValue.TotalDays
+                ? Math.Max(0, TemporaryFileMinimumAgeDays)
+                : DefaultTemporaryFileMinimumAgeDays;
+        return TimeSpan.FromDays(normalizedDays) <= utcNow - DateTime.MinValue
+            ? normalizedDays
             : DefaultTemporaryFileMinimumAgeDays;
+    }
 
     private void UpdateProgress(AnalysisProgress progress)
     {

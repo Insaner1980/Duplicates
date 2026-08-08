@@ -434,6 +434,19 @@ public sealed class StorageAnalyzerTests : IDisposable
             cancellationSource.Token));
     }
 
+    [Fact]
+    public async Task TemporaryFiles_RejectsAgeThatWouldUnderflowCapturedUtcNow()
+    {
+        DateTime utcNow = new(2026, 8, 8, 12, 0, 0, DateTimeKind.Utc);
+        var analyzer = new TemporaryFileAnalyzer();
+
+        ArgumentOutOfRangeException exception = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => analyzer.AnalyzeAsync(
+            NewInventory(),
+            new TemporaryFileOptions(TimeSpan.FromDays(1_000_000), utcNow),
+            CancellationToken.None));
+        Assert.Equal("options", exception.ParamName);
+    }
+
     private static FileInventory NewInventory(
         IReadOnlyList<InventoryFile>? files = null,
         IReadOnlyList<InventoryDirectory>? directories = null,

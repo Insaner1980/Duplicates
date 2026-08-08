@@ -26,7 +26,8 @@ public sealed class TemporaryFileAnalyzer
     {
         ArgumentNullException.ThrowIfNull(inventory);
         ArgumentNullException.ThrowIfNull(options);
-        if (options.MinimumAge < TimeSpan.Zero)
+        if (options.MinimumAge < TimeSpan.Zero ||
+            options.MinimumAge > options.UtcNow - DateTime.MinValue)
         {
             throw new ArgumentOutOfRangeException(nameof(options));
         }
