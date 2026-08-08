@@ -177,16 +177,7 @@ public sealed class WindowsVideoSampleProvider : IVideoSampleProvider
                 }
                 finally
                 {
-                    MediaLuminanceConverter.ReleaseNativeObject(frame);
-                    MediaLuminanceConverter.ReleaseNativeObject(decoder);
-                    try
-                    {
-                        thumbnail?.Dispose();
-                    }
-                    finally
-                    {
-                        MediaLuminanceConverter.ReleaseNativeObject(thumbnail);
-                    }
+                    thumbnail?.Dispose();
                 }
             }
 
@@ -203,22 +194,7 @@ public sealed class WindowsVideoSampleProvider : IVideoSampleProvider
         }
         finally
         {
-            try
-            {
-                clips?.Clear();
-            }
-            finally
-            {
-                MediaLuminanceConverter.ReleaseNativeObject(clips);
-                MediaLuminanceConverter.ReleaseNativeObject(composition);
-                MediaLuminanceConverter.ReleaseNativeObject(pixelAspectRatio);
-                MediaLuminanceConverter.ReleaseNativeObject(frameRate);
-                MediaLuminanceConverter.ReleaseNativeObject(encoding);
-                MediaLuminanceConverter.ReleaseNativeObject(clip);
-                MediaLuminanceConverter.ReleaseNativeObject(properties);
-                MediaLuminanceConverter.ReleaseNativeObject(contentProperties);
-                MediaLuminanceConverter.ReleaseNativeObject(file);
-            }
+            clips?.Clear();
         }
     }
 

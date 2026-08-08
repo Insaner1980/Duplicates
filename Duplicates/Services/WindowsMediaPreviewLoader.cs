@@ -53,54 +53,40 @@ public sealed class WindowsMediaPreviewLoader : IMediaPreviewLoader
             bufferSize: 4096,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
         using IRandomAccessStream stream = source.AsRandomAccessStream();
-        BitmapDecoder? decoder = null;
-        BitmapFrame? frame = null;
-        BitmapTransform? transform = null;
-        PixelDataProvider? pixelData = null;
-        try
+        BitmapDecoder decoder = await WinRtAsync.AwaitAndCloseAsync(
+                BitmapDecoder.CreateAsync(stream),
+                cancellationToken)
+            .ConfigureAwait(false);
+        BitmapFrame frame = await WinRtAsync.AwaitAndCloseAsync(
+                decoder.GetFrameAsync(0),
+                cancellationToken)
+            .ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        (uint width, uint height) = Scale(frame.OrientedPixelWidth, frame.OrientedPixelHeight);
+        (uint scaledWidth, uint scaledHeight) = Scale(frame.PixelWidth, frame.PixelHeight);
+        var transform = new BitmapTransform
         {
-            decoder = await WinRtAsync.AwaitAndCloseAsync(
-                    BitmapDecoder.CreateAsync(stream),
-                    cancellationToken)
-                .ConfigureAwait(false);
-            frame = await WinRtAsync.AwaitAndCloseAsync(
-                    decoder.GetFrameAsync(0),
-                    cancellationToken)
-                .ConfigureAwait(false);
-            cancellationToken.ThrowIfCancellationRequested();
-            (uint width, uint height) = Scale(frame.OrientedPixelWidth, frame.OrientedPixelHeight);
-            (uint scaledWidth, uint scaledHeight) = Scale(frame.PixelWidth, frame.PixelHeight);
-            transform = new BitmapTransform
-            {
-                ScaledWidth = scaledWidth,
-                ScaledHeight = scaledHeight,
-                InterpolationMode = BitmapInterpolationMode.Fant,
-            };
-            pixelData = await WinRtAsync.AwaitAndCloseAsync(
-                    frame.GetPixelDataAsync(
-                        BitmapPixelFormat.Bgra8,
-                        BitmapAlphaMode.Premultiplied,
-                        transform,
-                        ExifOrientationMode.RespectExifOrientation,
-                        ColorManagementMode.ColorManageToSRgb),
-                    cancellationToken)
-                .ConfigureAwait(false);
-            cancellationToken.ThrowIfCancellationRequested();
-            byte[] bgra = pixelData.DetachPixelData();
-            if (bgra.Length != checked((int)(width * height * 4)))
-            {
-                throw new InvalidDataException("The preview buffer is invalid.");
-            }
+            ScaledWidth = scaledWidth,
+            ScaledHeight = scaledHeight,
+            InterpolationMode = BitmapInterpolationMode.Fant,
+        };
+        PixelDataProvider pixelData = await WinRtAsync.AwaitAndCloseAsync(
+                frame.GetPixelDataAsync(
+                    BitmapPixelFormat.Bgra8,
+                    BitmapAlphaMode.Premultiplied,
+                    transform,
+                    ExifOrientationMode.RespectExifOrientation,
+                    ColorManagementMode.ColorManageToSRgb),
+                cancellationToken)
+            .ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        byte[] bgra = pixelData.DetachPixelData();
+        if (bgra.Length != checked((int)(width * height * 4)))
+        {
+            throw new InvalidDataException("The preview buffer is invalid.");
+        }
 
-            return new MediaPreviewData(checked((int)width), checked((int)height), bgra);
-        }
-        finally
-        {
-            MediaLuminanceConverter.ReleaseNativeObject(pixelData);
-            MediaLuminanceConverter.ReleaseNativeObject(transform);
-            MediaLuminanceConverter.ReleaseNativeObject(frame);
-            MediaLuminanceConverter.ReleaseNativeObject(decoder);
-        }
+        return new MediaPreviewData(checked((int)width), checked((int)height), bgra);
     }
 
     private static async Task<MediaPreviewData> LoadVideoAsync(
@@ -184,28 +170,13 @@ public sealed class WindowsMediaPreviewLoader : IMediaPreviewLoader
         }
         finally
         {
-            MediaLuminanceConverter.ReleaseNativeObject(pixelData);
-            MediaLuminanceConverter.ReleaseNativeObject(transform);
-            MediaLuminanceConverter.ReleaseNativeObject(frame);
-            MediaLuminanceConverter.ReleaseNativeObject(decoder);
             try
             {
                 thumbnail?.Dispose();
             }
             finally
             {
-                MediaLuminanceConverter.ReleaseNativeObject(thumbnail);
-                try
-                {
-                    clips?.Clear();
-                }
-                finally
-                {
-                    MediaLuminanceConverter.ReleaseNativeObject(clips);
-                    MediaLuminanceConverter.ReleaseNativeObject(composition);
-                    MediaLuminanceConverter.ReleaseNativeObject(clip);
-                    MediaLuminanceConverter.ReleaseNativeObject(file);
-                }
+                clips?.Clear();
             }
         }
     }

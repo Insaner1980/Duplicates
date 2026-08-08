@@ -401,6 +401,39 @@ public sealed class WindowsMediaProviderTests : IDisposable
     }
 
     [Fact]
+    public void ProjectedMediaCleanup_DoesNotExposeManualNativeReleaseHelper()
+    {
+        Assert.Null(typeof(MediaLuminanceConverter).GetMethod(
+            "ReleaseNativeObject",
+            System.Reflection.BindingFlags.Static |
+            System.Reflection.BindingFlags.Public |
+            System.Reflection.BindingFlags.NonPublic));
+    }
+
+    [Fact]
+    public async Task VideoProvider_RepeatedFreshSamplesKeepSourceReusable()
+    {
+        StorageFolder folder = await StorageFolder.GetFolderFromPathAsync(_root);
+        StorageFile image = await WritePatternImageAsync(folder, "repeated-source.png", 2, transpose: false);
+        StorageFile video = await RenderSequenceVideoAsync(
+            folder,
+            "repeated.mp4",
+            [image],
+            width: 640,
+            height: 360,
+            bitrate: 2_000_000);
+        var provider = new WindowsVideoSampleProvider();
+
+        for (int iteration = 0; iteration < 3; iteration++)
+        {
+            VideoSample sample = await provider.GetFreshSampleAsync(video.Path, CancellationToken.None);
+
+            Assert.Equal(5, sample.LuminanceFrames32x32.Count);
+            MoveAwayAndBack(video.Path);
+        }
+    }
+
+    [Fact]
     public async Task MusicDuplicateWindowsUat_GroupsTaggedNormalizedTracksExcludesDifferentArtistAndLeavesCacheUntouched()
     {
         string first = Path.Combine(_root, "tagged-source.mp3");
@@ -631,48 +664,23 @@ public sealed class WindowsMediaProviderTests : IDisposable
         Guid encoderId = string.Equals(Path.GetExtension(name), ".png", StringComparison.OrdinalIgnoreCase)
             ? BitmapEncoder.PngEncoderId
             : BitmapEncoder.JpegEncoderId;
-        BitmapEncoder? encoder = null;
-        var createOperation = BitmapEncoder.CreateAsync(encoderId, stream);
-        try
+        BitmapEncoder encoder = await BitmapEncoder.CreateAsync(encoderId, stream);
+        byte[] pixels = new byte[checked((int)(width * height * 4))];
+        for (int offset = 0; offset < pixels.Length; offset += 4)
         {
-            encoder = await createOperation;
-        }
-        finally
-        {
-            MediaLuminanceConverter.ReleaseNativeObject(createOperation);
+            pixels[offset + 2] = 255;
+            pixels[offset + 3] = 255;
         }
 
-        try
-        {
-            byte[] pixels = new byte[checked((int)(width * height * 4))];
-            for (int offset = 0; offset < pixels.Length; offset += 4)
-            {
-                pixels[offset + 2] = 255;
-                pixels[offset + 3] = 255;
-            }
-
-            encoder.SetPixelData(
-                BitmapPixelFormat.Bgra8,
-                BitmapAlphaMode.Ignore,
-                width,
-                height,
-                96,
-                96,
-                pixels);
-            var flushOperation = encoder.FlushAsync();
-            try
-            {
-                await flushOperation;
-            }
-            finally
-            {
-                MediaLuminanceConverter.ReleaseNativeObject(flushOperation);
-            }
-        }
-        finally
-        {
-            MediaLuminanceConverter.ReleaseNativeObject(encoder);
-        }
+        encoder.SetPixelData(
+            BitmapPixelFormat.Bgra8,
+            BitmapAlphaMode.Ignore,
+            width,
+            height,
+            96,
+            96,
+            pixels);
+        await encoder.FlushAsync();
 
         return file.Path;
     }
@@ -684,77 +692,43 @@ public sealed class WindowsMediaProviderTests : IDisposable
         StorageFolder folder = await StorageFolder.GetFolderFromPathAsync(_root);
         StorageFile file = await folder.CreateFileAsync(name, CreationCollisionOption.ReplaceExisting);
         using var stream = await file.OpenAsync(FileAccessMode.ReadWrite);
-        BitmapEncoder? encoder = null;
-        var createOperation = BitmapEncoder.CreateAsync(BitmapEncoder.JpegEncoderId, stream);
-        try
+        BitmapEncoder encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.JpegEncoderId, stream);
+        byte[] pixels = new byte[checked((int)(width * height * 4))];
+        for (int y = 0; y < height; y++)
         {
-            encoder = await createOperation;
-        }
-        finally
-        {
-            MediaLuminanceConverter.ReleaseNativeObject(createOperation);
-        }
-
-        try
-        {
-            byte[] pixels = new byte[checked((int)(width * height * 4))];
-            for (int y = 0; y < height; y++)
+            for (int x = 0; x < width; x++)
             {
-                for (int x = 0; x < width; x++)
+                int offset = ((y * (int)width) + x) * 4;
+                bool right = x >= width / 2;
+                bool bottom = y >= height / 2;
+                (byte blue, byte green, byte red) = (right, bottom) switch
                 {
-                    int offset = ((y * (int)width) + x) * 4;
-                    bool right = x >= width / 2;
-                    bool bottom = y >= height / 2;
-                    (byte blue, byte green, byte red) = (right, bottom) switch
-                    {
-                        (false, false) => ((byte)0, (byte)0, (byte)255),
-                        (true, false) => ((byte)0, (byte)255, (byte)0),
-                        (false, true) => ((byte)255, (byte)0, (byte)0),
-                        _ => ((byte)255, (byte)255, (byte)255),
-                    };
-                    pixels[offset] = blue;
-                    pixels[offset + 1] = green;
-                    pixels[offset + 2] = red;
-                    pixels[offset + 3] = 255;
-                }
-            }
-
-            encoder.SetPixelData(
-                BitmapPixelFormat.Bgra8,
-                BitmapAlphaMode.Ignore,
-                width,
-                height,
-                96,
-                96,
-                pixels);
-            var metadata = new BitmapPropertySet
-            {
-                ["/app1/ifd/{ushort=274}"] = new BitmapTypedValue(orientation, PropertyType.UInt16),
-            };
-            var metadataOperation = encoder.BitmapProperties.SetPropertiesAsync(metadata);
-            try
-            {
-                await metadataOperation;
-            }
-            finally
-            {
-                MediaLuminanceConverter.ReleaseNativeObject(metadataOperation);
-            }
-
-            var flushOperation = encoder.FlushAsync();
-            try
-            {
-                await flushOperation;
-            }
-            finally
-            {
-                MediaLuminanceConverter.ReleaseNativeObject(flushOperation);
+                    (false, false) => ((byte)0, (byte)0, (byte)255),
+                    (true, false) => ((byte)0, (byte)255, (byte)0),
+                    (false, true) => ((byte)255, (byte)0, (byte)0),
+                    _ => ((byte)255, (byte)255, (byte)255),
+                };
+                pixels[offset] = blue;
+                pixels[offset + 1] = green;
+                pixels[offset + 2] = red;
+                pixels[offset + 3] = 255;
             }
         }
-        finally
+
+        encoder.SetPixelData(
+            BitmapPixelFormat.Bgra8,
+            BitmapAlphaMode.Ignore,
+            width,
+            height,
+            96,
+            96,
+            pixels);
+        var metadata = new BitmapPropertySet
         {
-            MediaLuminanceConverter.ReleaseNativeObject(encoder);
-        }
+            ["/app1/ifd/{ushort=274}"] = new BitmapTypedValue(orientation, PropertyType.UInt16),
+        };
+        await encoder.BitmapProperties.SetPropertiesAsync(metadata);
+        await encoder.FlushAsync();
 
         return file.Path;
     }
@@ -763,48 +737,23 @@ public sealed class WindowsMediaProviderTests : IDisposable
     {
         StorageFile file = await folder.CreateFileAsync("asymmetric.png", CreationCollisionOption.ReplaceExisting);
         using var stream = await file.OpenAsync(FileAccessMode.ReadWrite);
-        BitmapEncoder? encoder = null;
-        var createOperation = BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, stream);
-        try
+        BitmapEncoder encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, stream);
+        byte[] pixels = new byte[64 * 32 * 4];
+        for (int y = 0; y < 32; y++)
         {
-            encoder = await createOperation;
-        }
-        finally
-        {
-            MediaLuminanceConverter.ReleaseNativeObject(createOperation);
+            for (int x = 0; x < 64; x++)
+            {
+                int offset = ((y * 64) + x) * 4;
+                byte value = x < 32 ? (byte)0 : (byte)255;
+                pixels[offset] = value;
+                pixels[offset + 1] = value;
+                pixels[offset + 2] = value;
+                pixels[offset + 3] = 255;
+            }
         }
 
-        try
-        {
-            byte[] pixels = new byte[64 * 32 * 4];
-            for (int y = 0; y < 32; y++)
-            {
-                for (int x = 0; x < 64; x++)
-                {
-                    int offset = ((y * 64) + x) * 4;
-                    byte value = x < 32 ? (byte)0 : (byte)255;
-                    pixels[offset] = value;
-                    pixels[offset + 1] = value;
-                    pixels[offset + 2] = value;
-                    pixels[offset + 3] = 255;
-                }
-            }
-
-            encoder.SetPixelData(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Ignore, 64, 32, 96, 96, pixels);
-            var flushOperation = encoder.FlushAsync();
-            try
-            {
-                await flushOperation;
-            }
-            finally
-            {
-                MediaLuminanceConverter.ReleaseNativeObject(flushOperation);
-            }
-        }
-        finally
-        {
-            MediaLuminanceConverter.ReleaseNativeObject(encoder);
-        }
+        encoder.SetPixelData(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Ignore, 64, 32, 96, 96, pixels);
+        await encoder.FlushAsync();
 
         return file;
     }
@@ -821,24 +770,17 @@ public sealed class WindowsMediaProviderTests : IDisposable
         StorageFile file = await folder.CreateFileAsync(name, CreationCollisionOption.ReplaceExisting);
         using var stream = await file.OpenAsync(FileAccessMode.ReadWrite);
         BitmapEncoder encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, stream);
-        try
+        byte[] pixels = new byte[checked((int)(width * height * 4))];
+        for (int offset = 0; offset < pixels.Length; offset += 4)
         {
-            byte[] pixels = new byte[checked((int)(width * height * 4))];
-            for (int offset = 0; offset < pixels.Length; offset += 4)
-            {
-                pixels[offset] = blue;
-                pixels[offset + 1] = green;
-                pixels[offset + 2] = red;
-                pixels[offset + 3] = 255;
-            }
+            pixels[offset] = blue;
+            pixels[offset + 1] = green;
+            pixels[offset + 2] = red;
+            pixels[offset + 3] = 255;
+        }
 
-            encoder.SetPixelData(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Ignore, width, height, 96, 96, pixels);
-            await encoder.FlushAsync();
-        }
-        finally
-        {
-            MediaLuminanceConverter.ReleaseNativeObject(encoder);
-        }
+        encoder.SetPixelData(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Ignore, width, height, 96, 96, pixels);
+        await encoder.FlushAsync();
 
         return file;
     }
@@ -854,33 +796,26 @@ public sealed class WindowsMediaProviderTests : IDisposable
         StorageFile file = await folder.CreateFileAsync(name, CreationCollisionOption.ReplaceExisting);
         using var stream = await file.OpenAsync(FileAccessMode.ReadWrite);
         BitmapEncoder encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, stream);
-        try
+        byte[] pixels = new byte[checked((int)(width * height * 4))];
+        for (int y = 0; y < height; y++)
         {
-            byte[] pixels = new byte[checked((int)(width * height * 4))];
-            for (int y = 0; y < height; y++)
+            for (int x = 0; x < width; x++)
             {
-                for (int x = 0; x < width; x++)
-                {
-                    int first = transpose ? y : x;
-                    int second = transpose ? x : y;
-                    bool bright = ((first + (seed * 37)) % 160 < 64) ^
-                        (second > (seed + 1) * 24);
-                    byte value = bright ? (byte)255 : (byte)0;
-                    int offset = ((y * (int)width) + x) * 4;
-                    pixels[offset] = value;
-                    pixels[offset + 1] = value;
-                    pixels[offset + 2] = value;
-                    pixels[offset + 3] = 255;
-                }
+                int first = transpose ? y : x;
+                int second = transpose ? x : y;
+                bool bright = ((first + (seed * 37)) % 160 < 64) ^
+                    (second > (seed + 1) * 24);
+                byte value = bright ? (byte)255 : (byte)0;
+                int offset = ((y * (int)width) + x) * 4;
+                pixels[offset] = value;
+                pixels[offset + 1] = value;
+                pixels[offset + 2] = value;
+                pixels[offset + 3] = 255;
             }
+        }
 
-            encoder.SetPixelData(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Ignore, width, height, 96, 96, pixels);
-            await encoder.FlushAsync();
-        }
-        finally
-        {
-            MediaLuminanceConverter.ReleaseNativeObject(encoder);
-        }
+        encoder.SetPixelData(BitmapPixelFormat.Bgra8, BitmapAlphaMode.Ignore, width, height, 96, 96, pixels);
+        await encoder.FlushAsync();
 
         return file;
     }
@@ -896,14 +831,12 @@ public sealed class WindowsMediaProviderTests : IDisposable
         StorageFile output = await folder.CreateFileAsync(name, CreationCollisionOption.ReplaceExisting);
         var composition = new MediaComposition();
         IList<MediaClip> clips = composition.Clips;
-        var ownedClips = new List<MediaClip>(images.Count);
         MediaEncodingProfile? profile = null;
         try
         {
             foreach (StorageFile image in images)
             {
                 MediaClip clip = await MediaClip.CreateFromImageFileAsync(image, TimeSpan.FromSeconds(1));
-                ownedClips.Add(clip);
                 clips.Add(clip);
             }
 
@@ -921,14 +854,6 @@ public sealed class WindowsMediaProviderTests : IDisposable
         finally
         {
             clips.Clear();
-            foreach (MediaClip clip in ownedClips)
-            {
-                MediaLuminanceConverter.ReleaseNativeObject(clip);
-            }
-
-            MediaLuminanceConverter.ReleaseNativeObject(profile);
-            MediaLuminanceConverter.ReleaseNativeObject(clips);
-            MediaLuminanceConverter.ReleaseNativeObject(composition);
         }
     }
 
@@ -941,29 +866,17 @@ public sealed class WindowsMediaProviderTests : IDisposable
         uint bitrate)
     {
         StorageFile output = await folder.CreateFileAsync(name, CreationCollisionOption.ReplaceExisting);
-        MediaEncodingProfile? profile = null;
-        MediaTranscoder? transcoder = null;
-        PrepareTranscodeResult? preparation = null;
-        try
-        {
-            profile = MediaEncodingProfile.CreateMp4(VideoEncodingQuality.HD720p);
-            profile.Video.Width = width;
-            profile.Video.Height = height;
-            profile.Video.Bitrate = bitrate;
-            transcoder = new MediaTranscoder { AlwaysReencode = true };
-            preparation = await transcoder.PrepareFileTranscodeAsync(source, output, profile);
-            Assert.True(
-                preparation.CanTranscode,
-                $"Video transcode preparation failed: {preparation.FailureReason}.");
-            await preparation.TranscodeAsync();
-            return output;
-        }
-        finally
-        {
-            MediaLuminanceConverter.ReleaseNativeObject(preparation);
-            MediaLuminanceConverter.ReleaseNativeObject(transcoder);
-            MediaLuminanceConverter.ReleaseNativeObject(profile);
-        }
+        MediaEncodingProfile profile = MediaEncodingProfile.CreateMp4(VideoEncodingQuality.HD720p);
+        profile.Video.Width = width;
+        profile.Video.Height = height;
+        profile.Video.Bitrate = bitrate;
+        var transcoder = new MediaTranscoder { AlwaysReencode = true };
+        PrepareTranscodeResult preparation = await transcoder.PrepareFileTranscodeAsync(source, output, profile);
+        Assert.True(
+            preparation.CanTranscode,
+            $"Video transcode preparation failed: {preparation.FailureReason}.");
+        await preparation.TranscodeAsync();
+        return output;
     }
 
     private static double Average(byte[] frame, int x, int y, int width, int height)

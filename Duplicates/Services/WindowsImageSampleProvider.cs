@@ -60,40 +60,28 @@ public sealed class WindowsImageSampleProvider : IImageSampleProvider
             bufferSize: 4096,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
         using IRandomAccessStream stream = source.AsRandomAccessStream();
-        BitmapDecoder? decoder = null;
-        BitmapFrame? frame = null;
-        BitmapCodecInformation? decoderInformation = null;
-        try
-        {
-            decoder = await WinRtAsync.AwaitAndCloseAsync(
-                    BitmapDecoder.CreateAsync(stream),
-                    cancellationToken)
-                .ConfigureAwait(false);
-            frame = await WinRtAsync.AwaitAndCloseAsync(
-                    decoder.GetFrameAsync(0),
-                    cancellationToken)
-                .ConfigureAwait(false);
+        BitmapDecoder decoder = await WinRtAsync.AwaitAndCloseAsync(
+                BitmapDecoder.CreateAsync(stream),
+                cancellationToken)
+            .ConfigureAwait(false);
+        BitmapFrame frame = await WinRtAsync.AwaitAndCloseAsync(
+                decoder.GetFrameAsync(0),
+                cancellationToken)
+            .ConfigureAwait(false);
 
-            cancellationToken.ThrowIfCancellationRequested();
-            int width = checked((int)frame.OrientedPixelWidth);
-            int height = checked((int)frame.OrientedPixelHeight);
-            if (width <= 0 || height <= 0)
-            {
-                throw new InvalidDataException("The image dimensions are invalid.");
-            }
-
-            byte[] luminance = await MediaLuminanceConverter.Decode32x32Async(frame, cancellationToken)
-                .ConfigureAwait(false);
-            cancellationToken.ThrowIfCancellationRequested();
-            decoderInformation = decoder.DecoderInformation;
-            return new ImageSample(width, height, luminance, GetFormat(decoderInformation.CodecId));
-        }
-        finally
+        cancellationToken.ThrowIfCancellationRequested();
+        int width = checked((int)frame.OrientedPixelWidth);
+        int height = checked((int)frame.OrientedPixelHeight);
+        if (width <= 0 || height <= 0)
         {
-            MediaLuminanceConverter.ReleaseNativeObject(decoderInformation);
-            MediaLuminanceConverter.ReleaseNativeObject(frame);
-            MediaLuminanceConverter.ReleaseNativeObject(decoder);
+            throw new InvalidDataException("The image dimensions are invalid.");
         }
+
+        byte[] luminance = await MediaLuminanceConverter.Decode32x32Async(frame, cancellationToken)
+            .ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        BitmapCodecInformation decoderInformation = decoder.DecoderInformation;
+        return new ImageSample(width, height, luminance, GetFormat(decoderInformation.CodecId));
     }
 
     private static string GetFormat(Guid codecId)
@@ -159,33 +147,24 @@ internal static class MediaLuminanceConverter
             ScaledHeight = 32,
             InterpolationMode = BitmapInterpolationMode.Fant,
         };
-        PixelDataProvider? pixelData = null;
-        try
+        PixelDataProvider pixelData = await WinRtAsync.AwaitAndCloseAsync(
+                frame.GetPixelDataAsync(
+                    BitmapPixelFormat.Bgra8,
+                    BitmapAlphaMode.Straight,
+                    transform,
+                    ExifOrientationMode.RespectExifOrientation,
+                    ColorManagementMode.ColorManageToSRgb),
+                cancellationToken)
+            .ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        byte[] bgra = pixelData.DetachPixelData();
+        cancellationToken.ThrowIfCancellationRequested();
+        if (bgra.Length != 4096)
         {
-            pixelData = await WinRtAsync.AwaitAndCloseAsync(
-                    frame.GetPixelDataAsync(
-                        BitmapPixelFormat.Bgra8,
-                        BitmapAlphaMode.Straight,
-                        transform,
-                        ExifOrientationMode.RespectExifOrientation,
-                        ColorManagementMode.ColorManageToSRgb),
-                    cancellationToken)
-                .ConfigureAwait(false);
-            cancellationToken.ThrowIfCancellationRequested();
-            byte[] bgra = pixelData.DetachPixelData();
-            cancellationToken.ThrowIfCancellationRequested();
-            if (bgra.Length != 4096)
-            {
-                throw new InvalidDataException("The decoded image buffer is not a tightly packed 32 x 32 BGRA image.");
-            }
+            throw new InvalidDataException("The decoded image buffer is not a tightly packed 32 x 32 BGRA image.");
+        }
 
-            return ConvertBgraToLuminance(bgra);
-        }
-        finally
-        {
-            ReleaseNativeObject(pixelData);
-            ReleaseNativeObject(transform);
-        }
+        return ConvertBgraToLuminance(bgra);
     }
 
     public static byte[] ConvertBgraToLuminance(ReadOnlySpan<byte> bgra)
@@ -212,13 +191,6 @@ internal static class MediaLuminanceConverter
     private static int CompositeOnWhite(int channel, int alpha) =>
         (channel * alpha + 255 * (255 - alpha) + 127) / 255;
 
-    internal static void ReleaseNativeObject(object? value)
-    {
-        if (value is not null && WinRT.ComWrappersSupport.TryUnwrapObject(value, out WinRT.IObjectReference? nativeObject))
-        {
-            nativeObject.Dispose();
-        }
-    }
 }
 
 internal static class WinRtAsync
@@ -257,14 +229,7 @@ internal static class WinRtAsync
         }
         finally
         {
-            try
-            {
-                operation.Close();
-            }
-            finally
-            {
-                MediaLuminanceConverter.ReleaseNativeObject(operation);
-            }
+            operation.Close();
         }
     }
 }

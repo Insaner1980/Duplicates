@@ -10,47 +10,33 @@ public sealed class WindowsMusicMetadataProvider : IMusicMetadataProvider
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         cancellationToken.ThrowIfCancellationRequested();
-        StorageFile? file = null;
-        StorageItemContentProperties? contentProperties = null;
-        MusicProperties? properties = null;
-        IList<string>? genres = null;
-        try
+        StorageFile file = await WinRtAsync.AwaitAndCloseAsync(
+                StorageFile.GetFileFromPathAsync(path),
+                cancellationToken)
+            .ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        StorageItemContentProperties contentProperties = file.Properties;
+        cancellationToken.ThrowIfCancellationRequested();
+        MusicProperties properties = await WinRtAsync.AwaitAndCloseAsync(
+                contentProperties.GetMusicPropertiesAsync(),
+                cancellationToken)
+            .ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (properties.Duration <= TimeSpan.Zero)
         {
-            file = await WinRtAsync.AwaitAndCloseAsync(
-                    StorageFile.GetFileFromPathAsync(path),
-                    cancellationToken)
-                .ConfigureAwait(false);
-            cancellationToken.ThrowIfCancellationRequested();
-            contentProperties = file.Properties;
-            cancellationToken.ThrowIfCancellationRequested();
-            properties = await WinRtAsync.AwaitAndCloseAsync(
-                    contentProperties.GetMusicPropertiesAsync(),
-                    cancellationToken)
-                .ConfigureAwait(false);
-            cancellationToken.ThrowIfCancellationRequested();
-            if (properties.Duration <= TimeSpan.Zero)
-            {
-                throw new InvalidDataException("The music duration is invalid.");
-            }
+            throw new InvalidDataException("The music duration is invalid.");
+        }
 
-            genres = properties.Genre;
-            return new MusicMetadata(
-                properties.Title,
-                properties.Artist,
-                properties.AlbumArtist,
-                properties.Album,
-                properties.TrackNumber,
-                properties.Year,
-                genres.ToArray(),
-                properties.Bitrate,
-                properties.Duration);
-        }
-        finally
-        {
-            MediaLuminanceConverter.ReleaseNativeObject(genres);
-            MediaLuminanceConverter.ReleaseNativeObject(properties);
-            MediaLuminanceConverter.ReleaseNativeObject(contentProperties);
-            MediaLuminanceConverter.ReleaseNativeObject(file);
-        }
+        IList<string> genres = properties.Genre;
+        return new MusicMetadata(
+            properties.Title,
+            properties.Artist,
+            properties.AlbumArtist,
+            properties.Album,
+            properties.TrackNumber,
+            properties.Year,
+            genres.ToArray(),
+            properties.Bitrate,
+            properties.Duration);
     }
 }
