@@ -14,11 +14,19 @@ public sealed class MusicDuplicateAnalyzer
 {
     private static readonly FileTypeFilter AudioFilter = FileTypeFilter.ForCategories([FileTypeCategory.Audio]);
     private readonly IMusicMetadataProvider _provider;
+    private readonly int _maximumConcurrency;
 
     public MusicDuplicateAnalyzer(IMusicMetadataProvider provider)
+        : this(provider, 1)
+    {
+    }
+
+    public MusicDuplicateAnalyzer(IMusicMetadataProvider provider, int maximumConcurrency)
     {
         ArgumentNullException.ThrowIfNull(provider);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumConcurrency);
         _provider = provider;
+        _maximumConcurrency = maximumConcurrency;
     }
 
     public async Task<AnalysisResult> AnalyzeAsync(
@@ -31,81 +39,102 @@ public sealed class MusicDuplicateAnalyzer
         cancellationToken.ThrowIfCancellationRequested();
 
         var stopwatch = Stopwatch.StartNew();
-        var candidates = new List<Candidate>();
-        var analyzerSkips = new List<SkippedPath>();
-        IEnumerable<InventoryFile> files = inventory.Files
+        InventoryFile[] files = inventory.Files
             .Where(static file =>
                 !file.Attributes.HasFlag(FileAttributes.Directory) &&
                 !file.Attributes.HasFlag(FileAttributes.ReparsePoint) &&
                 AudioFilter.Matches(file.Extension))
             .OrderBy(static file => file.FullPath, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(static file => file.FullPath, StringComparer.Ordinal);
+            .ThenBy(static file => file.FullPath, StringComparer.Ordinal)
+            .ToArray();
+        var outcomes = new FileAnalysisOutcome[files.Length];
+        await Parallel.ForEachAsync(
+            Enumerable.Range(0, files.Length),
+            new ParallelOptions
+            {
+                CancellationToken = cancellationToken,
+                MaxDegreeOfParallelism = _maximumConcurrency,
+                TaskScheduler = TaskScheduler.Default,
+            },
+            async (index, token) =>
+            {
+                outcomes[index] = await AnalyzeFileAsync(files[index], token).ConfigureAwait(false);
+            }).ConfigureAwait(false);
+        Candidate[] candidates = outcomes
+            .Where(static outcome => outcome.Candidate is not null)
+            .Select(static outcome => outcome.Candidate!)
+            .ToArray();
+        SkippedPath[] analyzerSkips = outcomes
+            .Where(static outcome => outcome.Skip is not null)
+            .Select(static outcome => outcome.Skip!)
+            .ToArray();
 
-        foreach (InventoryFile file in files)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!TryReadSnapshot(file.FullPath, out FileSnapshot before) || !MatchesInventory(before, file))
-            {
-                analyzerSkips.Add(ChangedSkip(file.FullPath));
-                continue;
-            }
-
-            MusicMetadata? metadata = null;
-            Exception? providerFailure = null;
-            try
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                metadata = await _provider.GetMetadataAsync(file.FullPath, cancellationToken).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (IsExpectedProviderFailure(ex))
-            {
-                providerFailure = ex;
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!TryReadSnapshot(file.FullPath, out FileSnapshot after) ||
-                after != before ||
-                !MatchesInventory(after, file))
-            {
-                analyzerSkips.Add(ChangedSkip(file.FullPath));
-                continue;
-            }
-
-            if (providerFailure is not null)
-            {
-                analyzerSkips.Add(UnreadableSkip(file.FullPath));
-                continue;
-            }
-
-            try
-            {
-                candidates.Add(new Candidate(
-                    file.FullPath,
-                    file.SizeBytes,
-                    file.ModifiedUtc,
-                    BuildEvidence(metadata)));
-            }
-            catch (MissingRequiredMusicMetadataException)
-            {
-                analyzerSkips.Add(MissingMetadataSkip(file.FullPath));
-            }
-            catch (Exception ex) when (IsExpectedProviderFailure(ex))
-            {
-                analyzerSkips.Add(UnreadableSkip(file.FullPath));
-            }
-        }
-
-        IReadOnlyList<SimilarityGroup> groups = BuildGroups(candidates, options);
+        IReadOnlyList<SimilarityGroup> groups = BuildGroups(candidates, options, cancellationToken);
         stopwatch.Stop();
         return new AnalysisResult
         {
             Findings = [],
             Groups = groups,
-            SkippedPaths = analyzerSkips.Count == 0
+            SkippedPaths = analyzerSkips.Length == 0
                 ? inventory.SkippedPaths
                 : [.. inventory.SkippedPaths, .. analyzerSkips],
             Elapsed = stopwatch.Elapsed,
         };
+    }
+
+    private async ValueTask<FileAnalysisOutcome> AnalyzeFileAsync(
+        InventoryFile file,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!TryReadSnapshot(file.FullPath, out FileSnapshot before) || !MatchesInventory(before, file))
+        {
+            return new(null, ChangedSkip(file.FullPath));
+        }
+
+        MusicMetadata? metadata = null;
+        Exception? providerFailure = null;
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            metadata = await _provider.GetMetadataAsync(file.FullPath, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (IsExpectedProviderFailure(ex))
+        {
+            providerFailure = ex;
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!TryReadSnapshot(file.FullPath, out FileSnapshot after) ||
+            after != before ||
+            !MatchesInventory(after, file))
+        {
+            return new(null, ChangedSkip(file.FullPath));
+        }
+
+        if (providerFailure is not null)
+        {
+            return new(null, UnreadableSkip(file.FullPath));
+        }
+
+        try
+        {
+            return new(
+                new Candidate(
+                    file.FullPath,
+                    file.SizeBytes,
+                    file.ModifiedUtc,
+                    BuildEvidence(metadata)),
+                null);
+        }
+        catch (MissingRequiredMusicMetadataException)
+        {
+            return new(null, MissingMetadataSkip(file.FullPath));
+        }
+        catch (Exception ex) when (IsExpectedProviderFailure(ex))
+        {
+            return new(null, UnreadableSkip(file.FullPath));
+        }
     }
 
     public async Task<bool> RevalidateAsync(
@@ -143,18 +172,21 @@ public sealed class MusicDuplicateAnalyzer
             candidates.Add(new Candidate(item.FullPath, item.SizeBytes, item.ModifiedUtc, evidence));
         }
 
-        return BuildGroups(candidates, options);
+        return BuildGroups(candidates, options, CancellationToken.None);
     }
 
     private static IReadOnlyList<SimilarityGroup> BuildGroups(
         IReadOnlyList<Candidate> source,
-        MusicDuplicateOptions options)
+        MusicDuplicateOptions options,
+        CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var clusters = new List<Candidate[]>();
         foreach (IGrouping<MusicKey, Candidate> bucket in source.GroupBy(static candidate => new MusicKey(
                      candidate.Evidence.NormalizedTitle,
                      candidate.Evidence.NormalizedArtist)))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             Candidate[] ordered = bucket
                 .OrderBy(static candidate => candidate.Evidence.Duration.Ticks)
                 .ThenBy(static candidate => candidate.FullPath, StringComparer.OrdinalIgnoreCase)
@@ -163,6 +195,7 @@ public sealed class MusicDuplicateAnalyzer
             var cluster = new List<Candidate>();
             foreach (Candidate candidate in ordered)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (cluster.Count > 0 &&
                     candidate.Evidence.Duration - cluster[0].Evidence.Duration > options.MaximumDurationDifference)
                 {
@@ -176,14 +209,17 @@ public sealed class MusicDuplicateAnalyzer
             AddCluster(clusters, cluster);
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         var orderedClusters = clusters
             .Select(static cluster => (Cluster: cluster, Reference: ChooseReference(cluster)))
             .OrderBy(static group => group.Reference.FullPath, StringComparer.OrdinalIgnoreCase)
             .ThenBy(static group => group.Reference.FullPath, StringComparer.Ordinal)
             .ToArray();
+        cancellationToken.ThrowIfCancellationRequested();
         var groups = new List<SimilarityGroup>(orderedClusters.Length);
         for (int groupIndex = 0; groupIndex < orderedClusters.Length; groupIndex++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             (Candidate[] cluster, Candidate reference) = orderedClusters[groupIndex];
             SimilarityItem[] items = cluster
                 .Select(candidate => (Candidate: candidate, Difference: DurationDifference(
@@ -211,6 +247,7 @@ public sealed class MusicDuplicateAnalyzer
             });
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         return groups;
     }
 
@@ -424,6 +461,8 @@ public sealed class MusicDuplicateAnalyzer
         long SizeBytes,
         DateTime ModifiedUtc,
         MusicSimilarityEvidence Evidence);
+
+    private readonly record struct FileAnalysisOutcome(Candidate? Candidate, SkippedPath? Skip);
 
     private readonly record struct MusicKey(string NormalizedTitle, string NormalizedArtist);
 

@@ -11,6 +11,81 @@ namespace Duplicates.App.Tests;
 public sealed class AnalysisViewModelTests
 {
     [Fact]
+    public void ConstructorAcceptsSettingsForRunSnapshotsAndIdleDefaults()
+    {
+        System.Reflection.ConstructorInfo? constructor = typeof(AnalysisViewModel).GetConstructor(
+            [
+                typeof(IAnalysisService),
+                typeof(AnalysisSessionStore),
+                typeof(PathScopeViewModel),
+                typeof(IAppOperationCoordinator),
+                typeof(ISettingsService),
+            ]);
+
+        Assert.NotNull(constructor);
+    }
+
+    [Fact]
+    public async Task ActiveMediaRunKeepsItsSettingsSnapshotAndAppliesNewestDefaultsAfterTerminalIdle()
+    {
+        var release = new TaskCompletionSource<AnalysisResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var service = new FakeAnalysisService
+        {
+            Run = (_, _, _, _, _) =>
+            {
+                started.SetResult();
+                return release.Task;
+            },
+        };
+        var settings = new FakeSettingsService();
+        settings.SetCurrent(new AppSettings
+        {
+            MaxMediaConcurrency = 4,
+            UseMediaFingerprintCache = true,
+            DefaultImageSimilarity = SimilarityPreset.Balanced,
+        });
+        var coordinator = new AppOperationCoordinator();
+        var scope = NewScope();
+        var viewModel = new AnalysisViewModel(
+            service,
+            new AnalysisSessionStore(),
+            scope,
+            coordinator,
+            settings);
+        viewModel.SelectTool(ToolKind.SimilarImages);
+
+        Task run = viewModel.StartAnalysisCommand.ExecuteAsync(null);
+        await started.Task;
+
+        Assert.Equal(new AnalysisRunOptions(4, true), service.LastRunOptions);
+        Assert.Equal(
+            new AppOperationDescriptor(AppOperationKind.AnalysisRun, UsesMediaFingerprintCache: true),
+            coordinator.ActiveOperation);
+        settings.SetCurrent(new AppSettings
+        {
+            MaxMediaConcurrency = 1,
+            UseMediaFingerprintCache = false,
+            DefaultImageSimilarity = SimilarityPreset.Broad,
+            DefaultIncludeSubfolders = !scope.IncludeSubfolders,
+            IgnoreHiddenFiles = !scope.IgnoreHiddenFiles,
+            IgnoreSystemFiles = !scope.IgnoreSystemFiles,
+        });
+        Assert.Equal(SimilarityPreset.Balanced, viewModel.ImageSimilarityPreset);
+        bool includeSubfolders = scope.IncludeSubfolders;
+        bool ignoreHidden = scope.IgnoreHiddenFiles;
+        bool ignoreSystem = scope.IgnoreSystemFiles;
+
+        release.SetResult(NewResult());
+        await run;
+
+        Assert.Equal(SimilarityPreset.Broad, viewModel.ImageSimilarityPreset);
+        Assert.Equal(includeSubfolders, scope.IncludeSubfolders);
+        Assert.Equal(ignoreHidden, scope.IgnoreHiddenFiles);
+        Assert.Equal(ignoreSystem, scope.IgnoreSystemFiles);
+    }
+
+    [Fact]
     public async Task SuccessfulRunMovesFromSetupThroughProgressToStoredResults()
     {
         var service = new FakeAnalysisService
@@ -650,6 +725,8 @@ public sealed class AnalysisViewModelTests
 
         public int CallCount { get; private set; }
 
+        public AnalysisRunOptions? LastRunOptions { get; private set; }
+
         public Task<AnalysisResult> RunAsync(
             ToolKind tool,
             AnalysisScope scope,
@@ -657,6 +734,19 @@ public sealed class AnalysisViewModelTests
             IProgress<AnalysisProgress>? progress,
             CancellationToken cancellationToken)
         {
+            CallCount++;
+            return Run(tool, scope, toolOptions, progress, cancellationToken);
+        }
+
+        public Task<AnalysisResult> RunAsync(
+            ToolKind tool,
+            AnalysisScope scope,
+            ToolOptions toolOptions,
+            AnalysisRunOptions runOptions,
+            IProgress<AnalysisProgress>? progress,
+            CancellationToken cancellationToken)
+        {
+            LastRunOptions = runOptions;
             CallCount++;
             return Run(tool, scope, toolOptions, progress, cancellationToken);
         }

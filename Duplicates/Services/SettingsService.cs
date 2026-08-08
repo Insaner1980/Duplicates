@@ -11,13 +11,31 @@ public sealed class SettingsService : ISettingsService
     };
 
     private readonly string _settingsPath;
+    private readonly Func<long, string, CancellationToken, Task>? _beforeCommit;
+    private readonly SemaphoreSlim _writeGate = new(1, 1);
+    private readonly object _revisionGate = new();
+    private long _latestRegisteredRevision;
 
     public SettingsService()
-    {
-        _settingsPath = Path.Combine(
+        : this(Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "Duplicates",
-            "settings.json");
+            "settings.json"))
+    {
+    }
+
+    internal SettingsService(string settingsPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(settingsPath);
+        _settingsPath = Path.GetFullPath(settingsPath);
+    }
+
+    internal SettingsService(
+        string settingsPath,
+        Func<long, string, CancellationToken, Task> beforeCommit)
+        : this(settingsPath)
+    {
+        _beforeCommit = beforeCommit ?? throw new ArgumentNullException(nameof(beforeCommit));
     }
 
     public AppSettings Current { get; private set; } = new();
@@ -31,21 +49,134 @@ public sealed class SettingsService : ISettingsService
             return;
         }
 
-        await using FileStream stream = File.OpenRead(_settingsPath);
-        AppSettings? settings = await JsonSerializer.DeserializeAsync<AppSettings>(stream, SerializerOptions);
-        if (settings is not null)
+        try
         {
-            Current = settings;
+            await using FileStream stream = File.OpenRead(_settingsPath);
+            AppSettings? settings = await JsonSerializer.DeserializeAsync<AppSettings>(stream, SerializerOptions);
+            Current = Normalize(settings ?? new AppSettings());
             SettingsChanged?.Invoke(this, Current);
+        }
+        catch (Exception ex) when (IsSettingsFailure(ex))
+        {
+            Current = Normalize(new AppSettings());
         }
     }
 
-    public async Task SaveAsync(AppSettings settings)
+    public Task SaveAsync(
+        AppSettings settings,
+        CancellationToken cancellationToken = default)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(_settingsPath)!);
-        await using FileStream stream = File.Create(_settingsPath);
-        await JsonSerializer.SerializeAsync(stream, settings, SerializerOptions);
-        Current = settings;
-        SettingsChanged?.Invoke(this, Current);
+        ArgumentNullException.ThrowIfNull(settings);
+        AppSettings snapshot = Normalize(settings);
+        long revision;
+        lock (_revisionGate)
+        {
+            revision = ++_latestRegisteredRevision;
+        }
+
+        return SaveRevisionAsync(snapshot, revision, cancellationToken);
+    }
+
+    private async Task SaveRevisionAsync(
+        AppSettings snapshot,
+        long revision,
+        CancellationToken cancellationToken)
+    {
+        string? temporaryPath = null;
+        await _writeGate.WaitAsync(cancellationToken);
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            string directory = Path.GetDirectoryName(_settingsPath)!;
+            Directory.CreateDirectory(directory);
+            temporaryPath = Path.Combine(
+                directory,
+                string.Concat(Path.GetFileName(_settingsPath), ".", Environment.ProcessId, ".", Guid.NewGuid().ToString("N"), ".tmp"));
+            await using (FileStream stream = new(
+                temporaryPath,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                bufferSize: 4096,
+                FileOptions.Asynchronous))
+            {
+                await JsonSerializer.SerializeAsync(
+                    stream,
+                    snapshot,
+                    SerializerOptions,
+                    cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                stream.Flush(flushToDisk: true);
+            }
+
+            if (_beforeCommit is not null)
+            {
+                await _beforeCommit(revision, temporaryPath, cancellationToken);
+            }
+
+            bool committed = false;
+            lock (_revisionGate)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (revision == _latestRegisteredRevision)
+                {
+                    File.Move(temporaryPath, _settingsPath, overwrite: true);
+                    temporaryPath = null;
+                    Current = snapshot;
+                    committed = true;
+                }
+            }
+
+            if (committed)
+            {
+                SettingsChanged?.Invoke(this, snapshot);
+            }
+        }
+        finally
+        {
+            if (temporaryPath is not null)
+            {
+                TryDelete(temporaryPath);
+            }
+
+            _writeGate.Release();
+        }
+    }
+
+    private static AppSettings Normalize(AppSettings settings) => settings with
+    {
+        ThemeMode = Enum.IsDefined(settings.ThemeMode) ? settings.ThemeMode : AppThemeMode.System,
+        BackdropMode = Enum.IsDefined(settings.BackdropMode) ? settings.BackdropMode : BackdropMode.MicaAlt,
+        DefaultMinSizeBytes = Math.Max(0, settings.DefaultMinSizeBytes),
+        DefaultLargeFileMinimumBytes = Math.Max(0, settings.DefaultLargeFileMinimumBytes),
+        DefaultTemporaryFileMinimumAgeDays = Math.Clamp(settings.DefaultTemporaryFileMinimumAgeDays, 1, 365),
+        DefaultImageSimilarity = Enum.IsDefined(settings.DefaultImageSimilarity)
+            ? settings.DefaultImageSimilarity
+            : SimilarityPreset.Balanced,
+        DefaultVideoSimilarity = Enum.IsDefined(settings.DefaultVideoSimilarity)
+            ? settings.DefaultVideoSimilarity
+            : SimilarityPreset.Balanced,
+        MaxMediaConcurrency = settings.MaxMediaConcurrency is 1 or 2 or 4
+            ? settings.MaxMediaConcurrency
+            : null,
+        MaxHashingConcurrency = settings.MaxHashingConcurrency is 1 or 2 or 4 or 8
+            ? settings.MaxHashingConcurrency
+            : null,
+        DeletionMode = Enum.IsDefined(settings.DeletionMode) ? settings.DeletionMode : DeletionMode.RecycleBin,
+    };
+
+    private static bool IsSettingsFailure(Exception exception) =>
+        exception is IOException or UnauthorizedAccessException or System.Security.SecurityException or
+            JsonException or NotSupportedException;
+
+    private static void TryDelete(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception ex) when (IsSettingsFailure(ex))
+        {
+        }
     }
 }

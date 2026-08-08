@@ -3,7 +3,8 @@
     x:Class="Duplicates.Views.SettingsPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:toolkit="using:CommunityToolkit.WinUI.Controls">
+    xmlns:toolkit="using:CommunityToolkit.WinUI.Controls"
+    Loaded="SettingsPage_Loaded">
     <Grid Background="{ThemeResource BgBaseBrush}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -108,6 +109,13 @@
                                     IsOn="{Binding IgnoreSystemFiles, Mode=TwoWay}" />
                             </toolkit:SettingsCard>
                             <toolkit:SettingsCard
+                                Header="Include subfolders"
+                                Description="Include folders below each selected folder by default.">
+                                <ToggleSwitch
+                                    AutomationProperties.Name="Include subfolders by default"
+                                    IsOn="{Binding DefaultIncludeSubfolders, Mode=TwoWay}" />
+                            </toolkit:SettingsCard>
+                            <toolkit:SettingsCard
                                 Header="Hashing concurrency"
                                 Description="Control how many files can be hashed at the same time.">
                                 <ComboBox
@@ -115,11 +123,94 @@
                                     ItemsSource="{Binding ConcurrencyOptions}"
                                     SelectedIndex="{Binding SelectedConcurrencyIndex, Mode=TwoWay}" />
                             </toolkit:SettingsCard>
+                            <toolkit:SettingsCard
+                                Header="Big-file threshold"
+                                Description="Default minimum size in bytes for Big files.">
+                                <NumberBox
+                                    MinWidth="220"
+                                    AutomationProperties.Name="Default big-file minimum size in bytes"
+                                    Minimum="0"
+                                    SpinButtonPlacementMode="Compact"
+                                    ValidationMode="InvalidInputOverwritten"
+                                    Value="{Binding DefaultLargeFileMinimumValue, Mode=TwoWay}" />
+                            </toolkit:SettingsCard>
+                            <toolkit:SettingsCard
+                                Header="Temporary-file minimum age"
+                                Description="Default minimum age in days for Temporary files.">
+                                <NumberBox
+                                    MinWidth="220"
+                                    AutomationProperties.Name="Default temporary-file minimum age in days"
+                                    Maximum="365"
+                                    Minimum="1"
+                                    SpinButtonPlacementMode="Compact"
+                                    ValidationMode="InvalidInputOverwritten"
+                                    Value="{Binding DefaultTemporaryFileMinimumAgeDays, Mode=TwoWay}" />
+                            </toolkit:SettingsCard>
                         </toolkit:SettingsExpander.Items>
                     </toolkit:SettingsExpander>
 
                     <toolkit:SettingsExpander
-                        Header="Deletion"
+                        Header="Similarity and media"
+                        Description="Matching sensitivity, media work, and the fingerprint cache."
+                        IsExpanded="False">
+                        <toolkit:SettingsExpander.Items>
+                            <toolkit:SettingsCard
+                                Header="Image similarity"
+                                Description="Choose the default image-matching sensitivity.">
+                                <ComboBox
+                                    MinWidth="180"
+                                    AutomationProperties.Name="Default image similarity"
+                                    ItemsSource="{Binding SimilarityPresets}"
+                                    SelectedItem="{Binding DefaultImageSimilarity, Mode=TwoWay}" />
+                            </toolkit:SettingsCard>
+                            <toolkit:SettingsCard
+                                Header="Video similarity"
+                                Description="Choose the default video-matching sensitivity.">
+                                <ComboBox
+                                    MinWidth="180"
+                                    AutomationProperties.Name="Default video similarity"
+                                    ItemsSource="{Binding SimilarityPresets}"
+                                    SelectedItem="{Binding DefaultVideoSimilarity, Mode=TwoWay}" />
+                            </toolkit:SettingsCard>
+                            <toolkit:SettingsCard
+                                Header="Media processing concurrency"
+                                Description="Auto uses up to two workers based on this device.">
+                                <ComboBox
+                                    MinWidth="180"
+                                    AutomationProperties.Name="Media processing concurrency"
+                                    ItemsSource="{Binding MediaConcurrencyOptions}"
+                                    SelectedIndex="{Binding SelectedMediaConcurrencyIndex, Mode=TwoWay}" />
+                            </toolkit:SettingsCard>
+                            <toolkit:SettingsCard
+                                Header="Use media fingerprint cache"
+                                Description="Reuse valid image and video fingerprints between scans.">
+                                <ToggleSwitch
+                                    AutomationProperties.Name="Use media fingerprint cache"
+                                    IsOn="{Binding UseMediaFingerprintCache, Mode=TwoWay}" />
+                            </toolkit:SettingsCard>
+                            <toolkit:SettingsCard
+                                Header="Cache status"
+                                Description="Derived fingerprints only; scan results are never stored.">
+                                <StackPanel Spacing="{StaticResource SpacingSmall}">
+                                    <TextBlock
+                                        AutomationProperties.Name="Media fingerprint cache status"
+                                        Text="{Binding CacheStatusText}" />
+                                    <TextBlock
+                                        AutomationProperties.Name="Media fingerprint cache path"
+                                        Style="{StaticResource MutedTextBlockStyle}"
+                                        Text="{Binding CachePath}"
+                                        TextWrapping="Wrap" />
+                                    <Button
+                                        AutomationProperties.Name="Clear media fingerprint cache"
+                                        Command="{Binding ClearCacheCommand}"
+                                        Content="Clear cache" />
+                                </StackPanel>
+                            </toolkit:SettingsCard>
+                        </toolkit:SettingsExpander.Items>
+                    </toolkit:SettingsExpander>
+
+                    <toolkit:SettingsExpander
+                        Header="File actions"
                         Description="Deletion defaults are intentionally conservative."
                         IsExpanded="False">
                         <toolkit:SettingsExpander.Items>
@@ -140,6 +231,12 @@
                             </toolkit:SettingsCard>
                         </toolkit:SettingsExpander.Items>
                     </toolkit:SettingsExpander>
+
+                    <InfoBar
+                        AutomationProperties.Name="Settings operation status"
+                        IsOpen="{Binding IsSettingsInfoOpen}"
+                        Message="{Binding SettingsInfoMessage}"
+                        Severity="{Binding SettingsInfoSeverity}" />
 
                     <InfoBar
                         AutomationProperties.Name="Permanent deletion warning"

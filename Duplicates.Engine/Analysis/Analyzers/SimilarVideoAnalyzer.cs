@@ -16,11 +16,19 @@ public sealed class SimilarVideoAnalyzer
     private const double MaximumAspectRatioDifference = 0.05d;
     private static readonly FileTypeFilter VideoFilter = FileTypeFilter.ForCategories([FileTypeCategory.Video]);
     private readonly IVideoSampleProvider _provider;
+    private readonly int _maximumConcurrency;
 
     public SimilarVideoAnalyzer(IVideoSampleProvider provider)
+        : this(provider, 1)
+    {
+    }
+
+    public SimilarVideoAnalyzer(IVideoSampleProvider provider, int maximumConcurrency)
     {
         ArgumentNullException.ThrowIfNull(provider);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumConcurrency);
         _provider = provider;
+        _maximumConcurrency = maximumConcurrency;
     }
 
     public async Task<AnalysisResult> AnalyzeAsync(
@@ -33,65 +41,35 @@ public sealed class SimilarVideoAnalyzer
         cancellationToken.ThrowIfCancellationRequested();
 
         var stopwatch = Stopwatch.StartNew();
-        var candidates = new List<Candidate>();
-        var analyzerSkips = new List<SkippedPath>();
-        IEnumerable<InventoryFile> files = inventory.Files
+        InventoryFile[] files = inventory.Files
             .Where(static file =>
                 !file.Attributes.HasFlag(FileAttributes.Directory) &&
                 !file.Attributes.HasFlag(FileAttributes.ReparsePoint) &&
                 VideoFilter.Matches(file.Extension))
             .OrderBy(static file => file.FullPath, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(static file => file.FullPath, StringComparer.Ordinal);
-
-        foreach (InventoryFile file in files)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!TryReadSnapshot(file.FullPath, out FileSnapshot before) || !MatchesInventory(before, file))
+            .ThenBy(static file => file.FullPath, StringComparer.Ordinal)
+            .ToArray();
+        var outcomes = new FileAnalysisOutcome[files.Length];
+        await Parallel.ForEachAsync(
+            Enumerable.Range(0, files.Length),
+            new ParallelOptions
             {
-                analyzerSkips.Add(ChangedSkip(file.FullPath));
-                continue;
-            }
-
-            VideoSample? sample = null;
-            Exception? providerFailure = null;
-            try
+                CancellationToken = cancellationToken,
+                MaxDegreeOfParallelism = _maximumConcurrency,
+                TaskScheduler = TaskScheduler.Default,
+            },
+            async (index, token) =>
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                sample = await _provider.GetSampleAsync(file.FullPath, cancellationToken).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (IsExpectedProviderFailure(ex))
-            {
-                providerFailure = ex;
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!TryReadSnapshot(file.FullPath, out FileSnapshot after) ||
-                after != before ||
-                !MatchesInventory(after, file))
-            {
-                analyzerSkips.Add(ChangedSkip(file.FullPath));
-                continue;
-            }
-
-            if (providerFailure is not null)
-            {
-                analyzerSkips.Add(DecodeSkip(file.FullPath));
-                continue;
-            }
-
-            try
-            {
-                candidates.Add(new Candidate(
-                    file.FullPath,
-                    file.SizeBytes,
-                    file.ModifiedUtc,
-                    BuildEvidence(sample)));
-            }
-            catch (InvalidDataException)
-            {
-                analyzerSkips.Add(DecodeSkip(file.FullPath));
-            }
-        }
+                outcomes[index] = await AnalyzeFileAsync(files[index], token).ConfigureAwait(false);
+            }).ConfigureAwait(false);
+        Candidate[] candidates = outcomes
+            .Where(static outcome => outcome.Candidate is not null)
+            .Select(static outcome => outcome.Candidate!)
+            .ToArray();
+        SkippedPath[] analyzerSkips = outcomes
+            .Where(static outcome => outcome.Skip is not null)
+            .Select(static outcome => outcome.Skip!)
+            .ToArray();
 
         IReadOnlyList<SimilarityGroup> groups = BuildGroups(
             candidates,
@@ -103,11 +81,62 @@ public sealed class SimilarVideoAnalyzer
         {
             Findings = [],
             Groups = groups,
-            SkippedPaths = analyzerSkips.Count == 0
+            SkippedPaths = analyzerSkips.Length == 0
                 ? inventory.SkippedPaths
                 : [.. inventory.SkippedPaths, .. analyzerSkips],
             Elapsed = stopwatch.Elapsed,
         };
+    }
+
+    private async ValueTask<FileAnalysisOutcome> AnalyzeFileAsync(
+        InventoryFile file,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!TryReadSnapshot(file.FullPath, out FileSnapshot before) || !MatchesInventory(before, file))
+        {
+            return new(null, ChangedSkip(file.FullPath));
+        }
+
+        VideoSample? sample = null;
+        Exception? providerFailure = null;
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            sample = await _provider.GetSampleAsync(file.FullPath, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (IsExpectedProviderFailure(ex))
+        {
+            providerFailure = ex;
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!TryReadSnapshot(file.FullPath, out FileSnapshot after) ||
+            after != before ||
+            !MatchesInventory(after, file))
+        {
+            return new(null, ChangedSkip(file.FullPath));
+        }
+
+        if (providerFailure is not null)
+        {
+            return new(null, DecodeSkip(file.FullPath));
+        }
+
+        try
+        {
+            return new(
+                new Candidate(
+                    file.FullPath,
+                    file.SizeBytes,
+                    file.ModifiedUtc,
+                    BuildEvidence(sample)),
+                null);
+        }
+        catch (InvalidDataException)
+        {
+            return new(null, DecodeSkip(file.FullPath));
+        }
     }
 
     public async Task<bool> RevalidateAsync(
@@ -514,6 +543,8 @@ public sealed class SimilarVideoAnalyzer
         long SizeBytes,
         DateTime ModifiedUtc,
         VideoSimilarityEvidence Evidence);
+
+    private readonly record struct FileAnalysisOutcome(Candidate? Candidate, SkippedPath? Skip);
 
     private readonly record struct BandKey(int FrameIndex, int BandIndex, int Value);
 

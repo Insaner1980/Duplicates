@@ -113,6 +113,40 @@ public sealed class ScanViewModelTests
     }
 
     [Fact]
+    public void NewestPendingSettingsWaitForCoordinatorIdleAndScanTerminalState()
+    {
+        var settings = new FakeSettingsService();
+        var coordinator = new AppOperationCoordinator();
+        var scope = new PathScopeViewModel();
+        var viewModel = new ScanViewModel(
+            new DuplicateScanner(),
+            settings,
+            new ResultsStore(),
+            scope,
+            coordinator)
+        {
+            IsScanning = true,
+            MinSizeValue = 99,
+        };
+        Assert.True(coordinator.TryAcquire(
+            new AppOperationDescriptor(AppOperationKind.ExactScan),
+            static () => { },
+            out IAppOperationLease? lease));
+        settings.SetCurrent(new AppSettings { DefaultMinSizeBytes = 100, DefaultIncludeSubfolders = false });
+        settings.SetCurrent(new AppSettings { DefaultMinSizeBytes = 200, DefaultIncludeSubfolders = true });
+
+        lease!.Dispose();
+
+        Assert.Equal(99, viewModel.MinSizeValue);
+        Assert.True(scope.IncludeSubfolders);
+
+        viewModel.IsScanning = false;
+
+        Assert.Equal(200, viewModel.MinSizeValue);
+        Assert.True(scope.IncludeSubfolders);
+    }
+
+    [Fact]
     public void SizePresets_SetNumberBoxValuesAndNoMaximum()
     {
         var viewModel = new ScanViewModel(

@@ -54,6 +54,22 @@ public sealed class AppServicesCompositionTests
         Assert.True(services.VideoOptimizerViewModel.OptimizeVideosCommand.CanExecute(null));
     }
 
+    [Fact]
+    public void SettingsUsesTheSharedMediaCacheAndOperationCoordinator()
+    {
+        var services = new AppServices();
+
+        Assert.Same(
+            services.MediaFingerprintCache,
+            GetPrivateField(services.SettingsViewModel, "_cacheControl"));
+        Assert.Same(
+            services.OperationCoordinator,
+            GetPrivateField(services.SettingsViewModel, "_operationCoordinator"));
+        Assert.Same(
+            services.SettingsService,
+            GetPrivateField(services.AnalysisViewModel, "_settingsService"));
+    }
+
     private static object? GetPrivateField(object instance, string name) =>
         instance.GetType()
             .GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!

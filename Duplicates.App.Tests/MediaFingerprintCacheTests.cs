@@ -26,6 +26,65 @@ public sealed class MediaFingerprintCacheTests : IDisposable
     }
 
     [Fact]
+    public void CacheImplementsTheAppFacingStatusAndClearContract()
+    {
+        Type? control = typeof(MediaFingerprintCache).Assembly.GetType(
+            "Duplicates.Services.IMediaFingerprintCacheControl");
+
+        Assert.NotNull(control);
+        Assert.True(control.IsAssignableFrom(typeof(MediaFingerprintCache)));
+        Assert.NotNull(control.GetMethod("GetStatusAsync"));
+        Assert.NotNull(control.GetMethod("ClearAsync"));
+    }
+
+    [Fact]
+    public async Task StatusCountsOnlyValidLoadedEntriesWithoutRewritingTheFinalDocument()
+    {
+        string imagePath = await WriteSourceAsync("status-image.png", [1]);
+        string videoPath = await WriteSourceAsync("status-video.mp4", [2]);
+        var writer = new MediaFingerprintCache(_cachePath);
+        _ = await writer.GetOrCreateImageAsync(
+            imagePath,
+            _ => Task.FromResult(Image(1)),
+            CancellationToken.None);
+        _ = await writer.GetOrCreateVideoAsync(
+            videoPath,
+            _ => Task.FromResult(Video(2)),
+            CancellationToken.None);
+        File.Delete(imagePath);
+        string before = await File.ReadAllTextAsync(_cachePath);
+        long size = new FileInfo(_cachePath).Length;
+
+        MediaFingerprintCacheStatus status = await new MediaFingerprintCache(_cachePath)
+            .GetStatusAsync(CancellationToken.None);
+
+        Assert.Equal(1, status.EntryCount);
+        Assert.Equal(size, status.SizeBytes);
+        Assert.Equal(Path.GetFullPath(_cachePath), status.Path);
+        Assert.Equal(before, await File.ReadAllTextAsync(_cachePath));
+    }
+
+    [Fact]
+    public async Task MalformedStatusReportsZeroWithoutRepairAndCancellationPropagates()
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(_cachePath)!);
+        const string malformed = "{bad-json";
+        await File.WriteAllTextAsync(_cachePath, malformed);
+        var cache = new MediaFingerprintCache(_cachePath);
+
+        MediaFingerprintCacheStatus status = await cache.GetStatusAsync(CancellationToken.None);
+
+        Assert.Equal(0, status.EntryCount);
+        Assert.Equal(new FileInfo(_cachePath).Length, status.SizeBytes);
+        Assert.Equal(malformed, await File.ReadAllTextAsync(_cachePath));
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => new MediaFingerprintCache(_cachePath).GetStatusAsync(cancellation.Token));
+        Assert.Equal(malformed, await File.ReadAllTextAsync(_cachePath));
+    }
+
+    [Fact]
     public async Task ImageHit_UsesCanonicalSnapshotKeyAndReturnsIsolatedCopies()
     {
         string sourcePath = await WriteSourceAsync("image.png", [1, 2, 3]);

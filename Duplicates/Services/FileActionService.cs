@@ -42,9 +42,9 @@ public sealed class FileActionService : IFileActionService
                 long deletedBytes = 0;
                 int processedCount = 0;
                 var deletedPaths = new List<string>();
-                RecycleOption recycleOption = _settingsService.Current.DeletionMode == DeletionMode.RecycleBin
-                    ? RecycleOption.SendToRecycleBin
-                    : RecycleOption.DeletePermanently;
+                RecycleOption recycleOption = _settingsService.Current.DeletionMode == DeletionMode.Permanent
+                    ? RecycleOption.DeletePermanently
+                    : RecycleOption.SendToRecycleBin;
 
                 foreach (FileActionTarget target in targets)
                 {

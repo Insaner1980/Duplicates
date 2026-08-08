@@ -17,6 +17,7 @@ public sealed partial class ScanViewModel : ObservableObject
     private readonly ResultsStore _resultsStore;
     private readonly PathScopeViewModel _pathScope;
     private readonly IAppOperationCoordinator _operationCoordinator;
+    private AppSettings? _pendingSettings;
     private CancellationTokenSource? _scanCancellation;
     private DateTimeOffset _scanStartedAt;
 
@@ -141,10 +142,12 @@ public sealed partial class ScanViewModel : ObservableObject
 
     public bool IsStatusOpen => !string.IsNullOrWhiteSpace(StatusMessage);
 
-    public void ResetFromSettings()
+    public void ResetFromSettings() => ApplySettings(_settingsService.Current);
+
+    private void ApplySettings(AppSettings settings)
     {
-        AppSettings settings = _settingsService.Current;
         MinSizeValue = ByteSizeInput.FromBytes(settings.DefaultMinSizeBytes);
+        PathScope.IncludeSubfolders = settings.DefaultIncludeSubfolders;
         PathScope.IgnoreHiddenFiles = settings.IgnoreHiddenFiles;
         PathScope.IgnoreSystemFiles = settings.IgnoreSystemFiles;
         VerifyByteByByte = settings.VerifyByteByByte;
@@ -176,7 +179,9 @@ public sealed partial class ScanViewModel : ObservableObject
         {
             ScanOptions options = BuildScanOptions();
             var progress = new Progress<ScanProgress>(UpdateProgress);
-            ScanResult result = await _scanner.ScanAsync(options, progress, _scanCancellation.Token);
+            ScanResult result = await Task.Run(
+                () => _scanner.ScanAsync(options, progress, _scanCancellation.Token),
+                _scanCancellation.Token);
             completedResult = result;
             completedScope = BuildResultScope(options);
             completedAt = DateTimeOffset.UtcNow;
@@ -364,10 +369,12 @@ public sealed partial class ScanViewModel : ObservableObject
     partial void OnIsScanningChanged(bool value)
     {
         StartScanCommand.NotifyCanExecuteChanged();
+        TryApplyPendingSettings();
     }
 
     private void OperationChanged(object? sender, EventArgs e)
     {
+        TryApplyPendingSettings();
         StartScanCommand.NotifyCanExecuteChanged();
     }
 
@@ -388,9 +395,20 @@ public sealed partial class ScanViewModel : ObservableObject
 
     private void SettingsChanged(object? sender, AppSettings settings)
     {
-        if (!IsScanning)
+        _pendingSettings = settings;
+        TryApplyPendingSettings();
+    }
+
+    private void TryApplyPendingSettings()
+    {
+        if (_pendingSettings is not AppSettings settings ||
+            IsScanning ||
+            _operationCoordinator.ActiveOperation is not null)
         {
-            ResetFromSettings();
+            return;
         }
+
+        _pendingSettings = null;
+        ApplySettings(settings);
     }
 }

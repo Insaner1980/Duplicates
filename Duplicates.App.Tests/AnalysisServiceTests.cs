@@ -27,6 +27,260 @@ public sealed class AnalysisServiceTests : IDisposable
     }
 
     [Fact]
+    public void CompletionBoundaryRejectsCancellationBeforeStoppingOrReportingDone()
+    {
+        System.Reflection.MethodInfo? completion = typeof(AnalysisService).GetMethod(
+            "CompleteSuccessfulRun",
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+        Assert.NotNull(completion);
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var reports = new List<AnalysisProgress>();
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var result = new AnalysisResult
+        {
+            Findings = [],
+            Groups = [],
+            SkippedPaths = [],
+            Elapsed = TimeSpan.Zero,
+        };
+
+        var failure = Assert.Throws<System.Reflection.TargetInvocationException>(() => completion.Invoke(
+            null,
+            [
+                result,
+                stopwatch,
+                1,
+                10L,
+                new RecordingProgress(reports),
+                cancellation.Token,
+            ]));
+
+        Assert.IsType<OperationCanceledException>(failure.InnerException);
+        Assert.True(stopwatch.IsRunning);
+        Assert.DoesNotContain(reports, report => report.Phase == AnalysisPhase.Done);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(3)]
+    [InlineData(8)]
+    public async Task RunAsync_InvalidMediaConcurrency_FailsBeforeInventory(int maximumConcurrency)
+    {
+        var reports = new List<AnalysisProgress>();
+
+        ArgumentOutOfRangeException exception = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+            new AnalysisService().RunAsync(
+                ToolKind.BigFiles,
+                new AnalysisScope { IncludedFolders = [Path.Combine(_root, "missing")] },
+                new LargeFileToolOptions(1),
+                new AnalysisRunOptions(maximumConcurrency, UseMediaFingerprintCache: true),
+                new RecordingProgress(reports),
+                CancellationToken.None));
+
+        Assert.Equal("runOptions", exception.ParamName);
+        Assert.Empty(reports);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task SimilarImages_RunSnapshotSelectsCacheAndRevalidationAlwaysUsesFresh(bool useCache)
+    {
+        string path = Path.Combine(_root, "image.jpg");
+        await File.WriteAllBytesAsync(path, [1]);
+        var provider = new FakeImageSampleProvider();
+        var service = new AnalysisService(fileFormatProbe: null, imageSampleProvider: provider);
+
+        await service.RunAsync(
+            ToolKind.SimilarImages,
+            new AnalysisScope { IncludedFiles = [path] },
+            new SimilarImageToolOptions(8),
+            new AnalysisRunOptions(1, useCache),
+            progress: null,
+            CancellationToken.None);
+        await service.RevalidateSimilarityItemAsync(
+            ToolKind.SimilarImages,
+            new SimilarityItem
+            {
+                FullPath = path,
+                SizeBytes = 1,
+                ModifiedUtc = File.GetLastWriteTimeUtc(path),
+                SimilarityPercent = 100,
+                Evidence = new ImageSimilarityEvidence(0, 100, 100, "JPEG"),
+            },
+            CancellationToken.None);
+
+        Assert.Equal(useCache ? [path] : [], provider.CachedPaths);
+        Assert.Equal(useCache ? [path] : [path, path], provider.FreshPaths);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task SimilarVideos_RunSnapshotSelectsCache(bool useCache)
+    {
+        string path = Path.Combine(_root, "video.mp4");
+        await File.WriteAllBytesAsync(path, [1]);
+        var provider = new FakeVideoSampleProvider();
+        var service = new AnalysisService(
+            fileFormatProbe: null,
+            imageSampleProvider: null,
+            videoSampleProvider: provider);
+
+        await service.RunAsync(
+            ToolKind.SimilarVideos,
+            new AnalysisScope { IncludedFiles = [path] },
+            new SimilarVideoToolOptions(9),
+            new AnalysisRunOptions(1, useCache),
+            progress: null,
+            CancellationToken.None);
+
+        Assert.Equal(useCache ? [path] : [], provider.CachedPaths);
+        Assert.Equal(useCache ? [] : [path], provider.FreshPaths);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(4)]
+    public async Task SimilarImages_RunSnapshotBoundsAnalyzerConcurrency(int maximumConcurrency)
+    {
+        string[] paths = Enumerable.Range(0, 4)
+            .Select(index => Path.Combine(_root, $"image-{index}.jpg"))
+            .ToArray();
+        foreach (string path in paths)
+        {
+            await File.WriteAllBytesAsync(path, [1]);
+        }
+
+        var provider = new DelayedImageSampleProvider();
+
+        await new AnalysisService(fileFormatProbe: null, imageSampleProvider: provider).RunAsync(
+            ToolKind.SimilarImages,
+            new AnalysisScope { IncludedFiles = paths },
+            new SimilarImageToolOptions(8),
+            new AnalysisRunOptions(maximumConcurrency, UseMediaFingerprintCache: true),
+            progress: null,
+            CancellationToken.None);
+
+        Assert.Equal(maximumConcurrency, provider.PeakConcurrency);
+    }
+
+    [Fact]
+    public async Task SimilarVideos_RunSnapshotBoundsAnalyzerConcurrency()
+    {
+        string[] paths = Enumerable.Range(0, 4)
+            .Select(index => Path.Combine(_root, $"video-{index}.mp4"))
+            .ToArray();
+        foreach (string path in paths)
+        {
+            await File.WriteAllBytesAsync(path, [1]);
+        }
+
+        var provider = new DelayedVideoSampleProvider();
+        await new AnalysisService(null, null, provider).RunAsync(
+            ToolKind.SimilarVideos,
+            new AnalysisScope { IncludedFiles = paths },
+            new SimilarVideoToolOptions(9),
+            new AnalysisRunOptions(2, UseMediaFingerprintCache: true),
+            progress: null,
+            CancellationToken.None);
+
+        Assert.Equal(2, provider.PeakConcurrency);
+    }
+
+    [Fact]
+    public async Task MusicDuplicates_RunSnapshotBoundsAnalyzerConcurrency()
+    {
+        string[] paths = Enumerable.Range(0, 4)
+            .Select(index => Path.Combine(_root, $"song-{index}.mp3"))
+            .ToArray();
+        foreach (string path in paths)
+        {
+            await File.WriteAllBytesAsync(path, [1]);
+        }
+
+        var provider = new DelayedMusicMetadataProvider();
+        await new AnalysisService(null, null, null, provider).RunAsync(
+            ToolKind.MusicDuplicates,
+            new AnalysisScope { IncludedFiles = paths },
+            new MusicDuplicateToolOptions(TimeSpan.FromSeconds(2)),
+            new AnalysisRunOptions(2, UseMediaFingerprintCache: true),
+            progress: null,
+            CancellationToken.None);
+
+        Assert.Equal(2, provider.PeakConcurrency);
+    }
+
+    [Fact]
+    public async Task RunAsync_HidesInventoryDoneUntilAnalyzerCompletesAndEmitsOneFinalDone()
+    {
+        string path = Path.Combine(_root, "image.jpg");
+        await File.WriteAllBytesAsync(path, [1]);
+        var provider = new BlockingImageSampleProvider();
+        var progress = new SynchronizedProgress();
+        Task<AnalysisResult> run = new AnalysisService(
+            fileFormatProbe: null,
+            imageSampleProvider: provider).RunAsync(
+                ToolKind.SimilarImages,
+                new AnalysisScope { IncludedFiles = [path] },
+                new SimilarImageToolOptions(8),
+                new AnalysisRunOptions(1, UseMediaFingerprintCache: true),
+                progress,
+                CancellationToken.None);
+
+        await provider.Entered.WaitAsync(TimeSpan.FromSeconds(5));
+        try
+        {
+            Assert.DoesNotContain(progress.Snapshot(), report => report.Phase == AnalysisPhase.Done);
+        }
+        finally
+        {
+            provider.Release();
+            await run;
+        }
+
+        AnalysisProgress[] reports = progress.Snapshot();
+        Assert.Contains(reports, report => report.Phase == AnalysisPhase.Inspecting);
+        Assert.Equal(1, reports.Count(report => report.Phase == AnalysisPhase.Done));
+        Assert.Equal(AnalysisPhase.Done, reports[^1].Phase);
+    }
+
+    [Fact]
+    public async Task RunAsync_ParallelMediaProgressIsSerializedAndMonotonic()
+    {
+        string[] paths = Enumerable.Range(1, 4)
+            .Select(index => Path.Combine(_root, $"image-{index}.jpg"))
+            .ToArray();
+        for (int index = 0; index < paths.Length; index++)
+        {
+            await File.WriteAllBytesAsync(paths[index], new byte[index + 1]);
+        }
+
+        var progress = new SynchronizedProgress();
+        await new AnalysisService(
+            fileFormatProbe: null,
+            imageSampleProvider: new OutOfOrderImageSampleProvider()).RunAsync(
+                ToolKind.SimilarImages,
+                new AnalysisScope { IncludedFiles = paths },
+                new SimilarImageToolOptions(8),
+                new AnalysisRunOptions(4, UseMediaFingerprintCache: true),
+                progress,
+                CancellationToken.None);
+
+        AnalysisProgress[] inspecting = progress.Snapshot()
+            .Where(report => report.Phase == AnalysisPhase.Inspecting)
+            .ToArray();
+        Assert.Equal([0L, 1L, 2L, 3L, 4L], inspecting.Select(static report => report.ItemsProcessed));
+        Assert.All(inspecting, report => Assert.Equal(4, report.ItemsDiscovered));
+        Assert.Equal(10, inspecting[^1].BytesProcessed);
+        Assert.Equal(10, inspecting[^1].TotalBytes);
+        Assert.True(inspecting.Zip(inspecting.Skip(1), static (left, right) =>
+            right.ItemsProcessed >= left.ItemsProcessed && right.BytesProcessed >= left.BytesProcessed).All(static value => value));
+    }
+
+    [Fact]
     public async Task InvalidLinksWithNoOptions_UsesInventoryAndIncludesTotalElapsed()
     {
         string missingTarget = Path.Combine(_root, "missing-target");
@@ -499,5 +753,159 @@ public sealed class AnalysisServiceTests : IDisposable
     private sealed class RecordingProgress(List<AnalysisProgress> reports) : IProgress<AnalysisProgress>
     {
         public void Report(AnalysisProgress value) => reports.Add(value);
+    }
+
+    private sealed class DelayedImageSampleProvider : IImageSampleProvider
+    {
+        private int _active;
+        private int _peakConcurrency;
+
+        public int PeakConcurrency => Volatile.Read(ref _peakConcurrency);
+
+        public Task<ImageSample> GetSampleAsync(string path, CancellationToken cancellationToken) =>
+            GetAsync(cancellationToken);
+
+        public Task<ImageSample> GetFreshSampleAsync(string path, CancellationToken cancellationToken) =>
+            GetAsync(cancellationToken);
+
+        private async Task<ImageSample> GetAsync(CancellationToken cancellationToken)
+        {
+            int active = Interlocked.Increment(ref _active);
+            int peak;
+            while (active > (peak = Volatile.Read(ref _peakConcurrency)) &&
+                   Interlocked.CompareExchange(ref _peakConcurrency, active, peak) != peak)
+            {
+            }
+
+            try
+            {
+                await Task.Delay(100, cancellationToken);
+                return new ImageSample(100, 100, new byte[1024], "JPEG");
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _active);
+            }
+        }
+    }
+
+    private sealed class DelayedVideoSampleProvider : IVideoSampleProvider
+    {
+        private readonly ConcurrencyCounter _counter = new();
+
+        public int PeakConcurrency => _counter.PeakConcurrency;
+
+        public Task<VideoSample> GetSampleAsync(string path, CancellationToken cancellationToken) =>
+            GetAsync(cancellationToken);
+
+        public Task<VideoSample> GetFreshSampleAsync(string path, CancellationToken cancellationToken) =>
+            GetAsync(cancellationToken);
+
+        private async Task<VideoSample> GetAsync(CancellationToken cancellationToken)
+        {
+            await _counter.DelayAsync(cancellationToken);
+            return FakeVideoSampleProvider.Video();
+        }
+    }
+
+    private sealed class DelayedMusicMetadataProvider : IMusicMetadataProvider
+    {
+        private readonly ConcurrencyCounter _counter = new();
+
+        public int PeakConcurrency => _counter.PeakConcurrency;
+
+        public async Task<MusicMetadata> GetMetadataAsync(string path, CancellationToken cancellationToken)
+        {
+            await _counter.DelayAsync(cancellationToken);
+            return FakeMusicMetadataProvider.Music();
+        }
+    }
+
+    private sealed class ConcurrencyCounter
+    {
+        private int _active;
+        private int _peakConcurrency;
+
+        public int PeakConcurrency => Volatile.Read(ref _peakConcurrency);
+
+        public async Task DelayAsync(CancellationToken cancellationToken)
+        {
+            int active = Interlocked.Increment(ref _active);
+            int peak;
+            while (active > (peak = Volatile.Read(ref _peakConcurrency)) &&
+                   Interlocked.CompareExchange(ref _peakConcurrency, active, peak) != peak)
+            {
+            }
+
+            try
+            {
+                await Task.Delay(100, cancellationToken);
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _active);
+            }
+        }
+    }
+
+    private sealed class BlockingImageSampleProvider : IImageSampleProvider
+    {
+        private readonly TaskCompletionSource _entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task Entered => _entered.Task;
+
+        public Task<ImageSample> GetSampleAsync(string path, CancellationToken cancellationToken) =>
+            GetAsync(cancellationToken);
+
+        public Task<ImageSample> GetFreshSampleAsync(string path, CancellationToken cancellationToken) =>
+            GetAsync(cancellationToken);
+
+        public void Release() => _release.TrySetResult();
+
+        private async Task<ImageSample> GetAsync(CancellationToken cancellationToken)
+        {
+            _entered.TrySetResult();
+            await _release.Task.WaitAsync(cancellationToken);
+            return new ImageSample(100, 100, new byte[1024], "JPEG");
+        }
+    }
+
+    private sealed class OutOfOrderImageSampleProvider : IImageSampleProvider
+    {
+        public Task<ImageSample> GetSampleAsync(string path, CancellationToken cancellationToken) =>
+            GetAsync(path, cancellationToken);
+
+        public Task<ImageSample> GetFreshSampleAsync(string path, CancellationToken cancellationToken) =>
+            GetAsync(path, cancellationToken);
+
+        private static async Task<ImageSample> GetAsync(string path, CancellationToken cancellationToken)
+        {
+            int ordinal = int.Parse(Path.GetFileNameWithoutExtension(path).AsSpan("image-".Length));
+            await Task.Delay(TimeSpan.FromMilliseconds((5 - ordinal) * 30), cancellationToken);
+            return new ImageSample(100, 100, new byte[1024], "JPEG");
+        }
+    }
+
+    private sealed class SynchronizedProgress : IProgress<AnalysisProgress>
+    {
+        private readonly Lock _gate = new();
+        private readonly List<AnalysisProgress> _reports = [];
+
+        public void Report(AnalysisProgress value)
+        {
+            lock (_gate)
+            {
+                _reports.Add(value);
+            }
+        }
+
+        public AnalysisProgress[] Snapshot()
+        {
+            lock (_gate)
+            {
+                return [.. _reports];
+            }
+        }
     }
 }

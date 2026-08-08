@@ -18,20 +18,30 @@ public sealed partial class AnalysisViewModel : ObservableObject
     private readonly AnalysisSessionStore _sessionStore;
     private readonly PathScopeViewModel _pathScope;
     private readonly IAppOperationCoordinator _operationCoordinator;
+    private readonly ISettingsService? _settingsService;
+    private AppSettings? _pendingSettings;
     private CancellationTokenSource? _analysisCancellation;
 
     public AnalysisViewModel(
         IAnalysisService analysisService,
         AnalysisSessionStore sessionStore,
         PathScopeViewModel pathScope,
-        IAppOperationCoordinator? operationCoordinator = null)
+        IAppOperationCoordinator? operationCoordinator = null,
+        ISettingsService? settingsService = null)
     {
         _analysisService = analysisService;
         _sessionStore = sessionStore;
         _pathScope = pathScope;
         _operationCoordinator = operationCoordinator ?? new AppOperationCoordinator();
+        _settingsService = settingsService;
         _pathScope.PropertyChanged += PathScopeChanged;
         _operationCoordinator.ActiveOperationChanged += OperationChanged;
+        if (_settingsService is not null)
+        {
+            _settingsService.SettingsChanged += SettingsChanged;
+            ApplySettings(_settingsService.Current);
+        }
+
         SelectTool(ToolKind.EmptyFolders);
     }
 
@@ -162,9 +172,16 @@ public sealed partial class AnalysisViewModel : ObservableObject
             return;
         }
 
+        ToolKind tool = Tool;
+        AnalysisRunOptions runOptions = BuildRunOptions();
+        bool usesMediaFingerprintCache =
+            runOptions.UseMediaFingerprintCache &&
+            tool is ToolKind.SimilarImages or ToolKind.SimilarVideos;
         var cancellation = new CancellationTokenSource();
         if (!_operationCoordinator.TryAcquire(
-                new AppOperationDescriptor(AppOperationKind.AnalysisRun),
+                new AppOperationDescriptor(
+                    AppOperationKind.AnalysisRun,
+                    usesMediaFingerprintCache),
                 cancellation.Cancel,
                 out IAppOperationLease? lease))
         {
@@ -178,7 +195,6 @@ public sealed partial class AnalysisViewModel : ObservableObject
         StatusMessage = string.Empty;
         _analysisCancellation = cancellation;
         CancellationToken cancellationToken = _analysisCancellation.Token;
-        ToolKind tool = Tool;
         AnalysisScope scope = BuildScope();
         ToolOptions toolOptions = BuildToolOptions(tool);
         AnalysisResult? completedResult = null;
@@ -190,6 +206,7 @@ public sealed partial class AnalysisViewModel : ObservableObject
                 tool,
                 scope,
                 toolOptions,
+                runOptions,
                 progress,
                 cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
@@ -269,6 +286,20 @@ public sealed partial class AnalysisViewModel : ObservableObject
         _ => throw new ArgumentException($"{tool} is not a read-only analysis tool.", nameof(tool)),
     };
 
+    private AnalysisRunOptions BuildRunOptions()
+    {
+        if (_settingsService is null)
+        {
+            return new AnalysisRunOptions(1, UseMediaFingerprintCache: true);
+        }
+
+        AppSettings settings = _settingsService.Current;
+        int maximumConcurrency = settings.MaxMediaConcurrency is 1 or 2 or 4
+            ? settings.MaxMediaConcurrency.Value
+            : Math.Clamp(Environment.ProcessorCount, 1, 2);
+        return new AnalysisRunOptions(maximumConcurrency, settings.UseMediaFingerprintCache);
+    }
+
     private long GetLargeFileMinimumSizeBytes() => ByteSizeInput.ToBytes(
         LargeFileMinimumSizeValue,
         DefaultLargeFileMinimumSizeBytes);
@@ -293,6 +324,14 @@ public sealed partial class AnalysisViewModel : ObservableObject
         double normalizedDays = GetTemporaryFileMinimumAgeDays(utcNow);
         TemporaryFileMinimumAgeDays = normalizedDays;
         return new TemporaryFileToolOptions(TimeSpan.FromDays(normalizedDays), utcNow);
+    }
+
+    private void ApplySettings(AppSettings settings)
+    {
+        LargeFileMinimumSizeValue = settings.DefaultLargeFileMinimumBytes;
+        TemporaryFileMinimumAgeDays = settings.DefaultTemporaryFileMinimumAgeDays;
+        ImageSimilarityPreset = settings.DefaultImageSimilarity;
+        VideoSimilarityPreset = settings.DefaultVideoSimilarity;
     }
 
     private double GetTemporaryFileMinimumAgeDays() => GetTemporaryFileMinimumAgeDays(DateTime.UtcNow);
@@ -329,10 +368,15 @@ public sealed partial class AnalysisViewModel : ObservableObject
             : Math.Clamp(progress.BytesProcessed * 100d / progress.TotalBytes, 0, 100);
     }
 
-    partial void OnIsAnalyzingChanged(bool value) => StartAnalysisCommand.NotifyCanExecuteChanged();
+    partial void OnIsAnalyzingChanged(bool value)
+    {
+        StartAnalysisCommand.NotifyCanExecuteChanged();
+        TryApplyPendingSettings();
+    }
 
     private void OperationChanged(object? sender, EventArgs e)
     {
+        TryApplyPendingSettings();
         StartAnalysisCommand.NotifyCanExecuteChanged();
     }
 
@@ -342,5 +386,24 @@ public sealed partial class AnalysisViewModel : ObservableObject
         {
             StartAnalysisCommand.NotifyCanExecuteChanged();
         }
+    }
+
+    private void SettingsChanged(object? sender, AppSettings settings)
+    {
+        _pendingSettings = settings;
+        TryApplyPendingSettings();
+    }
+
+    private void TryApplyPendingSettings()
+    {
+        if (_pendingSettings is not AppSettings settings ||
+            IsAnalyzing ||
+            _operationCoordinator.ActiveOperation is not null)
+        {
+            return;
+        }
+
+        _pendingSettings = null;
+        ApplySettings(settings);
     }
 }

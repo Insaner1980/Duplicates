@@ -500,15 +500,25 @@ public sealed class NativeWinUiContractTests
     }
 
     [Fact]
-    public void SettingsPage_UsesRecommendedSettingsControlsAndNumberBox()
+    public void SettingsPage_UsesFourNativeSectionsAndThreeNumberBoxesWithLoadedRefresh()
     {
         XDocument page = LoadXaml(@"Views\SettingsPage.xaml");
         XNamespace toolkit = "using:CommunityToolkit.WinUI.Controls";
 
-        Assert.Equal(3, page.Descendants(toolkit + "SettingsExpander").Count());
+        string[] headers = page.Descendants(toolkit + "SettingsExpander")
+            .Select(expander => (string?)expander.Attribute("Header"))
+            .Cast<string>()
+            .ToArray();
+        Assert.Equal(["Appearance", "Scanning defaults", "Similarity and media", "File actions"], headers);
         Assert.NotEmpty(page.Descendants(toolkit + "SettingsCard"));
-        Assert.Single(page.Descendants(Presentation + "NumberBox"));
+        Assert.Equal(3, page.Descendants(Presentation + "NumberBox").Count());
         Assert.Empty(page.Descendants(Presentation + "TextBox"));
+        XElement clear = Assert.Single(
+            page.Descendants(Presentation + "Button"),
+            button => (string?)button.Attribute("Content") == "Clear cache");
+        Assert.Null(clear.Attribute("Style"));
+        Assert.Equal("Clear media fingerprint cache", (string?)clear.Attribute("AutomationProperties.Name"));
+        Assert.Equal("SettingsPage_Loaded", (string?)page.Root?.Attribute("Loaded"));
     }
 
     [Fact]

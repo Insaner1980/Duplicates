@@ -15,6 +15,19 @@ public interface IAnalysisService
         IProgress<AnalysisProgress>? progress,
         CancellationToken cancellationToken);
 
+    Task<AnalysisResult> RunAsync(
+        ToolKind tool,
+        AnalysisScope scope,
+        ToolOptions toolOptions,
+        AnalysisRunOptions runOptions,
+        IProgress<AnalysisProgress>? progress,
+        CancellationToken cancellationToken) => RunAsync(
+            tool,
+            scope,
+            toolOptions,
+            progress,
+            cancellationToken);
+
     Task<bool> RevalidateSimilarityItemAsync(
         ToolKind tool,
         SimilarityItem item,
@@ -70,13 +83,33 @@ public sealed class AnalysisService : IAnalysisService
         _musicMetadataProvider = musicMetadataProvider;
     }
 
-    public async Task<AnalysisResult> RunAsync(
+    public Task<AnalysisResult> RunAsync(
         ToolKind tool,
         AnalysisScope scope,
         ToolOptions toolOptions,
         IProgress<AnalysisProgress>? progress,
+        CancellationToken cancellationToken) => RunAsync(
+            tool,
+            scope,
+            toolOptions,
+            new AnalysisRunOptions(1, UseMediaFingerprintCache: true),
+            progress,
+            cancellationToken);
+
+    public async Task<AnalysisResult> RunAsync(
+        ToolKind tool,
+        AnalysisScope scope,
+        ToolOptions toolOptions,
+        AnalysisRunOptions runOptions,
+        IProgress<AnalysisProgress>? progress,
         CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(runOptions);
+        if (runOptions.MaxMediaConcurrency is not (1 or 2 or 4))
+        {
+            throw new ArgumentOutOfRangeException(nameof(runOptions));
+        }
+
         bool isValidPair = (tool, toolOptions) switch
         {
             (ToolKind.BigFiles, LargeFileToolOptions) => true,
@@ -136,9 +169,21 @@ public sealed class AnalysisService : IAnalysisService
         }
 
         var stopwatch = Stopwatch.StartNew();
+        IProgress<AnalysisProgress>? inventoryProgress = progress is null
+            ? null
+            : new InventoryProgress(progress);
         FileInventory inventory = await Task.Run(
-            () => new FileInventoryBuilder().Build(scope, progress, cancellationToken),
+            () => new FileInventoryBuilder().Build(scope, inventoryProgress, cancellationToken),
             cancellationToken).ConfigureAwait(false);
+        long totalBytes = inventory.Files.Sum(static file => file.SizeBytes);
+        progress?.Report(new AnalysisProgress(
+            AnalysisPhase.Inspecting,
+            inventory.Files.Count,
+            0,
+            0,
+            totalBytes,
+            null));
+        var mediaProgress = new MediaAttemptProgress(inventory, totalBytes, progress);
         AnalysisResult result = (tool, toolOptions) switch
         {
             (ToolKind.BigFiles, LargeFileToolOptions options) => await new LargeFileAnalyzer().AnalyzeAsync(
@@ -168,17 +213,26 @@ public sealed class AnalysisService : IAnalysisService
                 new TemporaryFileOptions(options.MinimumAge, options.UtcNow),
                 cancellationToken).ConfigureAwait(false),
             (ToolKind.SimilarImages, SimilarImageToolOptions options) => await new SimilarImageAnalyzer(
-                _imageSampleProvider!).AnalyzeAsync(
+                new RunImageSampleProvider(
+                    _imageSampleProvider!,
+                    runOptions.UseMediaFingerprintCache,
+                    mediaProgress),
+                runOptions.MaxMediaConcurrency).AnalyzeAsync(
                     inventory,
                     new SimilarImageOptions(options.MaximumHammingDistance),
                     cancellationToken).ConfigureAwait(false),
             (ToolKind.SimilarVideos, SimilarVideoToolOptions options) => await new SimilarVideoAnalyzer(
-                _videoSampleProvider!).AnalyzeAsync(
+                new RunVideoSampleProvider(
+                    _videoSampleProvider!,
+                    runOptions.UseMediaFingerprintCache,
+                    mediaProgress),
+                runOptions.MaxMediaConcurrency).AnalyzeAsync(
                     inventory,
                     new SimilarVideoOptions(options.MaximumMeanFrameDistance),
                     cancellationToken).ConfigureAwait(false),
             (ToolKind.MusicDuplicates, MusicDuplicateToolOptions options) => await new MusicDuplicateAnalyzer(
-                _musicMetadataProvider!).AnalyzeAsync(
+                new RunMusicMetadataProvider(_musicMetadataProvider!, mediaProgress),
+                runOptions.MaxMediaConcurrency).AnalyzeAsync(
                     inventory,
                     new MusicDuplicateOptions(options.MaximumDurationDifference),
                     cancellationToken).ConfigureAwait(false),
@@ -186,7 +240,32 @@ public sealed class AnalysisService : IAnalysisService
                 $"The {ToolDescriptor.For(tool).Title} analyzer is not installed yet."),
         };
 
+        return CompleteSuccessfulRun(
+            result,
+            stopwatch,
+            inventory.Files.Count,
+            totalBytes,
+            progress,
+            cancellationToken);
+    }
+
+    internal static AnalysisResult CompleteSuccessfulRun(
+        AnalysisResult result,
+        Stopwatch stopwatch,
+        int itemsDiscovered,
+        long totalBytes,
+        IProgress<AnalysisProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
         stopwatch.Stop();
+        progress?.Report(new AnalysisProgress(
+            AnalysisPhase.Done,
+            itemsDiscovered,
+            itemsDiscovered,
+            totalBytes,
+            totalBytes,
+            null));
         return result with { Elapsed = stopwatch.Elapsed };
     }
 
@@ -223,4 +302,123 @@ public sealed class AnalysisService : IAnalysisService
                     new MusicDuplicateOptions(musicOptions.MaximumDurationDifference)),
             _ => throw new NotSupportedException($"Regrouping is not available for {tool} with these options."),
         };
+
+    private sealed class RunImageSampleProvider(
+        IImageSampleProvider provider,
+        bool useCache,
+        MediaAttemptProgress progress) : IImageSampleProvider
+    {
+        public async Task<ImageSample> GetSampleAsync(string path, CancellationToken cancellationToken)
+        {
+            try
+            {
+                return useCache
+                    ? await provider.GetSampleAsync(path, cancellationToken).ConfigureAwait(false)
+                    : await provider.GetFreshSampleAsync(path, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                progress.ReportAttempt(path);
+            }
+        }
+
+        public Task<ImageSample> GetFreshSampleAsync(string path, CancellationToken cancellationToken) =>
+            provider.GetFreshSampleAsync(path, cancellationToken);
+    }
+
+    private sealed class RunVideoSampleProvider(
+        IVideoSampleProvider provider,
+        bool useCache,
+        MediaAttemptProgress progress) : IVideoSampleProvider
+    {
+        public async Task<VideoSample> GetSampleAsync(string path, CancellationToken cancellationToken)
+        {
+            try
+            {
+                return useCache
+                    ? await provider.GetSampleAsync(path, cancellationToken).ConfigureAwait(false)
+                    : await provider.GetFreshSampleAsync(path, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                progress.ReportAttempt(path);
+            }
+        }
+
+        public Task<VideoSample> GetFreshSampleAsync(string path, CancellationToken cancellationToken) =>
+            provider.GetFreshSampleAsync(path, cancellationToken);
+    }
+
+    private sealed class RunMusicMetadataProvider(
+        IMusicMetadataProvider provider,
+        MediaAttemptProgress progress) : IMusicMetadataProvider
+    {
+        public async Task<MusicMetadata> GetMetadataAsync(string path, CancellationToken cancellationToken)
+        {
+            try
+            {
+                return await provider.GetMetadataAsync(path, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                progress.ReportAttempt(path);
+            }
+        }
+    }
+
+    private sealed class MediaAttemptProgress
+    {
+        private readonly Lock _gate = new();
+        private readonly IReadOnlyDictionary<string, long> _fileSizes;
+        private readonly long _itemsDiscovered;
+        private readonly long _totalBytes;
+        private readonly IProgress<AnalysisProgress>? _progress;
+        private long _itemsProcessed;
+        private long _bytesProcessed;
+
+        public MediaAttemptProgress(
+            FileInventory inventory,
+            long totalBytes,
+            IProgress<AnalysisProgress>? progress)
+        {
+            _fileSizes = inventory.Files.ToDictionary(
+                static file => file.FullPath,
+                static file => file.SizeBytes,
+                StringComparer.OrdinalIgnoreCase);
+            _itemsDiscovered = inventory.Files.Count;
+            _totalBytes = totalBytes;
+            _progress = progress;
+        }
+
+        public void ReportAttempt(string path)
+        {
+            lock (_gate)
+            {
+                _itemsProcessed++;
+                if (_fileSizes.TryGetValue(path, out long sizeBytes))
+                {
+                    _bytesProcessed += sizeBytes;
+                }
+
+                _progress?.Report(new AnalysisProgress(
+                    AnalysisPhase.Inspecting,
+                    _itemsDiscovered,
+                    _itemsProcessed,
+                    _bytesProcessed,
+                    _totalBytes,
+                    path));
+            }
+        }
+    }
+
+    private sealed class InventoryProgress(IProgress<AnalysisProgress> progress) : IProgress<AnalysisProgress>
+    {
+        public void Report(AnalysisProgress value)
+        {
+            if (value.Phase != AnalysisPhase.Done)
+            {
+                progress.Report(value);
+            }
+        }
+    }
 }

@@ -3,7 +3,7 @@ using Duplicates.Engine.Analysis.Media;
 
 namespace Duplicates.Services;
 
-public sealed class MediaFingerprintCache
+public sealed class MediaFingerprintCache : IMediaFingerprintCacheControl
 {
     private const int DocumentSchemaVersion = 1;
     private const int ImageSampleSchemaVersion = 1;
@@ -234,6 +234,34 @@ public sealed class MediaFingerprintCache
             }
 
             DeleteOwnedTemporaryFiles(cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task<MediaFingerprintCacheStatus> GetStatusAsync(CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await EnsureLoadedAsync(cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            long sizeBytes;
+            try
+            {
+                sizeBytes = File.Exists(CachePath) ? new FileInfo(CachePath).Length : 0;
+            }
+            catch (Exception ex) when (IsCacheFailure(ex))
+            {
+                sizeBytes = 0;
+            }
+
+            return new MediaFingerprintCacheStatus(
+                _imageEntries.Count + _videoEntries.Count,
+                sizeBytes,
+                CachePath);
         }
         finally
         {

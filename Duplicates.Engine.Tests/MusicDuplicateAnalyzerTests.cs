@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Reflection;
 using System.Security;
 using Duplicates.Engine.Analysis;
 using Duplicates.Engine.Analysis.Analyzers;
@@ -25,6 +26,117 @@ public sealed class MusicDuplicateAnalyzerTests : IDisposable
         {
             Directory.Delete(_root, recursive: true);
         }
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Constructor_RejectsNonpositiveMaximumConcurrency(int maximumConcurrency)
+    {
+        TargetInvocationException failure = Assert.Throws<TargetInvocationException>(() =>
+            Activator.CreateInstance(
+                typeof(MusicDuplicateAnalyzer),
+                new FakeMusicMetadataProvider(),
+                maximumConcurrency));
+
+        var error = Assert.IsType<ArgumentOutOfRangeException>(failure.InnerException);
+        Assert.Equal(nameof(maximumConcurrency), error.ParamName);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(4)]
+    public async Task AnalyzeAsync_UsesConfiguredBoundedConcurrency(int maximumConcurrency)
+    {
+        InventoryFile[] files = Enumerable.Range(0, maximumConcurrency + 2)
+            .Select(index => WriteFile($"bound-{index:00}.mp3"))
+            .ToArray();
+        var provider = new BlockingMusicMetadataProvider(files.Select(static file => file.FullPath));
+        Task<AnalysisResult> run = new MusicDuplicateAnalyzer(provider, maximumConcurrency).AnalyzeAsync(
+            Inventory(files),
+            new MusicDuplicateOptions(TimeSpan.FromSeconds(2)),
+            CancellationToken.None);
+
+        Exception? entryFailure = await Record.ExceptionAsync(() =>
+            provider.WaitForEntriesAsync(maximumConcurrency).WaitAsync(TimeSpan.FromSeconds(5)));
+        provider.CompleteAll(Music());
+        AnalysisResult result = await run.WaitAsync(TimeSpan.FromSeconds(3));
+
+        Assert.Null(entryFailure);
+        Assert.Equal(maximumConcurrency, provider.MaximumObserved);
+        Assert.Empty(result.SkippedPaths);
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_ParallelCancellationPropagatesInsteadOfBecomingSkips()
+    {
+        InventoryFile[] files = Enumerable.Range(0, 3)
+            .Select(index => WriteFile($"cancel-parallel-{index:00}.mp3"))
+            .ToArray();
+        var provider = new BlockingMusicMetadataProvider(files.Select(static file => file.FullPath));
+        using var cancellation = new CancellationTokenSource();
+        Task<AnalysisResult> run = new MusicDuplicateAnalyzer(provider, 2).AnalyzeAsync(
+            Inventory(files),
+            new MusicDuplicateOptions(TimeSpan.FromSeconds(2)),
+            cancellation.Token);
+
+        Exception? entryFailure = await Record.ExceptionAsync(() =>
+            provider.WaitForEntriesAsync(2).WaitAsync(TimeSpan.FromSeconds(5)));
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run);
+        Assert.Null(entryFailure);
+        Assert.Equal(2, provider.CancellationCount);
+    }
+
+    [Fact]
+    public void GroupingBoundary_PropagatesCancellation()
+    {
+        MethodInfo? buildGroups = typeof(MusicDuplicateAnalyzer)
+            .GetMethods(BindingFlags.NonPublic | BindingFlags.Static)
+            .SingleOrDefault(method => method.Name == "BuildGroups" && method.GetParameters().Length == 3);
+        Assert.NotNull(buildGroups);
+        Type? candidateType = typeof(MusicDuplicateAnalyzer).GetNestedType("Candidate", BindingFlags.NonPublic);
+        Assert.NotNull(candidateType);
+        Array candidates = Array.CreateInstance(candidateType, 0);
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        TargetInvocationException failure = Assert.Throws<TargetInvocationException>(() =>
+            buildGroups.Invoke(
+                null,
+                [candidates, new MusicDuplicateOptions(TimeSpan.FromSeconds(2)), cancellation.Token]));
+
+        Assert.IsAssignableFrom<OperationCanceledException>(failure.InnerException);
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_ParallelCompletionOrderDoesNotChangeSkipOrder()
+    {
+        InventoryFile[] files = Enumerable.Range(0, 4)
+            .Select(index => WriteFile($"ordered-{index:00}.mp3"))
+            .Reverse()
+            .ToArray();
+        var provider = new BlockingMusicMetadataProvider(files.Select(static file => file.FullPath));
+        Task<AnalysisResult> run = new MusicDuplicateAnalyzer(provider, 4).AnalyzeAsync(
+            Inventory(files),
+            new MusicDuplicateOptions(TimeSpan.FromSeconds(2)),
+            CancellationToken.None);
+
+        Exception? entryFailure = await Record.ExceptionAsync(() =>
+            provider.WaitForEntriesAsync(4).WaitAsync(TimeSpan.FromSeconds(5)));
+        foreach (InventoryFile file in files.OrderByDescending(static file => file.FullPath, StringComparer.Ordinal))
+        {
+            provider.Complete(file.FullPath, Music(title: string.Empty));
+        }
+
+        AnalysisResult result = await run.WaitAsync(TimeSpan.FromSeconds(3));
+
+        Assert.Null(entryFailure);
+        Assert.Equal(
+            files.Select(static file => file.FullPath).OrderBy(static path => path, StringComparer.OrdinalIgnoreCase),
+            result.SkippedPaths.Select(static skip => skip.Path));
     }
 
     [Fact]
@@ -564,5 +676,23 @@ public sealed class MusicDuplicateAnalyzerTests : IDisposable
 
             return Task.FromResult(Results[path]);
         }
+    }
+
+    private sealed class BlockingMusicMetadataProvider(IEnumerable<string> paths) : IMusicMetadataProvider
+    {
+        private readonly BlockingProviderGate<MusicMetadata> _gate = new(paths);
+
+        public int MaximumObserved => _gate.MaximumObserved;
+
+        public int CancellationCount => _gate.CancellationCount;
+
+        public Task WaitForEntriesAsync(int count) => _gate.WaitForEntriesAsync(count);
+
+        public void Complete(string path, MusicMetadata metadata) => _gate.Complete(path, metadata);
+
+        public void CompleteAll(MusicMetadata metadata) => _gate.CompleteAll(_ => metadata);
+
+        public Task<MusicMetadata> GetMetadataAsync(string path, CancellationToken cancellationToken) =>
+            _gate.GetAsync(path, cancellationToken);
     }
 }

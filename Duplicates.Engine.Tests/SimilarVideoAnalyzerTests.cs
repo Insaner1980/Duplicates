@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Reflection;
 using Duplicates.Engine.Analysis;
 using Duplicates.Engine.Analysis.Analyzers;
 using Duplicates.Engine.Analysis.Media;
@@ -25,6 +26,96 @@ public sealed class SimilarVideoAnalyzerTests : IDisposable
         {
             Directory.Delete(_root, recursive: true);
         }
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Constructor_RejectsNonpositiveMaximumConcurrency(int maximumConcurrency)
+    {
+        TargetInvocationException failure = Assert.Throws<TargetInvocationException>(() =>
+            Activator.CreateInstance(
+                typeof(SimilarVideoAnalyzer),
+                new FakeVideoSampleProvider(),
+                maximumConcurrency));
+
+        var error = Assert.IsType<ArgumentOutOfRangeException>(failure.InnerException);
+        Assert.Equal(nameof(maximumConcurrency), error.ParamName);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(4)]
+    public async Task AnalyzeAsync_UsesConfiguredBoundedConcurrency(int maximumConcurrency)
+    {
+        InventoryFile[] files = Enumerable.Range(0, maximumConcurrency + 2)
+            .Select(index => WriteInventoryFile($"bound-{index:00}.mp4", 1))
+            .ToArray();
+        var provider = new BlockingVideoSampleProvider(files.Select(static file => file.FullPath));
+        Task<AnalysisResult> run = new SimilarVideoAnalyzer(provider, maximumConcurrency).AnalyzeAsync(
+            NewInventory(files),
+            new SimilarVideoOptions(9),
+            CancellationToken.None);
+
+        Exception? entryFailure = await Record.ExceptionAsync(() =>
+            provider.WaitForEntriesAsync(maximumConcurrency).WaitAsync(TimeSpan.FromSeconds(5)));
+        provider.CompleteAll(Sample());
+        AnalysisResult result = await run.WaitAsync(TimeSpan.FromSeconds(3));
+
+        Assert.Null(entryFailure);
+        Assert.Equal(maximumConcurrency, provider.MaximumObserved);
+        Assert.Empty(result.SkippedPaths);
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_ParallelCancellationPropagatesInsteadOfBecomingSkips()
+    {
+        InventoryFile[] files = Enumerable.Range(0, 3)
+            .Select(index => WriteInventoryFile($"cancel-parallel-{index:00}.mp4", 1))
+            .ToArray();
+        var provider = new BlockingVideoSampleProvider(files.Select(static file => file.FullPath));
+        using var cancellation = new CancellationTokenSource();
+        Task<AnalysisResult> run = new SimilarVideoAnalyzer(provider, 2).AnalyzeAsync(
+            NewInventory(files),
+            new SimilarVideoOptions(9),
+            cancellation.Token);
+
+        Exception? entryFailure = await Record.ExceptionAsync(() =>
+            provider.WaitForEntriesAsync(2).WaitAsync(TimeSpan.FromSeconds(5)));
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run);
+        Assert.Null(entryFailure);
+        Assert.Equal(2, provider.CancellationCount);
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_ParallelCompletionOrderDoesNotChangeSkipOrder()
+    {
+        InventoryFile[] files = Enumerable.Range(0, 4)
+            .Select(index => WriteInventoryFile($"ordered-{index:00}.mp4", 1))
+            .Reverse()
+            .ToArray();
+        var provider = new BlockingVideoSampleProvider(files.Select(static file => file.FullPath));
+        Task<AnalysisResult> run = new SimilarVideoAnalyzer(provider, 4).AnalyzeAsync(
+            NewInventory(files),
+            new SimilarVideoOptions(9),
+            CancellationToken.None);
+
+        Exception? entryFailure = await Record.ExceptionAsync(() =>
+            provider.WaitForEntriesAsync(4).WaitAsync(TimeSpan.FromSeconds(5)));
+        foreach (InventoryFile file in files.OrderByDescending(static file => file.FullPath, StringComparer.Ordinal))
+        {
+            provider.Complete(file.FullPath, InvalidSample("width"));
+        }
+
+        AnalysisResult result = await run.WaitAsync(TimeSpan.FromSeconds(3));
+
+        Assert.Null(entryFailure);
+        Assert.Equal(
+            files.Select(static file => file.FullPath).OrderBy(static path => path, StringComparer.OrdinalIgnoreCase),
+            result.SkippedPaths.Select(static skip => skip.Path));
     }
 
     [Fact]
@@ -783,5 +874,26 @@ public sealed class SimilarVideoAnalyzerTests : IDisposable
                 ? handler(path, cancellationToken)
                 : Task.FromResult(Sample());
         }
+    }
+
+    private sealed class BlockingVideoSampleProvider(IEnumerable<string> paths) : IVideoSampleProvider
+    {
+        private readonly BlockingProviderGate<VideoSample> _gate = new(paths);
+
+        public int MaximumObserved => _gate.MaximumObserved;
+
+        public int CancellationCount => _gate.CancellationCount;
+
+        public Task WaitForEntriesAsync(int count) => _gate.WaitForEntriesAsync(count);
+
+        public void Complete(string path, VideoSample sample) => _gate.Complete(path, sample);
+
+        public void CompleteAll(VideoSample sample) => _gate.CompleteAll(_ => sample);
+
+        public Task<VideoSample> GetSampleAsync(string path, CancellationToken cancellationToken) =>
+            _gate.GetAsync(path, cancellationToken);
+
+        public Task<VideoSample> GetFreshSampleAsync(string path, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
     }
 }

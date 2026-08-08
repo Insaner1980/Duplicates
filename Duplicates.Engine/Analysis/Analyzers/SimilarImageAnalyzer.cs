@@ -14,11 +14,19 @@ public sealed class SimilarImageAnalyzer
     private const double MaximumAspectRatioDifference = 0.05d;
     private static readonly FileTypeFilter ImageFilter = FileTypeFilter.ForCategories([FileTypeCategory.Images]);
     private readonly IImageSampleProvider _provider;
+    private readonly int _maximumConcurrency;
 
     public SimilarImageAnalyzer(IImageSampleProvider provider)
+        : this(provider, 1)
+    {
+    }
+
+    public SimilarImageAnalyzer(IImageSampleProvider provider, int maximumConcurrency)
     {
         ArgumentNullException.ThrowIfNull(provider);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumConcurrency);
         _provider = provider;
+        _maximumConcurrency = maximumConcurrency;
     }
 
     public async Task<AnalysisResult> AnalyzeAsync(
@@ -31,77 +39,98 @@ public sealed class SimilarImageAnalyzer
         cancellationToken.ThrowIfCancellationRequested();
 
         var stopwatch = Stopwatch.StartNew();
-        var candidates = new List<Candidate>();
-        var analyzerSkips = new List<SkippedPath>();
-        IEnumerable<InventoryFile> files = inventory.Files
+        InventoryFile[] files = inventory.Files
             .Where(static file =>
                 !file.Attributes.HasFlag(FileAttributes.Directory) &&
                 !file.Attributes.HasFlag(FileAttributes.ReparsePoint) &&
                 ImageFilter.Matches(file.Extension))
             .OrderBy(static file => file.FullPath, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(static file => file.FullPath, StringComparer.Ordinal);
+            .ThenBy(static file => file.FullPath, StringComparer.Ordinal)
+            .ToArray();
+        var outcomes = new FileAnalysisOutcome[files.Length];
+        await Parallel.ForEachAsync(
+            Enumerable.Range(0, files.Length),
+            new ParallelOptions
+            {
+                CancellationToken = cancellationToken,
+                MaxDegreeOfParallelism = _maximumConcurrency,
+                TaskScheduler = TaskScheduler.Default,
+            },
+            async (index, token) =>
+            {
+                outcomes[index] = await AnalyzeFileAsync(files[index], token).ConfigureAwait(false);
+            }).ConfigureAwait(false);
+        Candidate[] candidates = outcomes
+            .Where(static outcome => outcome.Candidate is not null)
+            .Select(static outcome => outcome.Candidate!)
+            .ToArray();
+        SkippedPath[] analyzerSkips = outcomes
+            .Where(static outcome => outcome.Skip is not null)
+            .Select(static outcome => outcome.Skip!)
+            .ToArray();
 
-        foreach (InventoryFile file in files)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!TryReadSnapshot(file.FullPath, out FileSnapshot before) || !MatchesInventory(before, file))
-            {
-                analyzerSkips.Add(ChangedSkip(file.FullPath));
-                continue;
-            }
-
-            ImageSample? sample = null;
-            Exception? providerFailure = null;
-            try
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                sample = await _provider.GetSampleAsync(file.FullPath, cancellationToken).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (IsExpectedProviderFailure(ex))
-            {
-                providerFailure = ex;
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!TryReadSnapshot(file.FullPath, out FileSnapshot after) ||
-                after != before ||
-                !MatchesInventory(after, file))
-            {
-                analyzerSkips.Add(ChangedSkip(file.FullPath));
-                continue;
-            }
-
-            if (providerFailure is not null)
-            {
-                analyzerSkips.Add(DecodeSkip(file.FullPath));
-                continue;
-            }
-
-            try
-            {
-                candidates.Add(new Candidate(
-                    file.FullPath,
-                    file.SizeBytes,
-                    file.ModifiedUtc,
-                    BuildEvidence(sample)));
-            }
-            catch (InvalidDataException)
-            {
-                analyzerSkips.Add(DecodeSkip(file.FullPath));
-            }
-        }
-
-        IReadOnlyList<SimilarityGroup> groups = BuildGroups(candidates, options);
+        IReadOnlyList<SimilarityGroup> groups = BuildGroups(candidates, options, cancellationToken);
         stopwatch.Stop();
         return new AnalysisResult
         {
             Findings = [],
             Groups = groups,
-            SkippedPaths = analyzerSkips.Count == 0
+            SkippedPaths = analyzerSkips.Length == 0
                 ? inventory.SkippedPaths
                 : [.. inventory.SkippedPaths, .. analyzerSkips],
             Elapsed = stopwatch.Elapsed,
         };
+    }
+
+    private async ValueTask<FileAnalysisOutcome> AnalyzeFileAsync(
+        InventoryFile file,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!TryReadSnapshot(file.FullPath, out FileSnapshot before) || !MatchesInventory(before, file))
+        {
+            return new(null, ChangedSkip(file.FullPath));
+        }
+
+        ImageSample? sample = null;
+        Exception? providerFailure = null;
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            sample = await _provider.GetSampleAsync(file.FullPath, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (IsExpectedProviderFailure(ex))
+        {
+            providerFailure = ex;
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!TryReadSnapshot(file.FullPath, out FileSnapshot after) ||
+            after != before ||
+            !MatchesInventory(after, file))
+        {
+            return new(null, ChangedSkip(file.FullPath));
+        }
+
+        if (providerFailure is not null)
+        {
+            return new(null, DecodeSkip(file.FullPath));
+        }
+
+        try
+        {
+            return new(
+                new Candidate(
+                    file.FullPath,
+                    file.SizeBytes,
+                    file.ModifiedUtc,
+                    BuildEvidence(sample)),
+                null);
+        }
+        catch (InvalidDataException)
+        {
+            return new(null, DecodeSkip(file.FullPath));
+        }
     }
 
     public async Task<bool> RevalidateAsync(
@@ -138,22 +167,26 @@ public sealed class SimilarImageAnalyzer
             candidates.Add(new Candidate(item.FullPath, item.SizeBytes, item.ModifiedUtc, evidence));
         }
 
-        return BuildGroups(candidates, options);
+        return BuildGroups(candidates, options, CancellationToken.None);
     }
 
     private static IReadOnlyList<SimilarityGroup> BuildGroups(
         IReadOnlyList<Candidate> source,
-        SimilarImageOptions options)
+        SimilarImageOptions options,
+        CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         Candidate[] candidates = source
             .OrderBy(static item => item.FullPath, StringComparer.OrdinalIgnoreCase)
             .ThenBy(static item => item.FullPath, StringComparer.Ordinal)
             .ToArray();
+        cancellationToken.ThrowIfCancellationRequested();
         var disjointSet = new DisjointSet(candidates.Length);
         var bands = new Dictionary<BandKey, List<int>>();
 
         for (int index = 0; index < candidates.Length; index++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             Candidate current = candidates[index];
             var priorCandidates = new SortedSet<int>();
             for (int band = 0; band < 13; band++)
@@ -167,6 +200,7 @@ public sealed class SimilarImageAnalyzer
 
             foreach (int otherIndex in priorCandidates)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 Candidate other = candidates[otherIndex];
                 if (AspectRatiosMatch(current.Evidence, other.Evidence) &&
                     PerceptualHash.Distance(current.Evidence.PerceptualHash, other.Evidence.PerceptualHash) <=
@@ -189,6 +223,7 @@ public sealed class SimilarImageAnalyzer
             }
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         Candidate[][] components = Enumerable.Range(0, candidates.Length)
             .GroupBy(disjointSet.Find)
             .Select(group => group.Select(index => candidates[index]).ToArray())
@@ -199,10 +234,12 @@ public sealed class SimilarImageAnalyzer
             .OrderBy(static group => group.Reference.FullPath, StringComparer.OrdinalIgnoreCase)
             .ThenBy(static group => group.Reference.FullPath, StringComparer.Ordinal)
             .ToArray();
+        cancellationToken.ThrowIfCancellationRequested();
 
         var groups = new List<SimilarityGroup>(orderedComponents.Length);
         for (int groupIndex = 0; groupIndex < orderedComponents.Length; groupIndex++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             (Candidate[] component, Candidate reference) = orderedComponents[groupIndex];
             SimilarityItem[] items = component
                 .Select(candidate => (Candidate: candidate, Distance: PerceptualHash.Distance(
@@ -227,6 +264,7 @@ public sealed class SimilarImageAnalyzer
             });
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         return groups;
     }
 
@@ -342,6 +380,8 @@ public sealed class SimilarImageAnalyzer
         long SizeBytes,
         DateTime ModifiedUtc,
         ImageSimilarityEvidence Evidence);
+
+    private readonly record struct FileAnalysisOutcome(Candidate? Candidate, SkippedPath? Skip);
 
     private readonly record struct BandKey(int Band, int Value);
 

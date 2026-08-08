@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Reflection;
 using Duplicates.Engine.Analysis;
 using Duplicates.Engine.Analysis.Analyzers;
 using Duplicates.Engine.Analysis.Media;
@@ -25,6 +26,117 @@ public sealed class SimilarImageAnalyzerTests : IDisposable
         {
             Directory.Delete(_root, recursive: true);
         }
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Constructor_RejectsNonpositiveMaximumConcurrency(int maximumConcurrency)
+    {
+        TargetInvocationException failure = Assert.Throws<TargetInvocationException>(() =>
+            Activator.CreateInstance(
+                typeof(SimilarImageAnalyzer),
+                new FakeImageSampleProvider(),
+                maximumConcurrency));
+
+        var error = Assert.IsType<ArgumentOutOfRangeException>(failure.InnerException);
+        Assert.Equal(nameof(maximumConcurrency), error.ParamName);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(4)]
+    public async Task AnalyzeAsync_UsesConfiguredBoundedConcurrency(int maximumConcurrency)
+    {
+        InventoryFile[] files = Enumerable.Range(0, maximumConcurrency + 2)
+            .Select(index => WriteInventoryFile($"bound-{index:00}.jpg", 1))
+            .ToArray();
+        var provider = new BlockingImageSampleProvider(files.Select(static file => file.FullPath));
+        Task<AnalysisResult> run = new SimilarImageAnalyzer(provider, maximumConcurrency).AnalyzeAsync(
+            NewInventory(files),
+            new SimilarImageOptions(8),
+            CancellationToken.None);
+
+        Exception? entryFailure = await Record.ExceptionAsync(() =>
+            provider.WaitForEntriesAsync(maximumConcurrency).WaitAsync(TimeSpan.FromSeconds(5)));
+        provider.CompleteAll(Sample(100, 100, Filled(0), "JPEG"));
+        AnalysisResult result = await run.WaitAsync(TimeSpan.FromSeconds(3));
+
+        Assert.Null(entryFailure);
+        Assert.Equal(maximumConcurrency, provider.MaximumObserved);
+        Assert.Empty(result.SkippedPaths);
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_ParallelCancellationPropagatesInsteadOfBecomingSkips()
+    {
+        InventoryFile[] files = Enumerable.Range(0, 3)
+            .Select(index => WriteInventoryFile($"cancel-parallel-{index:00}.jpg", 1))
+            .ToArray();
+        var provider = new BlockingImageSampleProvider(files.Select(static file => file.FullPath));
+        using var cancellation = new CancellationTokenSource();
+        Task<AnalysisResult> run = new SimilarImageAnalyzer(provider, 2).AnalyzeAsync(
+            NewInventory(files),
+            new SimilarImageOptions(8),
+            cancellation.Token);
+
+        Exception? entryFailure = await Record.ExceptionAsync(() =>
+            provider.WaitForEntriesAsync(2).WaitAsync(TimeSpan.FromSeconds(5)));
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run);
+        Assert.Null(entryFailure);
+        Assert.Equal(2, provider.CancellationCount);
+    }
+
+    [Fact]
+    public void GroupingBoundary_PropagatesCancellation()
+    {
+        MethodInfo? buildGroups = typeof(SimilarImageAnalyzer)
+            .GetMethods(BindingFlags.NonPublic | BindingFlags.Static)
+            .SingleOrDefault(method => method.Name == "BuildGroups" && method.GetParameters().Length == 3);
+        Assert.NotNull(buildGroups);
+        Type? candidateType = typeof(SimilarImageAnalyzer).GetNestedType("Candidate", BindingFlags.NonPublic);
+        Assert.NotNull(candidateType);
+        Array candidates = Array.CreateInstance(candidateType, 0);
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        TargetInvocationException failure = Assert.Throws<TargetInvocationException>(() =>
+            buildGroups.Invoke(
+                null,
+                [candidates, new SimilarImageOptions(8), cancellation.Token]));
+
+        Assert.IsAssignableFrom<OperationCanceledException>(failure.InnerException);
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_ParallelCompletionOrderDoesNotChangeSkipOrder()
+    {
+        InventoryFile[] files = Enumerable.Range(0, 4)
+            .Select(index => WriteInventoryFile($"ordered-{index:00}.jpg", 1))
+            .Reverse()
+            .ToArray();
+        var provider = new BlockingImageSampleProvider(files.Select(static file => file.FullPath));
+        Task<AnalysisResult> run = new SimilarImageAnalyzer(provider, 4).AnalyzeAsync(
+            NewInventory(files),
+            new SimilarImageOptions(8),
+            CancellationToken.None);
+
+        Exception? entryFailure = await Record.ExceptionAsync(() =>
+            provider.WaitForEntriesAsync(4).WaitAsync(TimeSpan.FromSeconds(5)));
+        foreach (InventoryFile file in files.OrderByDescending(static file => file.FullPath, StringComparer.Ordinal))
+        {
+            provider.Complete(file.FullPath, Sample(0, 100, Filled(0), "JPEG"));
+        }
+
+        AnalysisResult result = await run.WaitAsync(TimeSpan.FromSeconds(3));
+
+        Assert.Null(entryFailure);
+        Assert.Equal(
+            files.Select(static file => file.FullPath).OrderBy(static path => path, StringComparer.OrdinalIgnoreCase),
+            result.SkippedPaths.Select(static skip => skip.Path));
     }
 
     [Fact]
@@ -434,6 +546,96 @@ public sealed class SimilarImageAnalyzerTests : IDisposable
             return Fresh.TryGetValue(path, out Func<string, CancellationToken, Task<ImageSample>>? handler)
                 ? handler(path, cancellationToken)
                 : Task.FromResult(Sample(100, 100, Filled(0), "JPEG"));
+        }
+    }
+
+    private sealed class BlockingImageSampleProvider(IEnumerable<string> paths) : IImageSampleProvider
+    {
+        private readonly BlockingProviderGate<ImageSample> _gate = new(paths);
+
+        public int MaximumObserved => _gate.MaximumObserved;
+
+        public int CancellationCount => _gate.CancellationCount;
+
+        public Task WaitForEntriesAsync(int count) => _gate.WaitForEntriesAsync(count);
+
+        public void Complete(string path, ImageSample sample) => _gate.Complete(path, sample);
+
+        public void CompleteAll(ImageSample sample) => _gate.CompleteAll(_ => sample);
+
+        public Task<ImageSample> GetSampleAsync(string path, CancellationToken cancellationToken) =>
+            _gate.GetAsync(path, cancellationToken);
+
+        public Task<ImageSample> GetFreshSampleAsync(string path, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+    }
+}
+
+internal sealed class BlockingProviderGate<T>(IEnumerable<string> paths)
+{
+    private readonly IReadOnlyDictionary<string, TaskCompletionSource<T>> _completions = paths.ToDictionary(
+        static path => path,
+        static _ => new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously),
+        StringComparer.OrdinalIgnoreCase);
+    private readonly SemaphoreSlim _entries = new(0);
+    private int _active;
+    private int _cancellationCount;
+    private int _maximumObserved;
+
+    public int CancellationCount => Volatile.Read(ref _cancellationCount);
+
+    public int MaximumObserved => Volatile.Read(ref _maximumObserved);
+
+    public async Task<T> GetAsync(string path, CancellationToken cancellationToken)
+    {
+        int active = Interlocked.Increment(ref _active);
+        UpdateMaximum(active);
+        _entries.Release();
+        try
+        {
+            return await _completions[path].Task.WaitAsync(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            Interlocked.Increment(ref _cancellationCount);
+            throw;
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _active);
+        }
+    }
+
+    public async Task WaitForEntriesAsync(int count)
+    {
+        for (int index = 0; index < count; index++)
+        {
+            await _entries.WaitAsync();
+        }
+    }
+
+    public void Complete(string path, T value) => _completions[path].TrySetResult(value);
+
+    public void CompleteAll(Func<string, T> valueFactory)
+    {
+        foreach ((string path, TaskCompletionSource<T> completion) in _completions)
+        {
+            completion.TrySetResult(valueFactory(path));
+        }
+    }
+
+    private void UpdateMaximum(int active)
+    {
+        int observed = Volatile.Read(ref _maximumObserved);
+        while (active > observed)
+        {
+            int prior = Interlocked.CompareExchange(ref _maximumObserved, active, observed);
+            if (prior == observed)
+            {
+                return;
+            }
+
+            observed = prior;
         }
     }
 }

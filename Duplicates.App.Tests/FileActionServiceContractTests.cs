@@ -66,6 +66,26 @@ public sealed class FileActionServiceContractTests
             "The empty directory was removed but no matching Recycle Bin metadata was found.");
     }
 
+    [Fact]
+    public async Task DeleteAsync_UndefinedDeletionModeFallsBackToRecycleBin()
+    {
+        using var fixture = new TemporaryDirectory();
+        string directoryPath = fixture.CreateDirectory("undefined-mode-folder");
+        FileActionService service = CreateService((DeletionMode)999);
+        DateTime operationStartedUtc = DateTime.UtcNow.AddSeconds(-1);
+
+        DeleteSummary summary = await service.DeleteAsync(
+            [new FileActionTarget(directoryPath, 0, FileActionTargetKind.Directory)],
+            null,
+            CancellationToken.None);
+
+        Assert.Equal(1, summary.DeletedCount);
+        Assert.Empty(summary.Failures);
+        Assert.True(
+            WaitForRecycledPath(directoryPath, operationStartedUtc),
+            "An undefined deletion mode must use the recoverable Recycle Bin boundary.");
+    }
+
     [Theory]
     [InlineData(DeletionMode.Permanent)]
     [InlineData(DeletionMode.RecycleBin)]

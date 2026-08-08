@@ -10,6 +10,10 @@ internal sealed class FakeSettingsService : ISettingsService
 {
     public AppSettings Current { get; private set; } = new();
 
+    public List<AppSettings> SavedSettings { get; } = [];
+
+    public Func<AppSettings, CancellationToken, Task>? SaveHandler { get; set; }
+
     public event EventHandler<AppSettings>? SettingsChanged;
 
     public Task LoadAsync()
@@ -18,8 +22,17 @@ internal sealed class FakeSettingsService : ISettingsService
         return Task.CompletedTask;
     }
 
-    public Task SaveAsync(AppSettings settings)
+    public Task SaveAsync(
+        AppSettings settings,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        SavedSettings.Add(settings);
+        if (SaveHandler is not null)
+        {
+            return SaveHandler(settings, cancellationToken);
+        }
+
         SetCurrent(settings);
         return Task.CompletedTask;
     }

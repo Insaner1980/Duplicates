@@ -59,7 +59,8 @@ public sealed class AppServices
             AnalysisService,
             AnalysisSessionStore,
             PathScopeViewModel,
-            OperationCoordinator);
+            OperationCoordinator,
+            SettingsService);
         AnalysisResultsViewModel = new AnalysisResultsViewModel(
             AnalysisSessionStore,
             FileActionService,
@@ -79,7 +80,10 @@ public sealed class AppServices
             PathScopeViewModel,
             FileActionService,
             OperationCoordinator);
-        SettingsViewModel = new SettingsViewModel(SettingsService);
+        SettingsViewModel = new SettingsViewModel(
+            SettingsService,
+            MediaFingerprintCache,
+            OperationCoordinator);
     }
 
     public ISettingsService SettingsService { get; }
