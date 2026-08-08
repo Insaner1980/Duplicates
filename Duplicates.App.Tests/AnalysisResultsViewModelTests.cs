@@ -1651,6 +1651,49 @@ public sealed class AnalysisResultsViewModelTests
     }
 
     [Fact]
+    public async Task BrokenFilesDelete_HeaderReadFailureRevalidationDispatchesLockedFileWithoutProbe()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            string path = Path.Combine(root, "locked.bin");
+            await File.WriteAllBytesAsync(path, [1, 2, 3]);
+            PathFinding source = NewBrokenFinding(
+                path,
+                FileProbeStatus.Invalid,
+                "HeaderReadFailure",
+                detectedType: null,
+                validator: "Header");
+            var probe = BrokenProbe(FileProbeStatus.Valid, null);
+            var fileActions = new FakeFileActionService
+            {
+                NextSummary = new DeleteSummary(1, source.SizeBytes!.Value, [], [path]),
+            };
+            IReadOnlyList<FileActionTarget>? dispatched = null;
+            fileActions.OnDelete = (targets, _) => dispatched = targets;
+            var store = new AnalysisSessionStore();
+            var viewModel = NewBrokenResultsViewModel(store, fileActions, probe);
+            store.SetCompleted(ToolKind.BrokenFiles, new AnalysisScope(), new NoToolOptions(), NewResult([source]));
+            viewModel.Findings[0].IsSelected = true;
+            using var locked = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+
+            DeleteSummary summary = await viewModel.DeleteSelectedAsync(CancellationToken.None);
+
+            Assert.Equal(1, summary.DeletedCount);
+            FileActionTarget target = Assert.Single(dispatched!);
+            Assert.Equal(path, target.FullPath);
+            Assert.Equal(source.ModifiedUtc, target.ExpectedModifiedUtc);
+            Assert.Empty(probe.Calls);
+            Assert.Empty(viewModel.Findings);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task BrokenFilesMove_ReprobesAndReconcilesCanonicalSuccess()
     {
         string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
@@ -1730,6 +1773,56 @@ public sealed class AnalysisResultsViewModelTests
             Assert.Equal(3, viewModel.SelectedFindings.Count);
             Assert.Equal(3, viewModel.Findings.Count);
             Assert.Equal(2, probe.Calls.Count);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("ErrorType")]
+    [InlineData("Validator")]
+    [InlineData("DetectedType")]
+    public async Task BrokenFilesDelete_RejectsEachExactRevalidationFieldMismatch(string mismatchedField)
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            string path = await WritePngAsync(Path.Combine(root, "broken.png"));
+            PathFinding source = NewBrokenFinding(
+                path,
+                FileProbeStatus.Invalid,
+                "ImageDecodeFailure",
+                "PNG",
+                "Image");
+            var metadata = new Dictionary<string, string>(source.Metadata, StringComparer.Ordinal);
+            var probe = BrokenProbe(
+                FileProbeStatus.Invalid,
+                mismatchedField == "ErrorType" ? "MediaOpenFailure" : "ImageDecodeFailure");
+            if (mismatchedField == "Validator")
+            {
+                metadata["Validator"] = "Media";
+            }
+            else if (mismatchedField == "DetectedType")
+            {
+                metadata["DetectedType"] = "ZIP";
+            }
+
+            source = source with { Metadata = metadata };
+            var fileActions = new FakeFileActionService();
+            var store = new AnalysisSessionStore();
+            var viewModel = NewBrokenResultsViewModel(store, fileActions, probe);
+            store.SetCompleted(ToolKind.BrokenFiles, new AnalysisScope(), new NoToolOptions(), NewResult([source]));
+            viewModel.Findings[0].IsSelected = true;
+
+            DeleteSummary summary = await viewModel.DeleteSelectedAsync(CancellationToken.None);
+
+            Assert.Equal(0, fileActions.DeleteCallCount);
+            Assert.Equal("File changed since scan.", Assert.Single(summary.Failures).Reason);
+            Assert.Single(viewModel.Findings);
+            Assert.True(viewModel.Findings[0].IsSelected);
         }
         finally
         {
@@ -1943,10 +2036,20 @@ public sealed class AnalysisResultsViewModelTests
         string path,
         FileProbeStatus status,
         string errorType,
-        string detectedType,
+        string? detectedType,
         string validator)
     {
         var file = new FileInfo(path);
+        var metadata = new Dictionary<string, string>
+        {
+            ["Validator"] = validator,
+            ["ErrorType"] = errorType,
+        };
+        if (detectedType is not null)
+        {
+            metadata["DetectedType"] = detectedType;
+        }
+
         return new PathFinding
         {
             FullPath = path,
@@ -1957,12 +2060,7 @@ public sealed class AnalysisResultsViewModelTests
             SizeBytes = file.Length,
             CreatedUtc = file.CreationTimeUtc,
             ModifiedUtc = file.LastWriteTimeUtc,
-            Metadata = new Dictionary<string, string>
-            {
-                ["Validator"] = validator,
-                ["ErrorType"] = errorType,
-                ["DetectedType"] = detectedType,
-            },
+            Metadata = metadata,
         };
     }
 

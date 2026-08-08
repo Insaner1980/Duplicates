@@ -200,6 +200,29 @@ public sealed class BrokenFileAnalyzerTests : IDisposable
     }
 
     [Fact]
+    public async Task AnalyzeAsync_ProviderFailureAfterMutationReportsChangedSnapshot()
+    {
+        InventoryFile file = WriteInventoryFile("mutated.bin", [1, 2]);
+        var probe = new FakeProbe
+        {
+            Handler = (path, _, _) =>
+            {
+                File.WriteAllBytes(path, [1, 2, 3]);
+                return Task.FromException<FileProbeResult>(new IOException("provider failed"));
+            },
+        };
+
+        AnalysisResult result = await new BrokenFileAnalyzer(probe).AnalyzeAsync(
+            NewInventory([file]),
+            CancellationToken.None);
+
+        Assert.Empty(result.Findings);
+        SkippedPath skipped = Assert.Single(result.SkippedPaths);
+        Assert.Equal(file.FullPath, skipped.Path);
+        Assert.Equal("File changed since scan.", skipped.Reason);
+    }
+
+    [Fact]
     public async Task AnalyzeAsync_PropagatesCancellationBeforeWorkAndAfterProbe()
     {
         InventoryFile file = WriteInventoryFile("cancel.bin", [1]);

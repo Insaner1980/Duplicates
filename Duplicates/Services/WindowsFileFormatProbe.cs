@@ -1,4 +1,6 @@
+using System.Buffers.Binary;
 using System.IO.Compression;
+using System.Runtime.InteropServices;
 using Duplicates.Engine.Analysis;
 using Duplicates.Engine.Analysis.Media;
 using Windows.Graphics.Imaging;
@@ -12,17 +14,24 @@ namespace Duplicates.Services;
 
 public sealed class WindowsFileFormatProbe : IFileFormatProbe
 {
-    private const int MfUnsupportedBytestreamType = unchecked((int)0xC00D36C4);
-    private const int MfCodecNotFound = unchecked((int)0xC00D5212);
-    private const int MfDrmUnsupported = unchecked((int)0xC00D3700);
-    private const int MfLicenseRequired = unchecked((int)0xC00D714A);
-    private const int MfInvalidFileFormat = unchecked((int)0xC00D36BE);
-    private const int WicUnknownImageFormat = unchecked((int)0x88982F07);
-    private const int WicComponentNotFound = unchecked((int)0x88982F50);
-    private const int WicBadImage = unchecked((int)0x88982F60);
-    private const int WicBadHeader = unchecked((int)0x88982F61);
-    private const int WicFrameMissing = unchecked((int)0x88982F62);
-    private const int WicUnsupportedOperation = unchecked((int)0x88982F81);
+    private const int MfEUnsupportedBytestreamType = unchecked((int)0xC00D36C4);
+    private const int MfETopoCodecNotFound = unchecked((int)0xC00D5212);
+    private const int MfEDrmUnsupported = unchecked((int)0xC00D3700);
+    private const int MfELicenseRequired = unchecked((int)0xC00D714A);
+    private const int MfEInvalidFileFormat = unchecked((int)0xC00D36BE);
+    private const int MfEEndOfStream = unchecked((int)0xC00D3E84);
+    private const int WinCodecErrUnknownImageFormat = unchecked((int)0x88982F07);
+    private const int WinCodecErrComponentNotFound = unchecked((int)0x88982F50);
+    private const int WinCodecErrBadImage = unchecked((int)0x88982F60);
+    private const int WinCodecErrBadHeader = unchecked((int)0x88982F61);
+    private const int WinCodecErrFrameMissing = unchecked((int)0x88982F62);
+    private const int WinCodecErrBadMetadataHeader = unchecked((int)0x88982F63);
+    private const int WinCodecErrBadStreamData = unchecked((int)0x88982F70);
+    private const int WinCodecErrStreamRead = unchecked((int)0x88982F72);
+    private const int WinCodecErrUnsupportedPixelFormat = unchecked((int)0x88982F80);
+    private const int WinCodecErrUnsupportedOperation = unchecked((int)0x88982F81);
+    private const uint ZipCentralDirectoryHeaderSignature = 0x02014B50;
+    private const uint ZipEndOfCentralDirectorySignature = 0x06054B50;
 
     public async Task<FileProbeResult> ProbeAsync(
         string path,
@@ -113,7 +122,9 @@ public sealed class WindowsFileFormatProbe : IFileFormatProbe
                 _ = entry.FullName;
             }
 
-            return Valid();
+            return HasEncryptedZipEntry(stream, cancellationToken)
+                ? Unsupported("PasswordProtected")
+                : Valid();
         }
         catch (OperationCanceledException)
         {
@@ -148,6 +159,12 @@ public sealed class WindowsFileFormatProbe : IFileFormatProbe
                     string.IsNullOrEmpty(properties.Title))
                 {
                     using MediaSource source = MediaSource.CreateFromStorageFile(file);
+                    await source.OpenAsync().AsTask(cancellationToken).ConfigureAwait(false);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (!source.IsOpen || source.State == MediaSourceState.Failed)
+                    {
+                        return Invalid("MediaOpenFailure");
+                    }
                 }
             }
             else
@@ -181,9 +198,11 @@ public sealed class WindowsFileFormatProbe : IFileFormatProbe
     {
         result = exception.HResult switch
         {
-            WicComponentNotFound => Unsupported("CodecUnavailable"),
-            WicUnknownImageFormat or WicUnsupportedOperation => Unsupported("UnsupportedContainer"),
-            WicBadImage or WicBadHeader or WicFrameMissing => Invalid("ImageDecodeFailure"),
+            WinCodecErrComponentNotFound or WinCodecErrUnsupportedPixelFormat => Unsupported("CodecUnavailable"),
+            WinCodecErrUnsupportedOperation => Unsupported("UnsupportedContainer"),
+            WinCodecErrUnknownImageFormat or WinCodecErrBadImage or WinCodecErrBadHeader or
+                WinCodecErrFrameMissing or WinCodecErrBadMetadataHeader or WinCodecErrBadStreamData or
+                WinCodecErrStreamRead or MfEInvalidFileFormat => Invalid("ImageDecodeFailure"),
             _ => null,
         };
         if (result is not null)
@@ -195,6 +214,7 @@ public sealed class WindowsFileFormatProbe : IFileFormatProbe
         {
             InvalidDataException or ArgumentException => Invalid("ImageDecodeFailure"),
             NotSupportedException => Unsupported("UnsupportedContainer"),
+            COMException => Unsupported("UnsupportedContainer"),
             _ => null,
         };
         return result is not null;
@@ -204,10 +224,10 @@ public sealed class WindowsFileFormatProbe : IFileFormatProbe
     {
         result = exception.HResult switch
         {
-            MfCodecNotFound => Unsupported("CodecUnavailable"),
-            MfUnsupportedBytestreamType => Unsupported("UnsupportedContainer"),
-            MfDrmUnsupported or MfLicenseRequired => Unsupported("PasswordProtected"),
-            MfInvalidFileFormat => Invalid("MediaOpenFailure"),
+            MfETopoCodecNotFound => Unsupported("CodecUnavailable"),
+            MfEUnsupportedBytestreamType => Unsupported("UnsupportedContainer"),
+            MfEDrmUnsupported or MfELicenseRequired => Unsupported("PasswordProtected"),
+            MfEInvalidFileFormat or MfEEndOfStream => Invalid("MediaOpenFailure"),
             _ => null,
         };
         if (result is not null)
@@ -232,6 +252,86 @@ public sealed class WindowsFileFormatProbe : IFileFormatProbe
         "Matroska" or "EBML" => string.Equals(Path.GetExtension(path), ".mka", StringComparison.OrdinalIgnoreCase),
         _ => false,
     };
+
+    private static bool HasEncryptedZipEntry(Stream stream, CancellationToken cancellationToken)
+    {
+        const int endRecordLength = 22;
+        const int maximumCommentLength = ushort.MaxValue;
+        int tailLength = checked((int)Math.Min(stream.Length, endRecordLength + maximumCommentLength));
+        byte[] tail = new byte[tailLength];
+        stream.Position = stream.Length - tailLength;
+        stream.ReadExactly(tail);
+
+        int endRecordOffset = -1;
+        for (int offset = tail.Length - endRecordLength; offset >= 0; offset--)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (BinaryPrimitives.ReadUInt32LittleEndian(tail.AsSpan(offset)) == ZipEndOfCentralDirectorySignature &&
+                offset + endRecordLength + BinaryPrimitives.ReadUInt16LittleEndian(tail.AsSpan(offset + 20)) == tail.Length)
+            {
+                endRecordOffset = offset;
+                break;
+            }
+        }
+
+        if (endRecordOffset < 0)
+        {
+            throw new InvalidDataException();
+        }
+
+        ReadOnlySpan<byte> endRecord = tail.AsSpan(endRecordOffset, endRecordLength);
+        ushort diskNumber = BinaryPrimitives.ReadUInt16LittleEndian(endRecord[4..]);
+        ushort centralDirectoryDisk = BinaryPrimitives.ReadUInt16LittleEndian(endRecord[6..]);
+        ushort diskEntryCount = BinaryPrimitives.ReadUInt16LittleEndian(endRecord[8..]);
+        ushort entryCount = BinaryPrimitives.ReadUInt16LittleEndian(endRecord[10..]);
+        uint centralDirectorySize = BinaryPrimitives.ReadUInt32LittleEndian(endRecord[12..]);
+        uint centralDirectoryOffset = BinaryPrimitives.ReadUInt32LittleEndian(endRecord[16..]);
+        if (diskNumber != 0 ||
+            centralDirectoryDisk != 0 ||
+            diskEntryCount != entryCount ||
+            entryCount == ushort.MaxValue ||
+            centralDirectorySize == uint.MaxValue ||
+            centralDirectoryOffset == uint.MaxValue ||
+            (ulong)centralDirectoryOffset + centralDirectorySize > (ulong)stream.Length)
+        {
+            throw new NotSupportedException();
+        }
+
+        long centralDirectoryEnd = (long)centralDirectoryOffset + centralDirectorySize;
+        stream.Position = centralDirectoryOffset;
+        byte[] header = new byte[46];
+        for (int entryIndex = 0; entryIndex < entryCount; entryIndex++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            stream.ReadExactly(header);
+            if (BinaryPrimitives.ReadUInt32LittleEndian(header) != ZipCentralDirectoryHeaderSignature)
+            {
+                throw new InvalidDataException();
+            }
+
+            if ((BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(8)) & 1) != 0)
+            {
+                return true;
+            }
+
+            int variableLength = BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(28)) +
+                BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(30)) +
+                BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(32));
+            if (stream.Position + variableLength > centralDirectoryEnd)
+            {
+                throw new InvalidDataException();
+            }
+
+            stream.Seek(variableLength, SeekOrigin.Current);
+        }
+
+        if (stream.Position != centralDirectoryEnd)
+        {
+            throw new InvalidDataException();
+        }
+
+        return false;
+    }
 
     private static bool IsFileSystemFailure(Exception exception) =>
         exception is IOException or UnauthorizedAccessException or System.Security.SecurityException or

@@ -845,20 +845,38 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
                 return (null, ChangedFailure(finding.FullPath));
             }
 
-            cancellationToken.ThrowIfCancellationRequested();
-            DetectedFileType? detectedType = await _detectFileAsync(
-                finding.FullPath,
-                cancellationToken);
+            DetectedFileType? detectedType = null;
+            FileProbeResult? probeResult = null;
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                detectedType = await _detectFileAsync(
+                    finding.FullPath,
+                    cancellationToken);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                probeResult = new FileProbeResult(
+                    FileProbeStatus.Invalid,
+                    "HeaderReadFailure",
+                    null);
+            }
+
             cancellationToken.ThrowIfCancellationRequested();
             if (!IsCurrentBrokenFinding(initiatingSession, finding))
             {
                 return (null, ChangedFailure(finding.FullPath));
             }
 
-            FileProbeResult probeResult = await _fileFormatProbe.ProbeAsync(
-                finding.FullPath,
-                detectedType,
-                cancellationToken);
+            if (probeResult is null)
+            {
+                probeResult = await _fileFormatProbe.ProbeAsync(
+                    finding.FullPath,
+                    detectedType,
+                    cancellationToken);
+            }
+
             cancellationToken.ThrowIfCancellationRequested();
             if (!IsCurrentBrokenFinding(initiatingSession, finding))
             {

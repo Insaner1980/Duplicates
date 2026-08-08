@@ -47,6 +47,7 @@ public sealed class BrokenFileAnalyzer
 
             DetectedFileType? detectedType = null;
             FileProbeResult? probeResult = null;
+            bool providerFailed = false;
             try
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -78,12 +79,7 @@ public sealed class BrokenFileAnalyzer
                 catch (Exception ex) when (IsProviderFailure(ex))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    analyzerSkips.Add(new SkippedPath
-                    {
-                        Path = file.FullPath,
-                        Reason = "Could not validate file.",
-                    });
-                    continue;
+                    providerFailed = true;
                 }
             }
 
@@ -95,7 +91,18 @@ public sealed class BrokenFileAnalyzer
                 continue;
             }
 
-            if (probeResult.Status == FileProbeStatus.Valid)
+            if (providerFailed)
+            {
+                analyzerSkips.Add(new SkippedPath
+                {
+                    Path = file.FullPath,
+                    Reason = "Could not validate file.",
+                });
+                continue;
+            }
+
+            FileProbeResult validatedResult = probeResult!;
+            if (validatedResult.Status == FileProbeStatus.Valid)
             {
                 continue;
             }
@@ -103,7 +110,7 @@ public sealed class BrokenFileAnalyzer
             var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["Validator"] = GetValidator(detectedType),
-                ["ErrorType"] = probeResult.ErrorType ?? string.Empty,
+                ["ErrorType"] = validatedResult.ErrorType ?? string.Empty,
             };
             if (detectedType is not null)
             {
@@ -114,7 +121,7 @@ public sealed class BrokenFileAnalyzer
             {
                 FullPath = file.FullPath,
                 Kind = PathFindingKind.File,
-                Reason = probeResult.Status == FileProbeStatus.Invalid
+                Reason = validatedResult.Status == FileProbeStatus.Invalid
                     ? "Unreadable or malformed file."
                     : "Unsupported or protected.",
                 SizeBytes = file.SizeBytes,
