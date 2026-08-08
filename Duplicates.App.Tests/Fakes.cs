@@ -1,3 +1,5 @@
+using Duplicates.Engine.Analysis;
+using Duplicates.Engine.Analysis.Media;
 using Duplicates.Models;
 using Duplicates.Services;
 using Duplicates.ViewModels;
@@ -53,6 +55,10 @@ internal sealed class FakeFileActionService : IFileActionService
 
     public Func<FileActionTarget, string, CancellationToken, Task<FileOperationResult>>? RenameHandler { get; set; }
 
+    public Func<IReadOnlyList<FileActionTarget>, CancellationToken, Task<DeleteSummary>>? DeleteHandler { get; set; }
+
+    public Func<IReadOnlyList<FileActionTarget>, string, MoveCollisionBehavior, CancellationToken, Task<FileOperationSummary>>? MoveHandler { get; set; }
+
     public Action<IReadOnlyList<FileActionTarget>, IProgress<DeleteProgress>?>? OnDelete { get; set; }
 
     public Action<IReadOnlyList<FileActionTarget>, string, MoveCollisionBehavior, IProgress<FileOperationProgress>?>? OnMove { get; set; }
@@ -64,6 +70,11 @@ internal sealed class FakeFileActionService : IFileActionService
     {
         DeleteCallCount++;
         OnDelete?.Invoke(targets, progress);
+        if (DeleteHandler is not null)
+        {
+            return DeleteHandler(targets, cancellationToken);
+        }
+
         if (NextDeleteCancellation is not null)
         {
             throw NextDeleteCancellation;
@@ -81,6 +92,11 @@ internal sealed class FakeFileActionService : IFileActionService
     {
         MoveCallCount++;
         OnMove?.Invoke(targets, destinationFolder, collisionBehavior, progress);
+        if (MoveHandler is not null)
+        {
+            return MoveHandler(targets, destinationFolder, collisionBehavior, cancellationToken);
+        }
+
         if (NextMoveCancellation is not null)
         {
             throw NextMoveCancellation;
@@ -114,6 +130,23 @@ internal sealed class FakeFileActionService : IFileActionService
 
     public void RevealInExplorer(string path)
     {
+    }
+}
+
+internal sealed class FakeFileFormatProbe : IFileFormatProbe
+{
+    public Func<string, DetectedFileType?, CancellationToken, Task<FileProbeResult>> Handler { get; set; } =
+        (_, _, _) => Task.FromResult(new FileProbeResult(FileProbeStatus.Valid, null, null));
+
+    public List<(string Path, DetectedFileType? DetectedType)> Calls { get; } = [];
+
+    public Task<FileProbeResult> ProbeAsync(
+        string path,
+        DetectedFileType? detectedType,
+        CancellationToken cancellationToken)
+    {
+        Calls.Add((path, detectedType));
+        return Handler(path, detectedType, cancellationToken);
     }
 }
 

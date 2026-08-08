@@ -1,4 +1,5 @@
 using Duplicates.Engine.Analysis;
+using Duplicates.Engine.Analysis.Media;
 using Duplicates.Models;
 using Duplicates.Services;
 using Xunit.Sdk;
@@ -111,6 +112,41 @@ public sealed class AnalysisServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task BrokenFilesWithInjectedProbe_UsesInventoryAndIncludesTotalElapsed()
+    {
+        string path = Path.Combine(_root, "broken.png");
+        await File.WriteAllBytesAsync(path, [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+        string missingExclusion = Path.Combine(_root, "missing-exclusion");
+        var delay = TimeSpan.FromMilliseconds(80);
+        var progress = new DelayingProgress(delay);
+        var probe = new FakeFileFormatProbe
+        {
+            Handler = (_, detected, _) => Task.FromResult(
+                detected?.Name == "PNG"
+                    ? new FileProbeResult(FileProbeStatus.Invalid, "ImageDecodeFailure", null)
+                    : new FileProbeResult(FileProbeStatus.Valid, null, null)),
+        };
+
+        AnalysisResult result = await new AnalysisService(probe).RunAsync(
+            ToolKind.BrokenFiles,
+            new AnalysisScope
+            {
+                IncludedFolders = [_root],
+                ExcludedPaths = [missingExclusion],
+            },
+            new NoToolOptions(),
+            progress,
+            CancellationToken.None);
+
+        PathFinding finding = Assert.Single(result.Findings);
+        Assert.Equal(path, finding.FullPath);
+        Assert.Equal("Image", finding.Metadata["Validator"]);
+        Assert.Contains(result.SkippedPaths, skipped => skipped.Path == missingExclusion);
+        Assert.True(progress.Delayed);
+        Assert.True(result.Elapsed >= delay);
+    }
+
+    [Fact]
     public async Task InvalidLinksRejectsToolOptionsThatDoNotMatch()
     {
         var service = new AnalysisService();
@@ -126,16 +162,54 @@ public sealed class AnalysisServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task LaterNoOptionTool_RemainsUnsupported()
+    public async Task BrokenFilesWithoutProbe_FailsBeforeInventory()
     {
         var service = new AnalysisService();
+        var reports = new List<AnalysisProgress>();
 
         await Assert.ThrowsAsync<NotSupportedException>(() => service.RunAsync(
             ToolKind.BrokenFiles,
-            new AnalysisScope { IncludedFolders = [_root] },
+            new AnalysisScope { IncludedFolders = [Path.Combine(_root, "missing")] },
             new NoToolOptions(),
-            progress: null,
+            new RecordingProgress(reports),
             CancellationToken.None));
+
+        Assert.Empty(reports);
+    }
+
+    [Fact]
+    public async Task BrokenFilesRejectsMismatchedOptionsBeforeInventory()
+    {
+        var reports = new List<AnalysisProgress>();
+
+        ArgumentException exception = await Assert.ThrowsAsync<ArgumentException>(() =>
+            new AnalysisService(new FakeFileFormatProbe()).RunAsync(
+                ToolKind.BrokenFiles,
+                new AnalysisScope { IncludedFolders = [Path.Combine(_root, "missing")] },
+                new LargeFileToolOptions(1),
+                new RecordingProgress(reports),
+                CancellationToken.None));
+
+        Assert.Equal("toolOptions", exception.ParamName);
+        Assert.Empty(reports);
+    }
+
+    [Fact]
+    public void AppServices_ComposesOneProbeIntoAnalysisAndActionRevalidation()
+    {
+        var services = new AppServices();
+
+        Assert.IsType<WindowsFileFormatProbe>(services.FileFormatProbe);
+        Assert.Same(
+            services.FileFormatProbe,
+            typeof(AnalysisService)
+                .GetField("_fileFormatProbe", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .GetValue(services.AnalysisService));
+        Assert.Same(
+            services.FileFormatProbe,
+            typeof(Duplicates.ViewModels.AnalysisResultsViewModel)
+                .GetField("_fileFormatProbe", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .GetValue(services.AnalysisResultsViewModel));
     }
 
     private static void CreateFileSymbolicLinkOrSkip(string linkPath, string targetPath)
@@ -175,5 +249,10 @@ public sealed class AnalysisServiceTests : IDisposable
             Delayed = true;
             Thread.Sleep(delay);
         }
+    }
+
+    private sealed class RecordingProgress(List<AnalysisProgress> reports) : IProgress<AnalysisProgress>
+    {
+        public void Report(AnalysisProgress value) => reports.Add(value);
     }
 }

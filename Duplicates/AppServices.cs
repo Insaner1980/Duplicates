@@ -1,4 +1,6 @@
 using Duplicates.Engine;
+using Duplicates.Engine.Analysis.Analyzers;
+using Duplicates.Engine.Analysis.Media;
 using Duplicates.Services;
 using Duplicates.ViewModels;
 
@@ -12,7 +14,8 @@ public sealed class AppServices
         ThemeService = new ThemeService();
         ResultsStore = new ResultsStore();
         AnalysisSessionStore = new AnalysisSessionStore();
-        AnalysisService = new AnalysisService();
+        FileFormatProbe = new WindowsFileFormatProbe();
+        AnalysisService = new AnalysisService(FileFormatProbe);
         FileActionService = new FileActionService(SettingsService);
         ResultExportService = new ResultExportService();
         PathScopeViewModel = new PathScopeViewModel();
@@ -20,7 +23,12 @@ public sealed class AppServices
         ScanViewModel = new ScanViewModel(new DuplicateScanner(), SettingsService, ResultsStore, PathScopeViewModel);
         ResultsViewModel = new ResultsViewModel(ResultsStore, FileActionService, SettingsService, ResultExportService);
         AnalysisViewModel = new AnalysisViewModel(AnalysisService, AnalysisSessionStore, PathScopeViewModel);
-        AnalysisResultsViewModel = new AnalysisResultsViewModel(AnalysisSessionStore, FileActionService, ResultExportService);
+        AnalysisResultsViewModel = new AnalysisResultsViewModel(
+            AnalysisSessionStore,
+            FileActionService,
+            ResultExportService,
+            FileSignatureDetector.DetectFileAsync,
+            FileFormatProbe);
         SettingsViewModel = new SettingsViewModel(SettingsService);
     }
 
@@ -31,6 +39,8 @@ public sealed class AppServices
     public ResultsStore ResultsStore { get; }
 
     public AnalysisSessionStore AnalysisSessionStore { get; }
+
+    public IFileFormatProbe FileFormatProbe { get; }
 
     public IAnalysisService AnalysisService { get; }
 

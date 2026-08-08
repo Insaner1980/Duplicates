@@ -1,4 +1,6 @@
 using Duplicates.Engine.Analysis;
+using Duplicates.Engine.Analysis.Analyzers;
+using Duplicates.Engine.Analysis.Media;
 using Duplicates.Engine.Models;
 using Duplicates.Models;
 using Duplicates.Services;
@@ -1612,6 +1614,305 @@ public sealed class AnalysisResultsViewModelTests
         }
     }
 
+    [Fact]
+    public async Task BrokenFilesDelete_ReprobesExactFindingAndRemovesCanonicalSuccess()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            string path = await WritePngAsync(Path.Combine(root, "broken.png"));
+            PathFinding source = NewBrokenFinding(path, FileProbeStatus.Invalid, "ImageDecodeFailure", "PNG", "Image");
+            var probe = BrokenProbe(FileProbeStatus.Invalid, "ImageDecodeFailure");
+            var fileActions = new FakeFileActionService
+            {
+                NextSummary = new DeleteSummary(1, source.SizeBytes!.Value, [], [path]),
+            };
+            IReadOnlyList<FileActionTarget>? dispatched = null;
+            fileActions.OnDelete = (targets, _) => dispatched = targets;
+            var store = new AnalysisSessionStore();
+            var viewModel = NewBrokenResultsViewModel(store, fileActions, probe);
+            store.SetCompleted(ToolKind.BrokenFiles, new AnalysisScope(), new NoToolOptions(), NewResult([source]));
+            viewModel.Findings[0].IsSelected = true;
+
+            DeleteSummary summary = await viewModel.DeleteSelectedAsync(CancellationToken.None);
+
+            Assert.Equal(1, summary.DeletedCount);
+            FileActionTarget target = Assert.Single(dispatched!);
+            Assert.Equal(path, target.FullPath);
+            Assert.Equal(source.ModifiedUtc, target.ExpectedModifiedUtc);
+            Assert.Equal("PNG", Assert.Single(probe.Calls).DetectedType?.Name);
+            Assert.Empty(viewModel.Findings);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task BrokenFilesMove_ReprobesAndReconcilesCanonicalSuccess()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            string path = await WritePngAsync(Path.Combine(root, "broken.png"));
+            string destination = Directory.CreateDirectory(Path.Combine(root, "destination")).FullName;
+            PathFinding source = NewBrokenFinding(path, FileProbeStatus.Invalid, "ImageDecodeFailure", "PNG", "Image");
+            var probe = BrokenProbe(FileProbeStatus.Invalid, "ImageDecodeFailure");
+            var fileActions = new FakeFileActionService
+            {
+                NextMoveSummary = new FileOperationSummary(
+                    [new FileOperationResult(path, Path.Combine(destination, "broken.png"), null)],
+                    source.SizeBytes!.Value),
+            };
+            IReadOnlyList<FileActionTarget>? dispatched = null;
+            fileActions.OnMove = (targets, _, _, _) => dispatched = targets;
+            var store = new AnalysisSessionStore();
+            var viewModel = NewBrokenResultsViewModel(store, fileActions, probe);
+            store.SetCompleted(ToolKind.BrokenFiles, new AnalysisScope(), new NoToolOptions(), NewResult([source]));
+            viewModel.Findings[0].IsSelected = true;
+
+            FileOperationSummary summary = await viewModel.MoveSelectedAsync(
+                destination,
+                MoveCollisionBehavior.Skip,
+                CancellationToken.None);
+
+            Assert.True(Assert.Single(summary.Results).Succeeded);
+            Assert.Equal(source.ModifiedUtc, Assert.Single(dispatched!).ExpectedModifiedUtc);
+            Assert.Empty(viewModel.Findings);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task BrokenFilesDelete_RejectsRepairedStatusChangedAndStaleFindingsWithoutDispatch()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            string repaired = await WritePngAsync(Path.Combine(root, "repaired.png"));
+            string changedStatus = await WritePngAsync(Path.Combine(root, "changed-status.png"));
+            string stale = await WritePngAsync(Path.Combine(root, "stale.png"));
+            PathFinding repairedFinding = NewBrokenFinding(repaired, FileProbeStatus.Invalid, "ImageDecodeFailure", "PNG", "Image");
+            PathFinding statusFinding = NewBrokenFinding(changedStatus, FileProbeStatus.Invalid, "ImageDecodeFailure", "PNG", "Image");
+            PathFinding staleFinding = NewBrokenFinding(stale, FileProbeStatus.Invalid, "ImageDecodeFailure", "PNG", "Image");
+            File.SetLastWriteTimeUtc(stale, staleFinding.ModifiedUtc!.Value.AddSeconds(5));
+            var probe = new FakeFileFormatProbe
+            {
+                Handler = (path, _, _) => Task.FromResult(path == repaired
+                    ? new FileProbeResult(FileProbeStatus.Valid, null, null)
+                    : new FileProbeResult(FileProbeStatus.UnsupportedOrProtected, "CodecUnavailable", null)),
+            };
+            var fileActions = new FakeFileActionService();
+            var store = new AnalysisSessionStore();
+            var viewModel = NewBrokenResultsViewModel(store, fileActions, probe);
+            store.SetCompleted(
+                ToolKind.BrokenFiles,
+                new AnalysisScope(),
+                new NoToolOptions(),
+                NewResult([repairedFinding, statusFinding, staleFinding]));
+            foreach (PathFindingViewModel finding in viewModel.Findings)
+            {
+                finding.IsSelected = true;
+            }
+
+            DeleteSummary summary = await viewModel.DeleteSelectedAsync(CancellationToken.None);
+
+            Assert.Equal(0, fileActions.DeleteCallCount);
+            Assert.Equal(3, summary.Failures.Count);
+            Assert.All(summary.Failures, static failure => Assert.Equal("File changed since scan.", failure.Reason));
+            Assert.Equal(3, viewModel.SelectedFindings.Count);
+            Assert.Equal(3, viewModel.Findings.Count);
+            Assert.Equal(2, probe.Calls.Count);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task BrokenFilesDelete_SessionReplacementDuringProbeRejectsOldFindingAndKeepsReplacement()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            string path = await WritePngAsync(Path.Combine(root, "broken.png"));
+            PathFinding oldFinding = NewBrokenFinding(path, FileProbeStatus.Invalid, "ImageDecodeFailure", "PNG", "Image");
+            PathFinding replacement = NewBrokenFinding(path, FileProbeStatus.Invalid, "ImageDecodeFailure", "PNG", "Image");
+            var probeStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var continueProbe = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var probe = new FakeFileFormatProbe
+            {
+                Handler = async (_, _, cancellationToken) =>
+                {
+                    probeStarted.SetResult();
+                    await continueProbe.Task.WaitAsync(cancellationToken);
+                    return new FileProbeResult(FileProbeStatus.Invalid, "ImageDecodeFailure", null);
+                },
+            };
+            var fileActions = new FakeFileActionService();
+            var store = new AnalysisSessionStore();
+            var viewModel = NewBrokenResultsViewModel(store, fileActions, probe);
+            store.SetCompleted(ToolKind.BrokenFiles, new AnalysisScope(), new NoToolOptions(), NewResult([oldFinding]));
+            viewModel.Findings[0].IsSelected = true;
+
+            Task<DeleteSummary> deleting = viewModel.DeleteSelectedAsync(CancellationToken.None);
+            await probeStarted.Task;
+            store.SetCompleted(ToolKind.BrokenFiles, new AnalysisScope(), new NoToolOptions(), NewResult([replacement]));
+            continueProbe.SetResult();
+            DeleteSummary summary = await deleting;
+
+            Assert.Equal(0, fileActions.DeleteCallCount);
+            Assert.Equal("File changed since scan.", Assert.Single(summary.Failures).Reason);
+            Assert.Same(replacement, Assert.Single(viewModel.Findings).Source);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task BrokenFilesDelete_SessionReplacementDuringServiceAwaitDoesNotRemoveSamePathReplacement()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            string path = await WritePngAsync(Path.Combine(root, "broken.png"));
+            PathFinding oldFinding = NewBrokenFinding(path, FileProbeStatus.Invalid, "ImageDecodeFailure", "PNG", "Image");
+            PathFinding replacement = NewBrokenFinding(path, FileProbeStatus.Invalid, "ImageDecodeFailure", "PNG", "Image");
+            var deleteStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var continueDelete = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var fileActions = new FakeFileActionService
+            {
+                DeleteHandler = async (targets, cancellationToken) =>
+                {
+                    deleteStarted.SetResult();
+                    await continueDelete.Task.WaitAsync(cancellationToken);
+                    FileActionTarget target = Assert.Single(targets);
+                    return new DeleteSummary(1, target.SizeBytes, [], [target.FullPath]);
+                },
+            };
+            var store = new AnalysisSessionStore();
+            var viewModel = NewBrokenResultsViewModel(
+                store,
+                fileActions,
+                BrokenProbe(FileProbeStatus.Invalid, "ImageDecodeFailure"));
+            store.SetCompleted(ToolKind.BrokenFiles, new AnalysisScope(), new NoToolOptions(), NewResult([oldFinding]));
+            viewModel.Findings[0].IsSelected = true;
+
+            Task<DeleteSummary> deleting = viewModel.DeleteSelectedAsync(CancellationToken.None);
+            await deleteStarted.Task;
+            store.SetCompleted(ToolKind.BrokenFiles, new AnalysisScope(), new NoToolOptions(), NewResult([replacement]));
+            continueDelete.SetResult();
+            DeleteSummary summary = await deleting;
+
+            Assert.Equal(1, summary.DeletedCount);
+            Assert.Same(replacement, Assert.Single(viewModel.Findings).Source);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task BrokenFilesDelete_ServiceFailureKeepsCanonicalSelectionAndRenameFailsClosed()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            string path = await WritePngAsync(Path.Combine(root, "broken.png"));
+            PathFinding source = NewBrokenFinding(path, FileProbeStatus.Invalid, "ImageDecodeFailure", "PNG", "Image");
+            var fileActions = new FakeFileActionService
+            {
+                NextSummary = new DeleteSummary(
+                    0,
+                    0,
+                    [new FileActionFailure(path, "boundary rejection")],
+                    []),
+            };
+            var store = new AnalysisSessionStore();
+            var viewModel = NewBrokenResultsViewModel(
+                store,
+                fileActions,
+                BrokenProbe(FileProbeStatus.Invalid, "ImageDecodeFailure"));
+            store.SetCompleted(ToolKind.BrokenFiles, new AnalysisScope(), new NoToolOptions(), NewResult([source]));
+            PathFindingViewModel finding = Assert.Single(viewModel.Findings);
+            finding.IsSelected = true;
+
+            DeleteSummary summary = await viewModel.DeleteSelectedAsync(CancellationToken.None);
+
+            Assert.Single(summary.Failures);
+            Assert.Single(viewModel.Findings);
+            Assert.True(finding.IsSelected);
+            Assert.False(viewModel.CanRenameSelection);
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                viewModel.RenameFindingAsync(finding, "renamed.png", CancellationToken.None));
+            Assert.Equal(0, fileActions.RenameCallCount);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task BrokenFilesDelete_TypedCancellationReconcilesCompletedTargetOnly()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            string first = await WritePngAsync(Path.Combine(root, "first.png"));
+            string second = await WritePngAsync(Path.Combine(root, "second.png"));
+            PathFinding firstFinding = NewBrokenFinding(first, FileProbeStatus.Invalid, "ImageDecodeFailure", "PNG", "Image");
+            PathFinding secondFinding = NewBrokenFinding(second, FileProbeStatus.Invalid, "ImageDecodeFailure", "PNG", "Image");
+            using var cancellationSource = new CancellationTokenSource();
+            var fileActions = new FakeFileActionService
+            {
+                NextDeleteCancellation = new DeleteOperationCanceledException(
+                    new DeleteSummary(1, firstFinding.SizeBytes!.Value, [], [first]),
+                    cancellationSource.Token),
+            };
+            var store = new AnalysisSessionStore();
+            var viewModel = NewBrokenResultsViewModel(
+                store,
+                fileActions,
+                BrokenProbe(FileProbeStatus.Invalid, "ImageDecodeFailure"));
+            store.SetCompleted(
+                ToolKind.BrokenFiles,
+                new AnalysisScope(),
+                new NoToolOptions(),
+                NewResult([firstFinding, secondFinding]));
+            foreach (PathFindingViewModel finding in viewModel.Findings)
+            {
+                finding.IsSelected = true;
+            }
+
+            await Assert.ThrowsAsync<DeleteOperationCanceledException>(() =>
+                viewModel.DeleteSelectedAsync(CancellationToken.None));
+
+            Assert.DoesNotContain(viewModel.Findings, finding => finding.FullPath == first);
+            Assert.Contains(viewModel.Findings, finding => finding.FullPath == second && finding.IsSelected);
+            Assert.False(viewModel.IsActionRunning);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     private static AnalysisResult NewResult(
         IReadOnlyList<PathFinding>? findings = null,
         IReadOnlyList<SimilarityGroup>? groups = null,
@@ -1622,6 +1923,48 @@ public sealed class AnalysisResultsViewModelTests
             SkippedPaths = skippedPaths ?? [],
             Elapsed = TimeSpan.FromSeconds(2),
         };
+
+    private static AnalysisResultsViewModel NewBrokenResultsViewModel(
+        AnalysisSessionStore store,
+        IFileActionService fileActions,
+        IFileFormatProbe probe) => new(
+            store,
+            fileActions,
+            null,
+            FileSignatureDetector.DetectFileAsync,
+            probe);
+
+    private static FakeFileFormatProbe BrokenProbe(FileProbeStatus status, string? errorType) => new()
+    {
+        Handler = (_, _, _) => Task.FromResult(new FileProbeResult(status, errorType, null)),
+    };
+
+    private static PathFinding NewBrokenFinding(
+        string path,
+        FileProbeStatus status,
+        string errorType,
+        string detectedType,
+        string validator)
+    {
+        var file = new FileInfo(path);
+        return new PathFinding
+        {
+            FullPath = path,
+            Kind = PathFindingKind.File,
+            Reason = status == FileProbeStatus.Invalid
+                ? "Unreadable or malformed file."
+                : "Unsupported or protected.",
+            SizeBytes = file.Length,
+            CreatedUtc = file.CreationTimeUtc,
+            ModifiedUtc = file.LastWriteTimeUtc,
+            Metadata = new Dictionary<string, string>
+            {
+                ["Validator"] = validator,
+                ["ErrorType"] = errorType,
+                ["DetectedType"] = detectedType,
+            },
+        };
+    }
 
     private static PathFinding NewFinding(string path, long size, DateTime? modifiedUtc = null) => new()
     {

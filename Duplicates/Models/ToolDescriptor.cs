@@ -18,7 +18,7 @@ public sealed record ToolDescriptor(
         ToolKind.EmptyFiles => new(kind, "Empty files", "Find zero-byte files.", "Clean storage", "\uE8A5"),
         ToolKind.TemporaryFiles => new(kind, "Temporary files", "Find old temporary files.", "Clean storage", "\uE823"),
         ToolKind.InvalidLinks => new(kind, "Invalid links", "Find broken symbolic links and junctions.", "Inspect and repair", "\uE71B"),
-        ToolKind.BrokenFiles => new(kind, "Broken files", "Find unreadable or malformed files.", "Inspect and repair", "\uE7BA"),
+        ToolKind.BrokenFiles => new(kind, "Broken files", "Checks readability and validates Windows-supported images, audio, video, and ZIP containers.", "Inspect and repair", "\uE7BA"),
         ToolKind.BadExtensions => new(kind, "Bad extensions", "Find extensions that do not match file contents.", "Inspect and repair", "\uE8C1"),
         ToolKind.BadNames => new(kind, "Bad names", "Find file names that are unsafe on Windows.", "Inspect and repair", "\uE8AC"),
         ToolKind.ExifRemover => new(kind, "EXIF remover", "Remove private metadata from images.", "Inspect and repair", "\uE722"),

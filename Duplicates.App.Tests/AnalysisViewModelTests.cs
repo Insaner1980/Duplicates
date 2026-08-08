@@ -127,6 +127,32 @@ public sealed class AnalysisViewModelTests
     }
 
     [Fact]
+    public async Task BrokenFilesShowsExactCoverageAndRunsWithoutOptions()
+    {
+        ToolOptions? receivedOptions = null;
+        var service = new FakeAnalysisService
+        {
+            Run = (_, _, options, _, _) =>
+            {
+                receivedOptions = options;
+                return Task.FromResult(NewResult());
+            },
+        };
+        var viewModel = new AnalysisViewModel(service, new AnalysisSessionStore(), NewScope());
+
+        viewModel.SelectTool(ToolKind.BrokenFiles);
+
+        Assert.Equal(
+            "Checks readability and validates Windows-supported images, audio, video, and ZIP containers.",
+            viewModel.Subtitle);
+        Assert.Equal(Visibility.Collapsed, viewModel.OptionsVisibility);
+
+        await viewModel.StartAnalysisCommand.ExecuteAsync(null);
+
+        Assert.IsType<NoToolOptions>(receivedOptions);
+    }
+
+    [Fact]
     public async Task OnlyOneAnalysisCanRunAtATime()
     {
         var release = new TaskCompletionSource<AnalysisResult>(TaskCreationOptions.RunContinuationsAsynchronously);

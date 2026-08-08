@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Duplicates.Engine.Analysis;
 using Duplicates.Engine.Analysis.Analyzers;
+using Duplicates.Engine.Analysis.Media;
 using Duplicates.Models;
 
 namespace Duplicates.Services;
@@ -17,6 +18,18 @@ public interface IAnalysisService
 
 public sealed class AnalysisService : IAnalysisService
 {
+    private readonly IFileFormatProbe? _fileFormatProbe;
+
+    public AnalysisService()
+        : this(null)
+    {
+    }
+
+    public AnalysisService(IFileFormatProbe? fileFormatProbe)
+    {
+        _fileFormatProbe = fileFormatProbe;
+    }
+
     public async Task<AnalysisResult> RunAsync(
         ToolKind tool,
         AnalysisScope scope,
@@ -42,6 +55,12 @@ public sealed class AnalysisService : IAnalysisService
             throw new ArgumentException($"Options do not match {tool}.", nameof(toolOptions));
         }
 
+        if (tool == ToolKind.BrokenFiles && _fileFormatProbe is null)
+        {
+            throw new NotSupportedException(
+                $"The {ToolDescriptor.For(tool).Title} analyzer is not installed yet.");
+        }
+
         var stopwatch = Stopwatch.StartNew();
         FileInventory inventory = await Task.Run(
             () => new FileInventoryBuilder().Build(scope, progress, cancellationToken),
@@ -59,6 +78,9 @@ public sealed class AnalysisService : IAnalysisService
                 inventory,
                 cancellationToken).ConfigureAwait(false),
             (ToolKind.InvalidLinks, NoToolOptions) => await new InvalidLinkAnalyzer().AnalyzeAsync(
+                inventory,
+                cancellationToken).ConfigureAwait(false),
+            (ToolKind.BrokenFiles, NoToolOptions) => await new BrokenFileAnalyzer(_fileFormatProbe!).AnalyzeAsync(
                 inventory,
                 cancellationToken).ConfigureAwait(false),
             (ToolKind.BadExtensions, NoToolOptions) => await new BadExtensionAnalyzer().AnalyzeAsync(

@@ -731,6 +731,45 @@ public sealed class FileActionServiceContractTests
         Assert.Equal([destination], Directory.GetFiles(fixture.RootPath));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DeleteAndMove_ExpectedModifiedUtcRejectsBoundaryRace(bool move)
+    {
+        using var fixture = new TemporaryDirectory();
+        string path = fixture.WriteFile("changed.bin", [1, 2, 3]);
+        DateTime expectedModifiedUtc = File.GetLastWriteTimeUtc(path);
+        File.SetLastWriteTimeUtc(path, expectedModifiedUtc.AddSeconds(5));
+        var target = new FileActionTarget(
+            path,
+            3,
+            FileActionTargetKind.File,
+            ExpectedModifiedUtc: expectedModifiedUtc);
+        FileActionService service = CreateService(DeletionMode.Permanent);
+
+        FileActionFailure failure;
+        if (move)
+        {
+            string destination = fixture.CreateDirectory("destination");
+            FileOperationSummary summary = await service.MoveAsync(
+                [target],
+                destination,
+                MoveCollisionBehavior.Skip,
+                null,
+                CancellationToken.None);
+            failure = Assert.IsType<FileActionFailure>(Assert.Single(summary.Results).Failure);
+            Assert.False(File.Exists(Path.Combine(destination, "changed.bin")));
+        }
+        else
+        {
+            DeleteSummary summary = await service.DeleteAsync([target], null, CancellationToken.None);
+            failure = Assert.Single(summary.Failures);
+        }
+
+        Assert.Equal(path, failure.Path);
+        Assert.True(File.Exists(path));
+    }
+
     private static ResultExportItem NewExportItem(
         string path,
         string groupId,

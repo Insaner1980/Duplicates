@@ -553,7 +553,6 @@ public sealed class ResultsViewModelTests
 
     [Theory]
     [InlineData(ToolKind.TemporaryFiles)]
-    [InlineData(ToolKind.BrokenFiles)]
     public async Task AnalysisMutations_UnsupportedToolsFailClosedWithoutCallingFileActions(ToolKind tool)
     {
         string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");

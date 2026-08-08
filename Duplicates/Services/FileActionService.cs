@@ -130,7 +130,6 @@ public sealed class FileActionService : IFileActionService
                     FileActionFailure? failure = null;
                     try
                     {
-                        RevalidateTarget(target);
                         string leafName = Path.GetFileName(Path.TrimEndingDirectorySeparator(target.FullPath));
                         bool collision = existingNames.Contains(leafName);
                         if (collision && collisionBehavior != MoveCollisionBehavior.KeepBoth)
@@ -141,6 +140,7 @@ public sealed class FileActionService : IFileActionService
                         finalPath = collision
                             ? GetKeepBothPath(destination, leafName, target.Kind, existingNames)
                             : Path.Combine(destination, leafName);
+                        RevalidateTarget(target);
                         MoveTarget(target, finalPath);
                         existingNames.Add(Path.GetFileName(finalPath));
                         succeededBytes += target.SizeBytes;
@@ -361,9 +361,16 @@ public sealed class FileActionService : IFileActionService
             }
         }
 
-        if (target.Kind == FileActionTargetKind.File && new FileInfo(target.FullPath).Length != target.SizeBytes)
+        if (target.Kind == FileActionTargetKind.File)
         {
-            throw new IOException("The source no longer matches the scan result.");
+            var file = new FileInfo(target.FullPath);
+            file.Refresh();
+            if (file.Length != target.SizeBytes ||
+                target.ExpectedModifiedUtc is DateTime expectedModifiedUtc &&
+                file.LastWriteTimeUtc != expectedModifiedUtc)
+            {
+                throw new IOException("The source no longer matches the scan result.");
+            }
         }
 
         if (target.Kind == FileActionTargetKind.Directory && Directory.EnumerateFileSystemEntries(target.FullPath).Any())

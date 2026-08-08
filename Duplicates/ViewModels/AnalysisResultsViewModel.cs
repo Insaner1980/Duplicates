@@ -5,6 +5,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Duplicates.Engine.Analysis;
 using Duplicates.Engine.Analysis.Analyzers;
+using Duplicates.Engine.Analysis.Media;
 using Duplicates.Engine.Models;
 using Duplicates.Models;
 using Duplicates.Services;
@@ -18,11 +19,12 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
     private readonly IFileActionService? _fileActionService;
     private readonly IResultExportService? _resultExportService;
     private readonly Func<string, CancellationToken, ValueTask<DetectedFileType?>> _detectFileAsync;
+    private readonly IFileFormatProbe? _fileFormatProbe;
     private readonly List<PathFindingViewModel> _allFindings = [];
     private readonly List<SimilarityGroupViewModel> _allGroups = [];
 
     public AnalysisResultsViewModel(AnalysisSessionStore sessionStore)
-        : this(sessionStore, null, null)
+        : this(sessionStore, null, null, FileSignatureDetector.DetectFileAsync, null)
     {
     }
 
@@ -30,7 +32,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         AnalysisSessionStore sessionStore,
         IFileActionService? fileActionService,
         IResultExportService? resultExportService)
-        : this(sessionStore, fileActionService, resultExportService, FileSignatureDetector.DetectFileAsync)
+        : this(sessionStore, fileActionService, resultExportService, FileSignatureDetector.DetectFileAsync, null)
     {
     }
 
@@ -39,11 +41,22 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         IFileActionService? fileActionService,
         IResultExportService? resultExportService,
         Func<string, CancellationToken, ValueTask<DetectedFileType?>> detectFileAsync)
+        : this(sessionStore, fileActionService, resultExportService, detectFileAsync, null)
+    {
+    }
+
+    public AnalysisResultsViewModel(
+        AnalysisSessionStore sessionStore,
+        IFileActionService? fileActionService,
+        IResultExportService? resultExportService,
+        Func<string, CancellationToken, ValueTask<DetectedFileType?>> detectFileAsync,
+        IFileFormatProbe? fileFormatProbe)
     {
         _sessionStore = sessionStore;
         _fileActionService = fileActionService;
         _resultExportService = resultExportService;
         _detectFileAsync = detectFileAsync;
+        _fileFormatProbe = fileFormatProbe;
         _sessionStore.ResultChanged += ResultsChanged;
     }
 
@@ -207,9 +220,13 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
     public async Task<DeleteSummary> DeleteSelectedAsync(CancellationToken cancellationToken)
     {
         EnsureSelectedMutationIsSupported();
+        AnalysisSession? initiatingSession = _sessionStore.CurrentSession;
         IFileActionService fileActions = _fileActionService ??
             throw new InvalidOperationException("File actions are not configured.");
-        SelectionTargets selection = BuildValidatedSelection();
+        SelectionTargets selection = await BuildValidatedSelectionAsync(
+            initiatingSession,
+            cancellationToken);
+        selection = RejectBrokenTargetsAfterSessionChange(initiatingSession, selection);
         if (selection.SelectedCount == 0)
         {
             throw new InvalidOperationException("Select at least one result first.");
@@ -228,11 +245,11 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
             }
             catch (DeleteOperationCanceledException ex)
             {
-                ApplyDeleteSummary(ex.Summary, selection, wasCancelled: true);
+                ApplyDeleteSummary(ex.Summary, selection, initiatingSession, wasCancelled: true);
                 throw;
             }
 
-            return ApplyDeleteSummary(serviceSummary, selection, wasCancelled: false);
+            return ApplyDeleteSummary(serviceSummary, selection, initiatingSession, wasCancelled: false);
         }
         finally
         {
@@ -246,9 +263,13 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         CancellationToken cancellationToken)
     {
         EnsureSelectedMutationIsSupported();
+        AnalysisSession? initiatingSession = _sessionStore.CurrentSession;
         IFileActionService fileActions = _fileActionService ??
             throw new InvalidOperationException("File actions are not configured.");
-        SelectionTargets selection = BuildValidatedSelection();
+        SelectionTargets selection = await BuildValidatedSelectionAsync(
+            initiatingSession,
+            cancellationToken);
+        selection = RejectBrokenTargetsAfterSessionChange(initiatingSession, selection);
         if (selection.SelectedCount == 0)
         {
             throw new InvalidOperationException("Select at least one result first.");
@@ -272,11 +293,11 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
             }
             catch (FileOperationCanceledException ex)
             {
-                ApplyMoveSummary(ex.Summary, selection.Failures, wasCancelled: true);
+                ApplyMoveSummary(ex.Summary, selection.Failures, initiatingSession, wasCancelled: true);
                 throw;
             }
 
-            return ApplyMoveSummary(serviceSummary, selection.Failures, wasCancelled: false);
+            return ApplyMoveSummary(serviceSummary, selection.Failures, initiatingSession, wasCancelled: false);
         }
         finally
         {
@@ -625,11 +646,12 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         { Tool: ToolKind.EmptyFiles or ToolKind.EmptyFolders or ToolKind.BigFiles } => true,
         { Tool: ToolKind.TemporaryFiles, ToolOptions: TemporaryFileToolOptions } => true,
         { Tool: ToolKind.InvalidLinks, ToolOptions: NoToolOptions } => true,
+        { Tool: ToolKind.BrokenFiles, ToolOptions: NoToolOptions } => true,
         _ => false,
     };
 
     private static bool SupportsRename(AnalysisSession? session) =>
-        SupportsBulkMutation(session) ||
+        (SupportsBulkMutation(session) && session?.Tool != ToolKind.BrokenFiles) ||
         session is { Tool: ToolKind.BadExtensions or ToolKind.BadNames, ToolOptions: NoToolOptions };
 
     private static bool SupportsRenameDialog(AnalysisSession? session) =>
@@ -646,6 +668,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
     private FileOperationSummary ApplyMoveSummary(
         FileOperationSummary serviceSummary,
         IReadOnlyList<FileActionFailure> localFailures,
+        AnalysisSession? initiatingSession,
         bool wasCancelled)
     {
         FileOperationResult[] localResults = localFailures
@@ -656,7 +679,10 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
             .Where(static result => result.Succeeded)
             .Select(static result => result.SourcePath)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        RemoveSuccessfulPaths(successfulPaths);
+        if (ReferenceEquals(_sessionStore.CurrentSession, initiatingSession))
+        {
+            RemoveSuccessfulPaths(successfulPaths);
+        }
         int succeeded = results.Count(static result => result.Succeeded);
         int failed = results.Length - succeeded;
         ActionStatusMessage = wasCancelled
@@ -670,6 +696,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
     private DeleteSummary ApplyDeleteSummary(
         DeleteSummary serviceSummary,
         SelectionTargets selection,
+        AnalysisSession? initiatingSession,
         bool wasCancelled)
     {
         FileActionFailure[] failures = selection.Failures.Concat(serviceSummary.Failures).ToArray();
@@ -678,7 +705,10 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
                 string.Equals(failure.Path, target.FullPath, StringComparison.OrdinalIgnoreCase)))
             .Select(static target => target.FullPath);
         HashSet<string> successfulPathSet = successfulPaths.ToHashSet(StringComparer.OrdinalIgnoreCase);
-        RemoveSuccessfulPaths(successfulPathSet);
+        if (ReferenceEquals(_sessionStore.CurrentSession, initiatingSession))
+        {
+            RemoveSuccessfulPaths(successfulPathSet);
+        }
         ActionStatusMessage = wasCancelled
             ? $"Delete cancelled after {serviceSummary.DeletedCount:N0} " +
                 (serviceSummary.DeletedCount == 1 ? "item deleted." : "items deleted.")
@@ -692,6 +722,56 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
             serviceSummary.DeletedBytes,
             failures,
             successfulPathSet.ToArray());
+    }
+
+    private async Task<SelectionTargets> BuildValidatedSelectionAsync(
+        AnalysisSession? initiatingSession,
+        CancellationToken cancellationToken)
+    {
+        if (initiatingSession is not { Tool: ToolKind.BrokenFiles, ToolOptions: NoToolOptions })
+        {
+            return BuildValidatedSelection();
+        }
+
+        IReadOnlyList<PathFindingViewModel> selectedFindings = SelectedFindings;
+        var targets = new List<FileActionTarget>(selectedFindings.Count);
+        var failures = new List<FileActionFailure>();
+        foreach (PathFindingViewModel finding in selectedFindings)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            (FileActionTarget? target, FileActionFailure? failure) = await TryMapBrokenFileAsync(
+                finding,
+                initiatingSession,
+                cancellationToken);
+            if (target is not null)
+            {
+                targets.Add(target);
+            }
+            else
+            {
+                failures.Add(failure!);
+            }
+        }
+
+        return new SelectionTargets(targets, failures, selectedFindings.Count);
+    }
+
+    private SelectionTargets RejectBrokenTargetsAfterSessionChange(
+        AnalysisSession? initiatingSession,
+        SelectionTargets selection)
+    {
+        if (initiatingSession is not { Tool: ToolKind.BrokenFiles, ToolOptions: NoToolOptions } ||
+            ReferenceEquals(_sessionStore.CurrentSession, initiatingSession))
+        {
+            return selection;
+        }
+
+        FileActionFailure[] failures =
+        [
+            .. selection.Failures,
+            .. selection.Targets.Select(static target => ChangedFailure(target.FullPath)),
+        ];
+        return new SelectionTargets([], failures, selection.SelectedCount);
     }
 
     private SelectionTargets BuildValidatedSelection()
@@ -734,6 +814,129 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
 
         return new SelectionTargets(targets, failures, selectedCount);
     }
+
+    private async ValueTask<(FileActionTarget? Target, FileActionFailure? Failure)> TryMapBrokenFileAsync(
+        PathFindingViewModel finding,
+        AnalysisSession initiatingSession,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (!IsCurrentBrokenFinding(initiatingSession, finding) ||
+                _fileFormatProbe is null ||
+                finding.Source.Kind != PathFindingKind.File ||
+                finding.Source.SizeBytes is not long expectedSize ||
+                finding.Source.ModifiedUtc is not DateTime expectedModifiedUtc ||
+                !TryGetExactMetadata(finding.Source.Metadata, "Validator", out string? expectedValidator) ||
+                !TryGetExactMetadata(finding.Source.Metadata, "ErrorType", out string? expectedErrorType) ||
+                !TryGetExpectedProbeStatus(finding.Source.Reason, out FileProbeStatus expectedStatus))
+            {
+                return (null, ChangedFailure(finding.FullPath));
+            }
+
+            FileAttributes beforeAttributes = File.GetAttributes(finding.FullPath);
+            var before = new FileInfo(finding.FullPath);
+            before.Refresh();
+            if (beforeAttributes.HasFlag(FileAttributes.Directory) ||
+                beforeAttributes.HasFlag(FileAttributes.ReparsePoint) ||
+                before.Length != expectedSize ||
+                before.LastWriteTimeUtc != expectedModifiedUtc)
+            {
+                return (null, ChangedFailure(finding.FullPath));
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            DetectedFileType? detectedType = await _detectFileAsync(
+                finding.FullPath,
+                cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!IsCurrentBrokenFinding(initiatingSession, finding))
+            {
+                return (null, ChangedFailure(finding.FullPath));
+            }
+
+            FileProbeResult probeResult = await _fileFormatProbe.ProbeAsync(
+                finding.FullPath,
+                detectedType,
+                cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!IsCurrentBrokenFinding(initiatingSession, finding))
+            {
+                return (null, ChangedFailure(finding.FullPath));
+            }
+
+            FileAttributes afterAttributes = File.GetAttributes(finding.FullPath);
+            var after = new FileInfo(finding.FullPath);
+            after.Refresh();
+            bool hasExpectedDetectedType = TryGetExactMetadata(
+                finding.Source.Metadata,
+                "DetectedType",
+                out string? expectedDetectedType);
+            bool detectedTypeMatches = detectedType is null
+                ? !hasExpectedDetectedType
+                : hasExpectedDetectedType && string.Equals(
+                    detectedType.Name,
+                    expectedDetectedType,
+                    StringComparison.Ordinal);
+            if (afterAttributes.HasFlag(FileAttributes.Directory) ||
+                afterAttributes.HasFlag(FileAttributes.ReparsePoint) ||
+                after.Length != expectedSize ||
+                after.LastWriteTimeUtc != expectedModifiedUtc ||
+                probeResult.Status != expectedStatus ||
+                !string.Equals(probeResult.ErrorType, expectedErrorType, StringComparison.Ordinal) ||
+                !string.Equals(GetBrokenValidator(detectedType), expectedValidator, StringComparison.Ordinal) ||
+                !detectedTypeMatches)
+            {
+                return (null, ChangedFailure(finding.FullPath));
+            }
+
+            return (
+                new FileActionTarget(
+                    finding.FullPath,
+                    expectedSize,
+                    FileActionTargetKind.File,
+                    ExpectedModifiedUtc: expectedModifiedUtc),
+                null);
+        }
+        catch (Exception ex) when (IsFileSystemFailure(ex))
+        {
+            return (null, ChangedFailure(finding.FullPath));
+        }
+    }
+
+    private bool IsCurrentBrokenFinding(
+        AnalysisSession initiatingSession,
+        PathFindingViewModel finding) =>
+        initiatingSession is { Tool: ToolKind.BrokenFiles, ToolOptions: NoToolOptions } &&
+        ReferenceEquals(_sessionStore.CurrentSession, initiatingSession) &&
+        _allFindings.Contains(finding);
+
+    private static bool TryGetExpectedProbeStatus(string reason, out FileProbeStatus status)
+    {
+        if (string.Equals(reason, "Unreadable or malformed file.", StringComparison.Ordinal))
+        {
+            status = FileProbeStatus.Invalid;
+            return true;
+        }
+
+        if (string.Equals(reason, "Unsupported or protected.", StringComparison.Ordinal))
+        {
+            status = FileProbeStatus.UnsupportedOrProtected;
+            return true;
+        }
+
+        status = default;
+        return false;
+    }
+
+    private static string GetBrokenValidator(DetectedFileType? detectedType) => detectedType?.Name switch
+    {
+        "JPEG" or "PNG" or "GIF" or "BMP" or "TIFF" or "WebP" => "Image",
+        "MP3" or "FLAC" or "WAV" or "Ogg" or "MP4" or "QuickTime" or "ISO BMFF" or
+            "WebM" or "Matroska" or "EBML" or "AVI" => "Media",
+        "ZIP" => "Zip",
+        _ => "Header",
+    };
 
     private bool TryMapFinding(
         PathFindingViewModel finding,

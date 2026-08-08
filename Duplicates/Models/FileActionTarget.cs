@@ -10,7 +10,8 @@ public sealed record FileActionTarget(
     long SizeBytes,
     FileActionTargetKind Kind,
     string? ExpectedInvalidLinkReason = null,
-    BadExtensionContentConstraint? ExpectedBadExtensionContent = null);
+    BadExtensionContentConstraint? ExpectedBadExtensionContent = null,
+    DateTime? ExpectedModifiedUtc = null);
 
 public sealed record FileOperationResult(
     string SourcePath,
