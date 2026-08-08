@@ -828,6 +828,269 @@ public sealed class AnalysisResultsViewModelTests
     }
 
     [Fact]
+    public async Task BadExtensionsDeleteAndMove_FailClosedWithoutServiceDispatch()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string path = await WritePngAsync(Path.Combine(root, "photo.txt"));
+
+        try
+        {
+            var store = new AnalysisSessionStore();
+            var fileActions = new FakeFileActionService();
+            var viewModel = new AnalysisResultsViewModel(store, fileActions, new FakeResultExportService());
+            store.SetCompleted(
+                ToolKind.BadExtensions,
+                new AnalysisScope { IncludedFolders = [root] },
+                new NoToolOptions(),
+                NewResult([NewBadExtensionFinding(path)]));
+            PathFindingViewModel finding = Assert.Single(viewModel.Findings);
+            finding.IsSelected = true;
+
+            Assert.False(viewModel.CanActOnSelection);
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                viewModel.DeleteSelectedAsync(CancellationToken.None));
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                viewModel.MoveSelectedAsync(root, MoveCollisionBehavior.Skip, CancellationToken.None));
+            Assert.Equal(0, fileActions.DeleteCallCount);
+            Assert.Equal(0, fileActions.MoveCallCount);
+            Assert.True(finding.IsSelected);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task BadExtensionsRename_RevalidatesAndDispatchesRecommendedNameOnly()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string path = await WritePngAsync(Path.Combine(root, "photo.txt"));
+
+        try
+        {
+            var store = new AnalysisSessionStore();
+            var fileActions = new FakeFileActionService();
+            var viewModel = new AnalysisResultsViewModel(store, fileActions, new FakeResultExportService());
+            store.SetCompleted(
+                ToolKind.BadExtensions,
+                new AnalysisScope { IncludedFolders = [root] },
+                new NoToolOptions(),
+                NewResult([NewBadExtensionFinding(path)]));
+            PathFindingViewModel finding = Assert.Single(viewModel.Findings);
+
+            FileOperationResult result = await viewModel.RenameFindingAsync(
+                finding,
+                "photo.png",
+                CancellationToken.None);
+
+            Assert.True(result.Succeeded);
+            Assert.Equal(1, fileActions.RenameCallCount);
+            Assert.Equal(path, fileActions.LastRenameTarget?.FullPath);
+            Assert.Equal(FileActionTargetKind.File, fileActions.LastRenameTarget?.Kind);
+            Assert.Equal(new FileInfo(path).Length, fileActions.LastRenameTarget?.SizeBytes);
+            Assert.Equal("photo.png", fileActions.LastRenameName);
+            Assert.Empty(viewModel.Findings);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task BadExtensionsRename_RejectsStaleOrMismatchedFindingWithoutDispatch()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+
+        try
+        {
+            string changedLength = await WritePngAsync(Path.Combine(root, "changed-length.txt"));
+            PathFinding changedLengthFinding = NewBadExtensionFinding(changedLength);
+            await File.AppendAllBytesAsync(changedLength, [0x00]);
+
+            string changedTime = await WritePngAsync(Path.Combine(root, "changed-time.txt"));
+            PathFinding changedTimeFinding = NewBadExtensionFinding(changedTime);
+            File.SetLastWriteTimeUtc(changedTime, changedTimeFinding.ModifiedUtc!.Value.AddSeconds(2));
+
+            string changedSignature = await WritePngAsync(Path.Combine(root, "changed-signature.txt"));
+            PathFinding changedSignatureFinding = NewBadExtensionFinding(changedSignature);
+            await File.WriteAllBytesAsync(changedSignature, [0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80]);
+            File.SetLastWriteTimeUtc(changedSignature, changedSignatureFinding.ModifiedUtc!.Value);
+
+            string changedType = await WritePngAsync(Path.Combine(root, "changed-type.txt"));
+            PathFinding changedTypeFinding = NewBadExtensionFinding(changedType) with
+            {
+                Metadata = new Dictionary<string, string>
+                {
+                    ["CurrentExtension"] = ".txt",
+                    ["ProperExtension"] = ".png",
+                    ["DetectedType"] = "JPEG",
+                },
+            };
+
+            string nowAllowed = await WritePngAsync(Path.Combine(root, "already.png"));
+            PathFinding nowAllowedFinding = NewBadExtensionFinding(nowAllowed, currentExtension: ".txt");
+
+            string wrongName = await WritePngAsync(Path.Combine(root, "wrong-name.txt"));
+            PathFinding wrongNameFinding = NewBadExtensionFinding(wrongName);
+
+            await AssertRenameRejectedAsync(changedLengthFinding, "changed-length.png");
+            await AssertRenameRejectedAsync(changedTimeFinding, "changed-time.png");
+            await AssertRenameRejectedAsync(changedSignatureFinding, "changed-signature.png");
+            await AssertRenameRejectedAsync(changedTypeFinding, "changed-type.png");
+            await AssertRenameRejectedAsync(nowAllowedFinding, "already.png");
+            await AssertRenameRejectedAsync(wrongNameFinding, "different.png");
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+
+        static async Task AssertRenameRejectedAsync(PathFinding source, string requestedName)
+        {
+            var store = new AnalysisSessionStore();
+            var fileActions = new FakeFileActionService();
+            var viewModel = new AnalysisResultsViewModel(store, fileActions, new FakeResultExportService());
+            store.SetCompleted(
+                ToolKind.BadExtensions,
+                new AnalysisScope(),
+                new NoToolOptions(),
+                NewResult([source]));
+            PathFindingViewModel finding = Assert.Single(viewModel.Findings);
+            finding.IsSelected = true;
+
+            FileOperationResult result = await viewModel.RenameFindingAsync(
+                finding,
+                requestedName,
+                CancellationToken.None);
+
+            Assert.False(result.Succeeded);
+            Assert.Equal("File changed since scan.", result.Failure?.Reason);
+            Assert.Equal(0, fileActions.RenameCallCount);
+            Assert.Same(finding, Assert.Single(viewModel.Findings));
+            Assert.True(finding.IsSelected);
+        }
+    }
+
+    [Fact]
+    public async Task BadExtensionsRename_RejectsReparsePointWithoutDispatch()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string target = await WritePngAsync(Path.Combine(root, "target.txt"));
+        string link = Path.Combine(root, "link.txt");
+        CreateFileSymbolicLinkOrSkip(link, target);
+
+        try
+        {
+            var store = new AnalysisSessionStore();
+            var fileActions = new FakeFileActionService();
+            var viewModel = new AnalysisResultsViewModel(store, fileActions, new FakeResultExportService());
+            store.SetCompleted(
+                ToolKind.BadExtensions,
+                new AnalysisScope(),
+                new NoToolOptions(),
+                NewResult([NewBadExtensionFinding(link)]));
+            PathFindingViewModel finding = Assert.Single(viewModel.Findings);
+            finding.IsSelected = true;
+
+            FileOperationResult result = await viewModel.RenameFindingAsync(
+                finding,
+                "link.png",
+                CancellationToken.None);
+
+            Assert.False(result.Succeeded);
+            Assert.Equal("File changed since scan.", result.Failure?.Reason);
+            Assert.Equal(0, fileActions.RenameCallCount);
+            Assert.True(finding.IsSelected);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task BadExtensionsRename_PreservesFindingWhenServiceRejectsCollision()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string path = await WritePngAsync(Path.Combine(root, "photo.txt"));
+
+        try
+        {
+            var store = new AnalysisSessionStore();
+            var fileActions = new FakeFileActionService
+            {
+                NextRenameResult = new FileOperationResult(
+                    path,
+                    null,
+                    new FileActionFailure(path, "A file with the same name already exists.")),
+            };
+            var viewModel = new AnalysisResultsViewModel(store, fileActions, new FakeResultExportService());
+            store.SetCompleted(
+                ToolKind.BadExtensions,
+                new AnalysisScope(),
+                new NoToolOptions(),
+                NewResult([NewBadExtensionFinding(path)]));
+            PathFindingViewModel finding = Assert.Single(viewModel.Findings);
+            finding.IsSelected = true;
+
+            FileOperationResult result = await viewModel.RenameFindingAsync(
+                finding,
+                "photo.png",
+                CancellationToken.None);
+
+            Assert.False(result.Succeeded);
+            Assert.Equal(1, fileActions.RenameCallCount);
+            Assert.Same(finding, Assert.Single(viewModel.Findings));
+            Assert.True(finding.IsSelected);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task BadExtensionsRename_PropagatesCancellationBeforeDispatch()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string path = await WritePngAsync(Path.Combine(root, "photo.txt"));
+
+        try
+        {
+            var store = new AnalysisSessionStore();
+            var fileActions = new FakeFileActionService();
+            var viewModel = new AnalysisResultsViewModel(store, fileActions, new FakeResultExportService());
+            store.SetCompleted(
+                ToolKind.BadExtensions,
+                new AnalysisScope(),
+                new NoToolOptions(),
+                NewResult([NewBadExtensionFinding(path)]));
+            PathFindingViewModel finding = Assert.Single(viewModel.Findings);
+            finding.IsSelected = true;
+            using var cancellationSource = new CancellationTokenSource();
+            cancellationSource.Cancel();
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                viewModel.RenameFindingAsync(finding, "photo.png", cancellationSource.Token));
+
+            Assert.Equal(0, fileActions.RenameCallCount);
+            Assert.True(finding.IsSelected);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task DeleteCancellation_ReconcilesSuccessfulAnalysisPathsBeforeRethrowing()
     {
         string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
@@ -904,6 +1167,35 @@ public sealed class AnalysisResultsViewModelTests
         SizeBytes = size,
         ModifiedUtc = modifiedUtc ?? new DateTime(2026, 8, 7, 12, 0, 0, DateTimeKind.Utc),
     };
+
+    private static PathFinding NewBadExtensionFinding(
+        string path,
+        string currentExtension = ".txt")
+    {
+        var file = new FileInfo(path);
+        return new PathFinding
+        {
+            FullPath = path,
+            Kind = PathFindingKind.File,
+            Reason = "Extension does not match detected file type.",
+            Suggestion = Path.GetFileNameWithoutExtension(path) + ".png",
+            SizeBytes = file.Length,
+            CreatedUtc = file.CreationTimeUtc,
+            ModifiedUtc = file.LastWriteTimeUtc,
+            Metadata = new Dictionary<string, string>
+            {
+                ["CurrentExtension"] = currentExtension,
+                ["ProperExtension"] = ".png",
+                ["DetectedType"] = "PNG",
+            },
+        };
+    }
+
+    private static async Task<string> WritePngAsync(string path)
+    {
+        await File.WriteAllBytesAsync(path, [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+        return path;
+    }
 
     private static PathFinding NewDirectoryFinding(string path, int depth) => new()
     {

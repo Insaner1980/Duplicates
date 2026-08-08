@@ -55,6 +55,34 @@ public sealed class AnalysisServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task BadExtensionsWithNoOptions_UsesInventoryAndIncludesTotalElapsed()
+    {
+        string path = Path.Combine(_root, "photo.txt");
+        await File.WriteAllBytesAsync(path, [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+        string missingExclusion = Path.Combine(_root, "missing-exclusion");
+        var delay = TimeSpan.FromMilliseconds(80);
+        var progress = new DelayingProgress(delay);
+
+        AnalysisResult result = await new AnalysisService().RunAsync(
+            ToolKind.BadExtensions,
+            new AnalysisScope
+            {
+                IncludedFolders = [_root],
+                ExcludedPaths = [missingExclusion],
+            },
+            new NoToolOptions(),
+            progress,
+            CancellationToken.None);
+
+        PathFinding finding = Assert.Single(result.Findings);
+        Assert.Equal(path, finding.FullPath);
+        Assert.Equal("photo.png", finding.Suggestion);
+        Assert.Contains(result.SkippedPaths, skipped => skipped.Path == missingExclusion);
+        Assert.True(progress.Delayed);
+        Assert.True(result.Elapsed >= delay);
+    }
+
+    [Fact]
     public async Task InvalidLinksRejectsToolOptionsThatDoNotMatch()
     {
         var service = new AnalysisService();

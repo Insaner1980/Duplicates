@@ -114,7 +114,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
 
     public bool CanActOnSelection =>
         !IsActionRunning &&
-        IsMutationToolSupported &&
+        IsBulkMutationToolSupported &&
         SelectedFindings.Count > 0 &&
         SelectedSimilarityItems.Count == 0;
 
@@ -266,14 +266,28 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         string newName,
         CancellationToken cancellationToken)
     {
-        if (!IsMutationToolSupported || !_allFindings.Contains(finding))
+        if (!IsRenameToolSupported || !_allFindings.Contains(finding))
         {
             throw new InvalidOperationException("Actions are not available for these results yet.");
         }
 
         IFileActionService fileActions = _fileActionService ??
             throw new InvalidOperationException("File actions are not configured.");
-        if (!TryMapFinding(finding, out FileActionTarget? target, out FileActionFailure? failure))
+        FileActionTarget? target;
+        FileActionFailure? failure;
+        if (_sessionStore.CurrentSession?.Tool == ToolKind.BadExtensions)
+        {
+            (target, failure) = await TryMapBadExtensionRenameAsync(
+                finding,
+                newName,
+                cancellationToken);
+        }
+        else if (!TryMapFinding(finding, out target, out failure))
+        {
+            return new FileOperationResult(finding.FullPath, null, failure);
+        }
+
+        if (target is null)
         {
             return new FileOperationResult(finding.FullPath, null, failure);
         }
@@ -480,7 +494,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         SelectionChanged();
     }
 
-    private bool IsMutationToolSupported => _sessionStore.CurrentSession switch
+    private bool IsBulkMutationToolSupported => _sessionStore.CurrentSession switch
     {
         { Tool: ToolKind.EmptyFiles or ToolKind.EmptyFolders or ToolKind.BigFiles } => true,
         { Tool: ToolKind.TemporaryFiles, ToolOptions: TemporaryFileToolOptions } => true,
@@ -488,9 +502,13 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         _ => false,
     };
 
+    private bool IsRenameToolSupported =>
+        IsBulkMutationToolSupported ||
+        _sessionStore.CurrentSession is { Tool: ToolKind.BadExtensions, ToolOptions: NoToolOptions };
+
     private void EnsureSelectedMutationIsSupported()
     {
-        if (!IsMutationToolSupported || SelectedSimilarityItems.Count > 0)
+        if (!IsBulkMutationToolSupported || SelectedSimilarityItems.Count > 0)
         {
             throw new InvalidOperationException("Actions are not available for these results yet.");
         }
@@ -757,6 +775,73 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         {
             failure = ChangedFailure(finding.FullPath);
             return false;
+        }
+    }
+
+    private static async ValueTask<(FileActionTarget? Target, FileActionFailure? Failure)>
+        TryMapBadExtensionRenameAsync(
+            PathFindingViewModel finding,
+            string newName,
+            CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (finding.Source.Kind != PathFindingKind.File ||
+                finding.Source.SizeBytes is not long expectedSize ||
+                finding.Source.ModifiedUtc is not DateTime expectedModifiedUtc ||
+                !TryGetExactMetadata(finding.Source.Metadata, "CurrentExtension", out string? expectedExtension) ||
+                !TryGetExactMetadata(finding.Source.Metadata, "ProperExtension", out string? expectedRecommendation) ||
+                !TryGetExactMetadata(finding.Source.Metadata, "DetectedType", out string? expectedType))
+            {
+                return (null, ChangedFailure(finding.FullPath));
+            }
+
+            FileAttributes attributes = File.GetAttributes(finding.FullPath);
+            var file = new FileInfo(finding.FullPath);
+            if (attributes.HasFlag(FileAttributes.Directory) ||
+                attributes.HasFlag(FileAttributes.ReparsePoint) ||
+                file.Length != expectedSize ||
+                file.LastWriteTimeUtc != expectedModifiedUtc)
+            {
+                return (null, ChangedFailure(finding.FullPath));
+            }
+
+            DetectedFileType? detected = await FileSignatureDetector.DetectFileAsync(
+                finding.FullPath,
+                cancellationToken);
+            attributes = File.GetAttributes(finding.FullPath);
+            file.Refresh();
+            if (attributes.HasFlag(FileAttributes.Directory) ||
+                attributes.HasFlag(FileAttributes.ReparsePoint) ||
+                file.Length != expectedSize ||
+                file.LastWriteTimeUtc != expectedModifiedUtc ||
+                detected?.RecommendedExtension is not string recommendation ||
+                !string.Equals(detected.Name, expectedType, StringComparison.Ordinal) ||
+                !string.Equals(recommendation, expectedRecommendation, StringComparison.Ordinal))
+            {
+                return (null, ChangedFailure(finding.FullPath));
+            }
+
+            string currentExtension = Path.GetExtension(finding.FullPath);
+            string currentExtensionMetadata = string.IsNullOrEmpty(currentExtension)
+                ? "(none)"
+                : currentExtension;
+            string recommendedName = Path.GetFileNameWithoutExtension(finding.FullPath) + recommendation;
+            if (!string.Equals(currentExtensionMetadata, expectedExtension, StringComparison.OrdinalIgnoreCase) ||
+                detected.AllowedExtensions.Any(extension =>
+                    string.Equals(extension, currentExtension, StringComparison.OrdinalIgnoreCase)) ||
+                !string.Equals(newName, recommendedName, StringComparison.Ordinal))
+            {
+                return (null, ChangedFailure(finding.FullPath));
+            }
+
+            return (
+                new FileActionTarget(finding.FullPath, file.Length, FileActionTargetKind.File),
+                null);
+        }
+        catch (Exception ex) when (IsFileSystemFailure(ex))
+        {
+            return (null, ChangedFailure(finding.FullPath));
         }
     }
 
