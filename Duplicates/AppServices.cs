@@ -14,6 +14,10 @@ public sealed class AppServices
         ThemeService = new ThemeService();
         ResultsStore = new ResultsStore();
         AnalysisSessionStore = new AnalysisSessionStore();
+        MediaFingerprintCache = new MediaFingerprintCache();
+        ImageSampleProvider = new WindowsImageSampleProvider(MediaFingerprintCache);
+        VideoSampleProvider = new WindowsVideoSampleProvider(MediaFingerprintCache);
+        MusicMetadataProvider = new WindowsMusicMetadataProvider();
         FileFormatProbe = new WindowsFileFormatProbe();
         AnalysisService = new AnalysisService(FileFormatProbe);
         FileActionService = new FileActionService(SettingsService);
@@ -39,6 +43,14 @@ public sealed class AppServices
     public ResultsStore ResultsStore { get; }
 
     public AnalysisSessionStore AnalysisSessionStore { get; }
+
+    public MediaFingerprintCache MediaFingerprintCache { get; }
+
+    public IImageSampleProvider ImageSampleProvider { get; }
+
+    public IVideoSampleProvider VideoSampleProvider { get; }
+
+    public IMusicMetadataProvider MusicMetadataProvider { get; }
 
     public IFileFormatProbe FileFormatProbe { get; }
 
