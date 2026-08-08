@@ -159,6 +159,68 @@ public sealed class BadNameAnalyzerTests
         Assert.Equal("cafe\u0301-😀.txt", finding.SuggestedName);
     }
 
+    [Theory]
+    [InlineData("ＣＯＮ.txt", "ＣＯＮ_file.txt")]
+    [InlineData("COM¹.txt", "COM¹_file.txt")]
+    [InlineData("report．", "report")]
+    [InlineData("．txt", "file．txt")]
+    [InlineData("bad：name.txt", "bad_name.txt")]
+    public void Detect_CompatibilityUnsafeSuggestionsAreSafe(
+        string currentName,
+        string expectedSuggestion)
+    {
+        BadNameFinding finding = Assert.IsType<BadNameFinding>(Detect(currentName));
+
+        Assert.Equal(expectedSuggestion, finding.SuggestedName);
+        Assert.Null(Detect(finding.SuggestedName));
+    }
+
+    [Fact]
+    public void Detect_CompatibilitySanitizationPreservesOrdinaryOriginalUnicode()
+    {
+        const string currentName = "cafe\u0301：note-😀.txt";
+
+        BadNameFinding finding = Assert.IsType<BadNameFinding>(Detect(currentName));
+
+        Assert.Equal("cafe\u0301_note-😀.txt", finding.SuggestedName);
+        Assert.Null(Detect(finding.SuggestedName));
+    }
+
+    [Theory]
+    [InlineData(0xD800)]
+    [InlineData(0xDC00)]
+    public void Detect_PreservesUnpairedUtf16CodeUnits(int codeUnitValue)
+    {
+        char codeUnit = (char)codeUnitValue;
+        string ordinaryName = $"ordinary{codeUnit}.txt";
+        string unsafeName = $"ordinary{codeUnit}.txt.";
+
+        Assert.Null(Detect(ordinaryName));
+        BadNameFinding finding = Assert.IsType<BadNameFinding>(Detect(unsafeName));
+        Assert.Equal(ordinaryName, finding.SuggestedName);
+        Assert.DoesNotContain('\uFFFD', finding.SuggestedName);
+        Assert.Null(Detect(finding.SuggestedName));
+    }
+
+    [Theory]
+    [InlineData("bad\u0001name.txt")]
+    [InlineData("safe\u202Ename.txt")]
+    [InlineData(" report.txt")]
+    [InlineData("report.txt.")]
+    [InlineData("CON.txt")]
+    [InlineData(".txt")]
+    [InlineData("ＣＯＮ.txt")]
+    [InlineData("COM¹.txt")]
+    [InlineData("report．")]
+    [InlineData("．txt")]
+    [InlineData("bad：name.txt")]
+    public void Detect_PositiveCasesAlwaysProduceSafeSuggestions(string currentName)
+    {
+        BadNameFinding finding = Assert.IsType<BadNameFinding>(Detect(currentName));
+
+        Assert.Null(Detect(finding.SuggestedName));
+    }
+
     [Fact]
     public async Task AnalyzeAsync_MapsInventorySnapshotAndForwardsSkippedPaths()
     {
@@ -241,6 +303,23 @@ public sealed class BadNameAnalyzerTests
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
             new BadNameAnalyzer().AnalyzeAsync(inventory, cancellationSource.Token));
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_ContinuesPastUnpairedUtf16CodeUnits()
+    {
+        string highSurrogateName = $"ordinary{(char)0xD800}.txt";
+        string lowSurrogateName = $"ordinary{(char)0xDC00}.txt";
+        FileInventory inventory = NewInventory(files:
+        [
+            NewFile(@"C:\scan\high.txt", highSurrogateName),
+            NewFile(@"C:\scan\low.txt", lowSurrogateName),
+            NewFile(@"C:\scan\ bad.txt", " bad.txt"),
+        ]);
+
+        AnalysisResult result = await new BadNameAnalyzer().AnalyzeAsync(inventory, CancellationToken.None);
+
+        Assert.Equal(@"C:\scan\ bad.txt", Assert.Single(result.Findings).FullPath);
     }
 
     private static BadNameFinding? Detect(string currentName) => BadNameAnalyzer.Detect(

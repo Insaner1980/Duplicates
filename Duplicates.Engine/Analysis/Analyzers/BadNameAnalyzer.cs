@@ -80,10 +80,10 @@ public sealed class BadNameAnalyzer
         ArgumentNullException.ThrowIfNull(fullPath);
         ArgumentNullException.ThrowIfNull(currentName);
 
-        string inspectedName = currentName.Normalize(NormalizationForm.FormKC);
-        string sanitizedName = SanitizeOriginalName(currentName);
+        string inspectedName = NormalizeForInspection(currentName);
         string trimmedInspectedName = TrimUnsafeEnds(inspectedName);
-        string trimmedSanitizedName = TrimUnsafeEnds(sanitizedName);
+        List<NameSegment> safeSegments = CreateSafeSegments(currentName);
+        string sanitizedInspectedName = JoinInspected(safeSegments);
         var reasons = new List<string>(7);
 
         if (inspectedName.Any(IsControlCharacter))
@@ -118,7 +118,7 @@ public sealed class BadNameAnalyzer
             reasons.Add("Uses a reserved DOS device name");
         }
 
-        bool hasEmptyStem = HasEmptyStem(trimmedInspectedName) || HasEmptyStem(trimmedSanitizedName);
+        bool hasEmptyStem = HasEmptyStem(trimmedInspectedName) || HasEmptyStem(sanitizedInspectedName);
         if (hasEmptyStem)
         {
             reasons.Add("Has an empty file name stem");
@@ -129,47 +129,124 @@ public sealed class BadNameAnalyzer
             return null;
         }
 
-        string suggestion = trimmedSanitizedName;
-        if (HasEmptyStem(suggestion))
-        {
-            int extensionStart = suggestion.LastIndexOf('.');
-            string extension = extensionStart >= 0 ? suggestion[extensionStart..] : string.Empty;
-            suggestion = "file" + extension;
-        }
-
-        if (UsesReservedDosName(suggestion))
-        {
-            int firstDot = suggestion.IndexOf('.');
-            suggestion = firstDot < 0
-                ? suggestion + "_file"
-                : suggestion.Insert(firstDot, "_file");
-        }
-
-        if (string.IsNullOrEmpty(suggestion))
-        {
-            suggestion = "file";
-        }
-
+        string suggestion = BuildSuggestion(safeSegments);
         return new BadNameFinding(fullPath, currentName, suggestion, reasons);
     }
 
-    private static string SanitizeOriginalName(string name)
+    private static string NormalizeForInspection(string name)
     {
         var builder = new StringBuilder(name.Length);
-        foreach (Rune rune in name.EnumerateRunes())
+        int runStart = 0;
+        for (int index = 0; index < name.Length; index++)
         {
-            string original = rune.ToString();
-            string inspected = original.Normalize(NormalizationForm.FormKC);
+            char current = name[index];
+            if (char.IsHighSurrogate(current) &&
+                index + 1 < name.Length &&
+                char.IsLowSurrogate(name[index + 1]))
+            {
+                index++;
+                continue;
+            }
+
+            if (!char.IsSurrogate(current))
+            {
+                continue;
+            }
+
+            AppendNormalizedRun(builder, name, runStart, index - runStart);
+            builder.Append(current);
+            runStart = index + 1;
+        }
+
+        if (runStart == 0)
+        {
+            return name.Normalize(NormalizationForm.FormKC);
+        }
+
+        AppendNormalizedRun(builder, name, runStart, name.Length - runStart);
+        return builder.ToString();
+    }
+
+    private static void AppendNormalizedRun(
+        StringBuilder builder,
+        string name,
+        int start,
+        int length)
+    {
+        if (length > 0)
+        {
+            builder.Append(name.Substring(start, length).Normalize(NormalizationForm.FormKC));
+        }
+    }
+
+    private static List<NameSegment> CreateSafeSegments(string name)
+    {
+        var segments = new List<NameSegment>(name.Length);
+        for (int index = 0; index < name.Length; index++)
+        {
+            int length = char.IsHighSurrogate(name[index]) &&
+                index + 1 < name.Length &&
+                char.IsLowSurrogate(name[index + 1])
+                    ? 2
+                    : 1;
+            string original = name.Substring(index, length);
+            string inspected = length == 1 && char.IsSurrogate(original[0])
+                ? original
+                : original.Normalize(NormalizationForm.FormKC);
+            index += length - 1;
+
             if (inspected.Any(IsControlCharacter) || inspected.Any(IsBidirectionalControlCharacter))
             {
                 continue;
             }
 
-            builder.Append(inspected.Any(IsOtherInvalidFileNameCharacter) ? "_" : original);
+            segments.Add(inspected.Any(IsOtherInvalidFileNameCharacter)
+                ? new NameSegment("_", "_")
+                : new NameSegment(original, inspected));
         }
 
-        return builder.ToString();
+        while (segments.Count > 0 && IsWhitespaceSegment(segments[0]))
+        {
+            segments.RemoveAt(0);
+        }
+
+        while (segments.Count > 0 && IsUnsafeTrailingSegment(segments[^1]))
+        {
+            segments.RemoveAt(segments.Count - 1);
+        }
+
+        return segments;
     }
+
+    private static string BuildSuggestion(List<NameSegment> safeSegments)
+    {
+        var segments = new List<NameSegment>(safeSegments);
+        string inspected = JoinInspected(segments);
+        if (HasEmptyStem(inspected))
+        {
+            segments.Insert(0, new NameSegment("file", "file"));
+            inspected = "file" + inspected;
+        }
+
+        if (UsesReservedDosName(inspected))
+        {
+            int extensionSegment = segments.FindIndex(static segment => segment.Inspected.Contains('.'));
+            int insertionIndex = extensionSegment < 0 ? segments.Count : extensionSegment;
+            segments.Insert(insertionIndex, new NameSegment("_file", "_file"));
+        }
+
+        return string.Concat(segments.Select(static segment => segment.Original));
+    }
+
+    private static string JoinInspected(IEnumerable<NameSegment> segments) =>
+        string.Concat(segments.Select(static segment => segment.Inspected));
+
+    private static bool IsWhitespaceSegment(NameSegment segment) =>
+        segment.Inspected.Length > 0 && segment.Inspected.All(char.IsWhiteSpace);
+
+    private static bool IsUnsafeTrailingSegment(NameSegment segment) =>
+        segment.Inspected.Length > 0 &&
+        segment.Inspected.All(static character => char.IsWhiteSpace(character) || character == '.');
 
     private static string TrimUnsafeEnds(string name)
     {
@@ -227,4 +304,6 @@ public sealed class BadNameAnalyzer
         InvalidFileNameCharacters.Contains(character) &&
         !IsControlCharacter(character) &&
         !IsBidirectionalControlCharacter(character);
+
+    private sealed record NameSegment(string Original, string Inspected);
 }
