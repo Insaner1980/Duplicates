@@ -2310,6 +2310,7 @@ public sealed class AnalysisResultsViewModelTests
             SizeBytes = size,
             ModifiedUtc = modifiedUtc ?? new DateTime(2026, 8, 7, 12, 0, 0, DateTimeKind.Utc),
             SimilarityPercent = similarity,
+            Evidence = new ImageSimilarityEvidence(0, 100, 100, "JPEG"),
         };
 
     private static string ResultPath(object item) => item switch

@@ -29,6 +29,12 @@ public sealed partial class SimilarityItemViewModel : ObservableObject
 
     public string SimilarityText => $"{Source.SimilarityPercent:N0}% similar";
 
+    public string MediaDetailsText => Source.Evidence switch
+    {
+        ImageSimilarityEvidence image => $"{image.Width:N0} × {image.Height:N0}, {image.Format}",
+        _ => string.Empty,
+    };
+
     public string SummaryText => $"{SimilarityText}, {ByteFormatter.Format(SizeBytes)}, modified {ModifiedUtc.ToLocalTime().ToString("g", CultureInfo.CurrentCulture)}";
 
     public string MetadataText => string.Join(

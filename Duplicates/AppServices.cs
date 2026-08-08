@@ -18,8 +18,9 @@ public sealed class AppServices
         ImageSampleProvider = new WindowsImageSampleProvider(MediaFingerprintCache);
         VideoSampleProvider = new WindowsVideoSampleProvider(MediaFingerprintCache);
         MusicMetadataProvider = new WindowsMusicMetadataProvider();
+        MediaPreviewLoader = new WindowsMediaPreviewLoader();
         FileFormatProbe = new WindowsFileFormatProbe();
-        AnalysisService = new AnalysisService(FileFormatProbe);
+        AnalysisService = new AnalysisService(FileFormatProbe, ImageSampleProvider);
         FileActionService = new FileActionService(SettingsService);
         ResultExportService = new ResultExportService();
         PathScopeViewModel = new PathScopeViewModel();
@@ -32,7 +33,9 @@ public sealed class AppServices
             FileActionService,
             ResultExportService,
             FileSignatureDetector.DetectFileAsync,
-            FileFormatProbe);
+            FileFormatProbe,
+            AnalysisService,
+            MediaPreviewLoader);
         SettingsViewModel = new SettingsViewModel(SettingsService);
     }
 
@@ -51,6 +54,8 @@ public sealed class AppServices
     public IVideoSampleProvider VideoSampleProvider { get; }
 
     public IMusicMetadataProvider MusicMetadataProvider { get; }
+
+    public IMediaPreviewLoader MediaPreviewLoader { get; }
 
     public IFileFormatProbe FileFormatProbe { get; }
 

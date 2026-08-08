@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Security;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -20,11 +21,14 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
     private readonly IResultExportService? _resultExportService;
     private readonly Func<string, CancellationToken, ValueTask<DetectedFileType?>> _detectFileAsync;
     private readonly IFileFormatProbe? _fileFormatProbe;
+    private readonly IAnalysisService? _analysisService;
+    private readonly IMediaPreviewLoader? _mediaPreviewLoader;
     private readonly List<PathFindingViewModel> _allFindings = [];
     private readonly List<SimilarityGroupViewModel> _allGroups = [];
+    private CancellationTokenSource? _previewCancellation;
 
     public AnalysisResultsViewModel(AnalysisSessionStore sessionStore)
-        : this(sessionStore, null, null, FileSignatureDetector.DetectFileAsync, null)
+        : this(sessionStore, null, null, FileSignatureDetector.DetectFileAsync, null, null, null)
     {
     }
 
@@ -32,7 +36,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         AnalysisSessionStore sessionStore,
         IFileActionService? fileActionService,
         IResultExportService? resultExportService)
-        : this(sessionStore, fileActionService, resultExportService, FileSignatureDetector.DetectFileAsync, null)
+        : this(sessionStore, fileActionService, resultExportService, FileSignatureDetector.DetectFileAsync, null, null, null)
     {
     }
 
@@ -41,7 +45,24 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         IFileActionService? fileActionService,
         IResultExportService? resultExportService,
         Func<string, CancellationToken, ValueTask<DetectedFileType?>> detectFileAsync)
-        : this(sessionStore, fileActionService, resultExportService, detectFileAsync, null)
+        : this(sessionStore, fileActionService, resultExportService, detectFileAsync, null, null, null)
+    {
+    }
+
+    public AnalysisResultsViewModel(
+        AnalysisSessionStore sessionStore,
+        IFileActionService? fileActionService,
+        IResultExportService? resultExportService,
+        IAnalysisService? analysisService,
+        IMediaPreviewLoader? mediaPreviewLoader)
+        : this(
+            sessionStore,
+            fileActionService,
+            resultExportService,
+            FileSignatureDetector.DetectFileAsync,
+            null,
+            analysisService,
+            mediaPreviewLoader)
     {
     }
 
@@ -50,13 +71,17 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         IFileActionService? fileActionService,
         IResultExportService? resultExportService,
         Func<string, CancellationToken, ValueTask<DetectedFileType?>> detectFileAsync,
-        IFileFormatProbe? fileFormatProbe)
+        IFileFormatProbe? fileFormatProbe,
+        IAnalysisService? analysisService = null,
+        IMediaPreviewLoader? mediaPreviewLoader = null)
     {
         _sessionStore = sessionStore;
         _fileActionService = fileActionService;
         _resultExportService = resultExportService;
         _detectFileAsync = detectFileAsync;
         _fileFormatProbe = fileFormatProbe;
+        _analysisService = analysisService;
+        _mediaPreviewLoader = mediaPreviewLoader;
         _sessionStore.ResultChanged += ResultsChanged;
     }
 
@@ -80,6 +105,21 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(PreviewSummary))]
     [NotifyPropertyChangedFor(nameof(PreviewMetadata))]
     public partial object? SelectedResult { get; set; }
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(PreviewPath))]
+    [NotifyPropertyChangedFor(nameof(PreviewTitle))]
+    [NotifyPropertyChangedFor(nameof(PreviewSummary))]
+    [NotifyPropertyChangedFor(nameof(PreviewMetadata))]
+    public partial SimilarityItemViewModel? SelectedSimilarityPreviewItem { get; set; }
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(SimilarityPreviewVisibility))]
+    public partial MediaPreviewData? SimilarityPreview { get; set; }
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(SimilarityPreviewStatusVisibility))]
+    public partial string SimilarityPreviewStatusText { get; set; } = string.Empty;
 
     [ObservableProperty]
     public partial bool IsPreviewPaneOpen { get; set; }
@@ -141,8 +181,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
     public bool CanActOnSelection =>
         !IsActionRunning &&
         IsBulkMutationToolSupported &&
-        SelectedFindings.Count > 0 &&
-        SelectedSimilarityItems.Count == 0;
+        SelectedItemCount > 0;
 
     public bool CanRenameSelection =>
         !IsActionRunning &&
@@ -160,33 +199,49 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
     public IReadOnlyList<SimilarityItemViewModel> SelectedSimilarityItems =>
         _allGroups.SelectMany(static group => group.Items).Where(static item => item.IsSelected).ToArray();
 
-    public string PreviewPath => SelectedResult switch
-    {
-        PathFindingViewModel finding => finding.FullPath,
-        SimilarityGroupViewModel group => group.FullPath,
-        _ => "Select a result to preview details.",
-    };
+    public Visibility SimilarityPreviewVisibility => SimilarityPreview is null
+        ? Visibility.Collapsed
+        : Visibility.Visible;
 
-    public string PreviewTitle => SelectedResult switch
-    {
-        PathFindingViewModel finding => finding.DisplayName,
-        SimilarityGroupViewModel group => group.DisplayName,
-        _ => "No result selected",
-    };
+    public Visibility SimilarityPreviewStatusVisibility => string.IsNullOrWhiteSpace(SimilarityPreviewStatusText)
+        ? Visibility.Collapsed
+        : Visibility.Visible;
 
-    public string PreviewSummary => SelectedResult switch
-    {
-        PathFindingViewModel finding => finding.SummaryText,
-        SimilarityGroupViewModel group => group.SummaryText,
-        _ => string.Empty,
-    };
+    public string PreviewPath => SelectedSimilarityPreviewItem is not null
+        ? SelectedSimilarityPreviewItem.FullPath
+        : SelectedResult switch
+        {
+            PathFindingViewModel finding => finding.FullPath,
+            SimilarityGroupViewModel group => group.FullPath,
+            _ => "Select a result to preview details.",
+        };
 
-    public string PreviewMetadata => SelectedResult switch
-    {
-        PathFindingViewModel finding => finding.MetadataText,
-        SimilarityGroupViewModel group => group.MetadataText,
-        _ => string.Empty,
-    };
+    public string PreviewTitle => SelectedSimilarityPreviewItem is not null
+        ? SelectedSimilarityPreviewItem.DisplayName
+        : SelectedResult switch
+        {
+            PathFindingViewModel finding => finding.DisplayName,
+            SimilarityGroupViewModel group => group.DisplayName,
+            _ => "No result selected",
+        };
+
+    public string PreviewSummary => SelectedSimilarityPreviewItem is not null
+        ? SelectedSimilarityPreviewItem.SummaryText
+        : SelectedResult switch
+        {
+            PathFindingViewModel finding => finding.SummaryText,
+            SimilarityGroupViewModel group => group.SummaryText,
+            _ => string.Empty,
+        };
+
+    public string PreviewMetadata => SelectedSimilarityPreviewItem is not null
+        ? SelectedSimilarityPreviewItem.MetadataText
+        : SelectedResult switch
+        {
+            PathFindingViewModel finding => finding.MetadataText,
+            SimilarityGroupViewModel group => group.MetadataText,
+            _ => string.Empty,
+        };
 
     [RelayCommand]
     private void NewAnalysis()
@@ -195,6 +250,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         SearchText = string.Empty;
         SelectedSortIndex = 0;
         SelectedResult = null;
+        ResetSimilarityPreview();
         IsPreviewPaneOpen = false;
         _sessionStore.Clear();
         NewAnalysisRequested?.Invoke(this, tool);
@@ -217,12 +273,94 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
     [RelayCommand]
     private void TogglePreviewPane() => IsPreviewPaneOpen = !IsPreviewPaneOpen;
 
+    [RelayCommand(AllowConcurrentExecutions = true)]
+    private async Task SelectSimilarityPreviewItemAsync(SimilarityItemViewModel? item)
+    {
+        AnalysisSession? session = _sessionStore.CurrentSession;
+        if (item is null || session is null || !IsCanonicalSimilarityItem(item))
+        {
+            return;
+        }
+
+        SelectedSimilarityPreviewItem = item;
+        IsPreviewPaneOpen = true;
+        _previewCancellation?.Cancel();
+        _previewCancellation?.Dispose();
+        var cancellation = new CancellationTokenSource();
+        _previewCancellation = cancellation;
+        SimilarityPreview = null;
+        SimilarityPreviewStatusText = "Loading preview...";
+
+        if (_mediaPreviewLoader is null)
+        {
+            SimilarityPreviewStatusText = "Preview unavailable";
+            return;
+        }
+
+        try
+        {
+            MediaPreviewData preview = await _mediaPreviewLoader.LoadAsync(
+                session.Tool,
+                item.Source,
+                cancellation.Token);
+            if (cancellation.IsCancellationRequested ||
+                !ReferenceEquals(_sessionStore.CurrentSession, session) ||
+                !ReferenceEquals(SelectedSimilarityPreviewItem, item) ||
+                !IsCanonicalSimilarityItem(item))
+            {
+                return;
+            }
+
+            if (preview.Width <= 0 ||
+                preview.Height <= 0 ||
+                preview.Width > 512 ||
+                preview.Height > 512 ||
+                preview.Bgra8?.Length != checked(preview.Width * preview.Height * 4))
+            {
+                throw new InvalidDataException("The preview is structurally invalid.");
+            }
+
+            SimilarityPreview = preview;
+            SimilarityPreviewStatusText = string.Empty;
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex) when (IsExpectedSimilarityProviderFailure(ex))
+        {
+            if (!cancellation.IsCancellationRequested &&
+                ReferenceEquals(_sessionStore.CurrentSession, session) &&
+                ReferenceEquals(SelectedSimilarityPreviewItem, item) &&
+                IsCanonicalSimilarityItem(item))
+            {
+                SimilarityPreview = null;
+                SimilarityPreviewStatusText = "Preview unavailable";
+            }
+        }
+        finally
+        {
+            if (ReferenceEquals(_previewCancellation, cancellation))
+            {
+                _previewCancellation = null;
+                cancellation.Dispose();
+            }
+        }
+    }
+
     public async Task<DeleteSummary> DeleteSelectedAsync(CancellationToken cancellationToken)
     {
         EnsureSelectedMutationIsSupported();
         AnalysisSession? initiatingSession = _sessionStore.CurrentSession;
         IFileActionService fileActions = _fileActionService ??
             throw new InvalidOperationException("File actions are not configured.");
+        if (IsSimilarImageSession(initiatingSession))
+        {
+            return await DeleteSelectedSimilarityAsync(
+                initiatingSession!,
+                fileActions,
+                cancellationToken);
+        }
+
         SelectionTargets selection = await BuildValidatedSelectionAsync(
             initiatingSession,
             cancellationToken);
@@ -266,6 +404,16 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         AnalysisSession? initiatingSession = _sessionStore.CurrentSession;
         IFileActionService fileActions = _fileActionService ??
             throw new InvalidOperationException("File actions are not configured.");
+        if (IsSimilarImageSession(initiatingSession))
+        {
+            return await MoveSelectedSimilarityAsync(
+                initiatingSession!,
+                fileActions,
+                destinationFolder,
+                collisionBehavior,
+                cancellationToken);
+        }
+
         SelectionTargets selection = await BuildValidatedSelectionAsync(
             initiatingSession,
             cancellationToken);
@@ -303,6 +451,187 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         {
             IsActionRunning = false;
         }
+    }
+
+    private async Task<DeleteSummary> DeleteSelectedSimilarityAsync(
+        AnalysisSession initiatingSession,
+        IFileActionService fileActions,
+        CancellationToken cancellationToken)
+    {
+        SimilarityActionSnapshot snapshot = CreateSimilarityActionSnapshot(initiatingSession);
+        IAnalysisService analysisService = _analysisService ??
+            throw new InvalidOperationException("Similarity revalidation is not configured.");
+        IsActionRunning = true;
+        ActionStatusMessage = "Deleting selected items...";
+        try
+        {
+            SelectionTargets selection = await BuildValidatedSimilaritySelectionAsync(
+                snapshot,
+                analysisService,
+                cancellationToken);
+            DeleteSummary serviceSummary;
+            try
+            {
+                serviceSummary = selection.Targets.Count == 0
+                    ? new DeleteSummary(0, 0, [])
+                    : await fileActions.DeleteAsync(selection.Targets, null, cancellationToken);
+            }
+            catch (DeleteOperationCanceledException ex)
+            {
+                ApplyDeleteSummary(ex.Summary, selection, initiatingSession, wasCancelled: true, snapshot);
+                throw;
+            }
+
+            return ApplyDeleteSummary(
+                serviceSummary,
+                selection,
+                initiatingSession,
+                wasCancelled: false,
+                snapshot);
+        }
+        finally
+        {
+            IsActionRunning = false;
+        }
+    }
+
+    private async Task<FileOperationSummary> MoveSelectedSimilarityAsync(
+        AnalysisSession initiatingSession,
+        IFileActionService fileActions,
+        string destinationFolder,
+        MoveCollisionBehavior collisionBehavior,
+        CancellationToken cancellationToken)
+    {
+        SimilarityActionSnapshot snapshot = CreateSimilarityActionSnapshot(initiatingSession);
+        IAnalysisService analysisService = _analysisService ??
+            throw new InvalidOperationException("Similarity revalidation is not configured.");
+        IsActionRunning = true;
+        ActionStatusMessage = "Moving selected items...";
+        try
+        {
+            SelectionTargets selection = await BuildValidatedSimilaritySelectionAsync(
+                snapshot,
+                analysisService,
+                cancellationToken);
+            FileOperationSummary serviceSummary;
+            try
+            {
+                serviceSummary = selection.Targets.Count == 0
+                    ? new FileOperationSummary([], 0)
+                    : await fileActions.MoveAsync(
+                        selection.Targets,
+                        destinationFolder,
+                        collisionBehavior,
+                        null,
+                        cancellationToken);
+            }
+            catch (FileOperationCanceledException ex)
+            {
+                ApplyMoveSummary(ex.Summary, selection.Failures, initiatingSession, wasCancelled: true, snapshot);
+                throw;
+            }
+
+            return ApplyMoveSummary(
+                serviceSummary,
+                selection.Failures,
+                initiatingSession,
+                wasCancelled: false,
+                snapshot);
+        }
+        finally
+        {
+            IsActionRunning = false;
+        }
+    }
+
+    private SimilarityActionSnapshot CreateSimilarityActionSnapshot(AnalysisSession initiatingSession)
+    {
+        SimilarityItemViewModel[] selectedItems = SelectedSimilarityItems.ToArray();
+        if (selectedItems.Length == 0)
+        {
+            throw new InvalidOperationException("Select at least one result first.");
+        }
+
+        return new SimilarityActionSnapshot(
+            initiatingSession,
+            selectedItems,
+            selectedItems.Select(static item => item.FullPath).ToHashSet(StringComparer.OrdinalIgnoreCase),
+            SelectedSimilarityPreviewItem?.FullPath);
+    }
+
+    private async Task<SelectionTargets> BuildValidatedSimilaritySelectionAsync(
+        SimilarityActionSnapshot snapshot,
+        IAnalysisService analysisService,
+        CancellationToken cancellationToken)
+    {
+        var targets = new List<FileActionTarget>(snapshot.SelectedItems.Count);
+        var failures = new List<FileActionFailure>();
+        foreach (SimilarityItemViewModel item in snapshot.SelectedItems)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!IsCurrentSimilarityItem(snapshot.Session, item) ||
+                !TryReadSimilaritySnapshot(item.FullPath, out SimilarityFileSnapshot before) ||
+                !MatchesSimilaritySnapshot(item, before))
+            {
+                failures.Add(ChangedFailure(item.FullPath));
+                continue;
+            }
+
+            bool matches = false;
+            Exception? providerFailure = null;
+            try
+            {
+                matches = await analysisService.RevalidateSimilarityItemAsync(
+                    snapshot.Session.Tool,
+                    item.Source,
+                    cancellationToken);
+            }
+            catch (Exception ex) when (IsExpectedSimilarityProviderFailure(ex))
+            {
+                providerFailure = ex;
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            bool current = IsCurrentSimilarityItem(snapshot.Session, item);
+            bool unchanged = TryReadSimilaritySnapshot(item.FullPath, out SimilarityFileSnapshot after) &&
+                after == before &&
+                MatchesSimilaritySnapshot(item, after);
+            if (!current || !unchanged)
+            {
+                failures.Add(ChangedFailure(item.FullPath));
+                continue;
+            }
+
+            if (providerFailure is not null)
+            {
+                failures.Add(new FileActionFailure(item.FullPath, "Could not decode image."));
+                continue;
+            }
+
+            if (!matches)
+            {
+                failures.Add(ChangedFailure(item.FullPath));
+                continue;
+            }
+
+            targets.Add(new FileActionTarget(
+                item.FullPath,
+                item.SizeBytes,
+                FileActionTargetKind.File,
+                ExpectedModifiedUtc: item.ModifiedUtc));
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!ReferenceEquals(_sessionStore.CurrentSession, snapshot.Session) ||
+            snapshot.SelectedItems.Any(item => !IsCanonicalSimilarityItem(item)))
+        {
+            return new SelectionTargets(
+                [],
+                snapshot.SelectedItems.Select(static item => ChangedFailure(item.FullPath)).ToArray(),
+                snapshot.SelectedItems.Count);
+        }
+
+        return new SelectionTargets(targets, failures, snapshot.SelectedItems.Count);
     }
 
     public async Task<FileOperationResult> RenameFindingAsync(
@@ -504,6 +833,15 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         {
             IsPreviewPaneOpen = true;
         }
+
+        if (value is SimilarityGroupViewModel group)
+        {
+            _ = SelectSimilarityPreviewItemAsync(group.ReferenceItem);
+        }
+        else if (value is PathFindingViewModel)
+        {
+            ResetSimilarityPreview();
+        }
     }
 
     private void ResultsChanged(object? sender, AnalysisSession? session)
@@ -511,6 +849,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         _allFindings.Clear();
         _allGroups.Clear();
         SelectedResult = null;
+        ResetSimilarityPreview();
         IsPreviewPaneOpen = false;
 
         if (session is not null)
@@ -647,6 +986,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         { Tool: ToolKind.TemporaryFiles, ToolOptions: TemporaryFileToolOptions } => true,
         { Tool: ToolKind.InvalidLinks, ToolOptions: NoToolOptions } => true,
         { Tool: ToolKind.BrokenFiles, ToolOptions: NoToolOptions } => true,
+        { Tool: ToolKind.SimilarImages, ToolOptions: SimilarImageToolOptions } => true,
         _ => false,
     };
 
@@ -659,7 +999,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
 
     private void EnsureSelectedMutationIsSupported()
     {
-        if (!IsBulkMutationToolSupported || SelectedSimilarityItems.Count > 0)
+        if (!IsBulkMutationToolSupported)
         {
             throw new InvalidOperationException("Actions are not available for these results yet.");
         }
@@ -669,7 +1009,8 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         FileOperationSummary serviceSummary,
         IReadOnlyList<FileActionFailure> localFailures,
         AnalysisSession? initiatingSession,
-        bool wasCancelled)
+        bool wasCancelled,
+        SimilarityActionSnapshot? similaritySnapshot = null)
     {
         FileOperationResult[] localResults = localFailures
             .Select(static failure => new FileOperationResult(failure.Path, null, failure))
@@ -681,7 +1022,14 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         if (ReferenceEquals(_sessionStore.CurrentSession, initiatingSession))
         {
-            RemoveSuccessfulPaths(successfulPaths);
+            if (similaritySnapshot is null)
+            {
+                RemoveSuccessfulPaths(successfulPaths);
+            }
+            else
+            {
+                RebuildSimilarityGroups(successfulPaths, similaritySnapshot);
+            }
         }
         int succeeded = results.Count(static result => result.Succeeded);
         int failed = results.Length - succeeded;
@@ -697,7 +1045,8 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         DeleteSummary serviceSummary,
         SelectionTargets selection,
         AnalysisSession? initiatingSession,
-        bool wasCancelled)
+        bool wasCancelled,
+        SimilarityActionSnapshot? similaritySnapshot = null)
     {
         FileActionFailure[] failures = selection.Failures.Concat(serviceSummary.Failures).ToArray();
         IEnumerable<string> successfulPaths = serviceSummary.DeletedPaths ?? selection.Targets
@@ -707,7 +1056,14 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         HashSet<string> successfulPathSet = successfulPaths.ToHashSet(StringComparer.OrdinalIgnoreCase);
         if (ReferenceEquals(_sessionStore.CurrentSession, initiatingSession))
         {
-            RemoveSuccessfulPaths(successfulPathSet);
+            if (similaritySnapshot is null)
+            {
+                RemoveSuccessfulPaths(successfulPathSet);
+            }
+            else
+            {
+                RebuildSimilarityGroups(successfulPathSet, similaritySnapshot);
+            }
         }
         ActionStatusMessage = wasCancelled
             ? $"Delete cancelled after {serviceSummary.DeletedCount:N0} " +
@@ -1309,6 +1665,66 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         };
     }
 
+    private void RebuildSimilarityGroups(
+        IReadOnlySet<string> successfulPaths,
+        SimilarityActionSnapshot snapshot)
+    {
+        if (!ReferenceEquals(_sessionStore.CurrentSession, snapshot.Session))
+        {
+            return;
+        }
+
+        IAnalysisService analysisService = _analysisService ??
+            throw new InvalidOperationException("Similarity regrouping is not configured.");
+        SimilarityItem[] survivors = _allGroups
+            .SelectMany(static group => group.Items)
+            .Where(item => !successfulPaths.Contains(item.FullPath))
+            .Select(static item => item.Source)
+            .ToArray();
+        IReadOnlyList<SimilarityGroup> regrouped = analysisService.RegroupSimilarityItems(
+            snapshot.Session.Tool,
+            snapshot.Session.ToolOptions,
+            survivors);
+
+        _allGroups.Clear();
+        _allGroups.AddRange(regrouped.Select(group => new SimilarityGroupViewModel(group, SelectionChanged)));
+        foreach (SimilarityItemViewModel item in _allGroups.SelectMany(static group => group.Items))
+        {
+            item.IsSelected = snapshot.SelectionPaths.Contains(item.FullPath);
+        }
+
+        SimilarityGroupViewModel? previewGroup = null;
+        SimilarityItemViewModel? previewItem = null;
+        if (snapshot.PreviewPath is not null)
+        {
+            foreach (SimilarityGroupViewModel group in _allGroups)
+            {
+                SimilarityItemViewModel? matching = group.Items.FirstOrDefault(item =>
+                    string.Equals(item.FullPath, snapshot.PreviewPath, StringComparison.OrdinalIgnoreCase));
+                if (matching is not null)
+                {
+                    previewGroup = group;
+                    previewItem = matching;
+                    break;
+                }
+            }
+        }
+
+        if (previewItem is null)
+        {
+            SelectedResult = null;
+            ResetSimilarityPreview();
+        }
+        else
+        {
+            SelectedResult = previewGroup;
+            _ = SelectSimilarityPreviewItemAsync(previewItem);
+        }
+
+        ApplyFilterAndSort();
+        NotifyResultStateChanged();
+    }
+
     private void RemoveSuccessfulPaths(IReadOnlySet<string> successfulPaths)
     {
         if (successfulPaths.Count == 0)
@@ -1404,6 +1820,65 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
     private static bool IsFileSystemFailure(Exception ex) =>
         ex is IOException or UnauthorizedAccessException or SecurityException or ArgumentException or NotSupportedException;
 
+    private static bool IsExpectedSimilarityProviderFailure(Exception exception) =>
+        exception is IOException or UnauthorizedAccessException or SecurityException or ArgumentException or
+            NotSupportedException or InvalidDataException or OverflowException or COMException;
+
+    private static bool IsSimilarImageSession(AnalysisSession? session) =>
+        session is { Tool: ToolKind.SimilarImages, ToolOptions: SimilarImageToolOptions };
+
+    private bool IsCurrentSimilarityItem(
+        AnalysisSession session,
+        SimilarityItemViewModel item) =>
+        IsSimilarImageSession(session) &&
+        ReferenceEquals(_sessionStore.CurrentSession, session) &&
+        IsCanonicalSimilarityItem(item);
+
+    private bool IsCanonicalSimilarityItem(SimilarityItemViewModel item) =>
+        _allGroups.Any(group => group.Items.Contains(item));
+
+    private static bool TryReadSimilaritySnapshot(
+        string path,
+        out SimilarityFileSnapshot snapshot)
+    {
+        try
+        {
+            FileAttributes attributes = File.GetAttributes(path);
+            var file = new FileInfo(path);
+            file.Refresh();
+            if (!file.Exists ||
+                attributes.HasFlag(FileAttributes.Directory) ||
+                attributes.HasFlag(FileAttributes.ReparsePoint))
+            {
+                snapshot = default;
+                return false;
+            }
+
+            snapshot = new SimilarityFileSnapshot(file.Length, file.LastWriteTimeUtc);
+            return true;
+        }
+        catch (Exception ex) when (IsExpectedSimilarityProviderFailure(ex))
+        {
+            snapshot = default;
+            return false;
+        }
+    }
+
+    private static bool MatchesSimilaritySnapshot(
+        SimilarityItemViewModel item,
+        SimilarityFileSnapshot snapshot) =>
+        snapshot.SizeBytes == item.SizeBytes && snapshot.ModifiedUtc.Ticks == item.ModifiedUtc.Ticks;
+
+    private void ResetSimilarityPreview()
+    {
+        _previewCancellation?.Cancel();
+        _previewCancellation?.Dispose();
+        _previewCancellation = null;
+        SelectedSimilarityPreviewItem = null;
+        SimilarityPreview = null;
+        SimilarityPreviewStatusText = string.Empty;
+    }
+
     private static IReadOnlyDictionary<string, string> MergeMetadata(
         IReadOnlyDictionary<string, string> groupMetadata,
         IReadOnlyDictionary<string, string> itemMetadata)
@@ -1431,4 +1906,12 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         IReadOnlyList<FileActionTarget> Targets,
         IReadOnlyList<FileActionFailure> Failures,
         int SelectedCount);
+
+    private sealed record SimilarityActionSnapshot(
+        AnalysisSession Session,
+        IReadOnlyList<SimilarityItemViewModel> SelectedItems,
+        IReadOnlySet<string> SelectionPaths,
+        string? PreviewPath);
+
+    private readonly record struct SimilarityFileSnapshot(long SizeBytes, DateTime ModifiedUtc);
 }

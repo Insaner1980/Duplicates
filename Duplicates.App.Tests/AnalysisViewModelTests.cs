@@ -329,6 +329,48 @@ public sealed class AnalysisViewModelTests
     }
 
     [Fact]
+    public async Task SimilarImages_PresetIsNativeBalancedByDefaultAndStoresExactImmutableRunOptions()
+    {
+        ToolOptions? requestedOptions = null;
+        var service = new FakeAnalysisService
+        {
+            Run = (_, _, options, _, _) =>
+            {
+                requestedOptions = options;
+                return Task.FromResult(NewResult());
+            },
+        };
+        var store = new AnalysisSessionStore();
+        var viewModel = new AnalysisViewModel(service, store, NewScope());
+        viewModel.SelectTool(ToolKind.SimilarImages);
+
+        Assert.Equal(SimilarityPreset.Balanced, viewModel.ImageSimilarityPreset);
+        Assert.Equal("Balanced image matching allows a Hamming distance up to 8.", viewModel.OptionsSummary);
+        Assert.Equal(Visibility.Visible, viewModel.SimilarImageOptionsVisibility);
+
+        viewModel.ImageSimilarityPreset = SimilarityPreset.Strict;
+        Assert.Equal("Strict image matching allows a Hamming distance up to 4.", viewModel.OptionsSummary);
+        await viewModel.StartAnalysisCommand.ExecuteAsync(null);
+
+        var options = Assert.IsType<SimilarImageToolOptions>(requestedOptions);
+        Assert.Equal(4, options.MaximumHammingDistance);
+        Assert.Same(options, Assert.IsType<AnalysisSession>(store.CurrentSession).ToolOptions);
+
+        viewModel.SelectTool(ToolKind.BigFiles);
+        Assert.Equal(Visibility.Collapsed, viewModel.SimilarImageOptionsVisibility);
+    }
+
+    [Fact]
+    public void SimilarImages_LegacySessionDefaultUsesBalancedDistanceEight()
+    {
+        var store = new AnalysisSessionStore();
+
+        store.SetCompleted(ToolKind.SimilarImages, new AnalysisScope(), NewResult());
+
+        Assert.Equal(8, Assert.IsType<SimilarImageToolOptions>(store.CurrentSession!.ToolOptions).MaximumHammingDistance);
+    }
+
+    [Fact]
     public void BigFiles_PresetsUseExactByteValuesAndNoOptionStorageToolsHideOptions()
     {
         var viewModel = new AnalysisViewModel(
@@ -508,6 +550,16 @@ public sealed class AnalysisViewModelTests
             CallCount++;
             return Run(tool, scope, toolOptions, progress, cancellationToken);
         }
+
+        public Task<bool> RevalidateSimilarityItemAsync(
+            ToolKind tool,
+            SimilarityItem item,
+            CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public IReadOnlyList<SimilarityGroup> RegroupSimilarityItems(
+            ToolKind tool,
+            ToolOptions options,
+            IReadOnlyList<SimilarityItem> items) => throw new NotSupportedException();
     }
 
     private sealed class CapturingProgress<T>(Action<T> report) : IProgress<T>

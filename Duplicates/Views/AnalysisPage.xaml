@@ -129,6 +129,15 @@
                                         ValidationMode="InvalidInputOverwritten"
                                         Value="{Binding TemporaryFileMinimumAgeDays, Mode=TwoWay}" />
                                 </StackPanel>
+                                <StackPanel Visibility="{Binding SimilarImageOptionsVisibility}">
+                                    <ComboBox
+                                        Header="Image similarity"
+                                        SelectedIndex="{Binding ImageSimilarityPreset, Mode=TwoWay}">
+                                        <ComboBoxItem Content="Strict" />
+                                        <ComboBoxItem Content="Balanced" />
+                                        <ComboBoxItem Content="Broad" />
+                                    </ComboBox>
+                                </StackPanel>
                                 <TextBlock
                                     Style="{StaticResource MutedTextBlockStyle}"
                                     Text="{Binding OptionsSummary}"

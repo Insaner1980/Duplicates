@@ -1,4 +1,6 @@
 using Duplicates.Engine.Analysis.Media;
+using Duplicates.Engine.Analysis;
+using Duplicates.Models;
 using Duplicates.Services;
 using Windows.Foundation;
 using Windows.Graphics.Imaging;
@@ -127,6 +129,51 @@ public sealed class WindowsMediaProviderTests : IDisposable
     }
 
     [Fact]
+    public async Task MediaPreviewLoader_DecodesCanonicalImageItemCapsItAt512AndReleasesTheSource()
+    {
+        string path = await WriteSolidImageAsync("preview.png", width: 1024, height: 256);
+        var info = new FileInfo(path);
+        SimilarityItem item = new()
+        {
+            FullPath = path,
+            SizeBytes = info.Length,
+            ModifiedUtc = info.LastWriteTimeUtc,
+            SimilarityPercent = 100,
+            Evidence = new ImageSimilarityEvidence(0, 1024, 256, "PNG"),
+        };
+
+        MediaPreviewData preview = await new WindowsMediaPreviewLoader().LoadAsync(
+            ToolKind.SimilarImages,
+            item,
+            CancellationToken.None);
+
+        Assert.Equal(512, preview.Width);
+        Assert.Equal(128, preview.Height);
+        Assert.Equal(512 * 128 * 4, preview.Bgra8.Length);
+        MoveAwayAndBack(path);
+        await File.WriteAllBytesAsync(path, new byte[info.Length]);
+    }
+
+    [Fact]
+    public async Task MediaPreviewLoader_FailsClosedForNonImageToolOrEvidence()
+    {
+        SimilarityItem item = new()
+        {
+            FullPath = Path.Combine(_root, "preview.jpg"),
+            SizeBytes = 1,
+            ModifiedUtc = DateTime.UnixEpoch,
+            SimilarityPercent = 100,
+            Evidence = new ImageSimilarityEvidence(0, 10, 10, "JPEG"),
+        };
+        var loader = new WindowsMediaPreviewLoader();
+
+        await Assert.ThrowsAsync<NotSupportedException>(() => loader.LoadAsync(
+            ToolKind.MusicDuplicates,
+            item,
+            CancellationToken.None));
+    }
+
+    [Fact]
     public async Task VideoProvider_UsesCodedDimensionsAndDisplayRenderedPixelsForRotate90()
     {
         StorageFolder folder = await StorageFolder.GetFolderFromPathAsync(_root);
@@ -246,7 +293,7 @@ public sealed class WindowsMediaProviderTests : IDisposable
         return path;
     }
 
-    private async Task<string> WriteSolidImageAsync(string name)
+    private async Task<string> WriteSolidImageAsync(string name, uint width = 2, uint height = 1)
     {
         StorageFolder folder = await StorageFolder.GetFolderFromPathAsync(_root);
         StorageFile file = await folder.CreateFileAsync(name, CreationCollisionOption.ReplaceExisting);
@@ -267,14 +314,21 @@ public sealed class WindowsMediaProviderTests : IDisposable
 
         try
         {
+            byte[] pixels = new byte[checked((int)(width * height * 4))];
+            for (int offset = 0; offset < pixels.Length; offset += 4)
+            {
+                pixels[offset + 2] = 255;
+                pixels[offset + 3] = 255;
+            }
+
             encoder.SetPixelData(
                 BitmapPixelFormat.Bgra8,
                 BitmapAlphaMode.Ignore,
-                2,
-                1,
+                width,
+                height,
                 96,
                 96,
-                [0, 0, 255, 255, 0, 0, 255, 255]);
+                pixels);
             var flushOperation = encoder.FlushAsync();
             try
             {

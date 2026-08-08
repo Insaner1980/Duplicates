@@ -1,10 +1,14 @@
+using System.ComponentModel;
+using System.Runtime.InteropServices.WindowsRuntime;
 using Duplicates.Models;
 using Duplicates.Services;
 using Duplicates.ViewModels;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media.Imaging;
 using Microsoft.Windows.Storage.Pickers;
+using Windows.Graphics.Imaging;
 
 namespace Duplicates.Views;
 
@@ -27,11 +31,47 @@ public sealed partial class AnalysisResultsPage : Page
     {
         ViewModel.NewAnalysisRequested -= NewAnalysisRequested;
         ViewModel.NewAnalysisRequested += NewAnalysisRequested;
+        ViewModel.PropertyChanged -= ViewModel_PropertyChanged;
+        ViewModel.PropertyChanged += ViewModel_PropertyChanged;
+        _ = UpdateSimilarityPreviewAsync();
     }
 
     private void AnalysisResultsPage_Unloaded(object sender, RoutedEventArgs e)
     {
         ViewModel.NewAnalysisRequested -= NewAnalysisRequested;
+        ViewModel.PropertyChanged -= ViewModel_PropertyChanged;
+        SimilarityPreviewImage.Source = null;
+    }
+
+    private async void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(AnalysisResultsViewModel.SimilarityPreview))
+        {
+            await UpdateSimilarityPreviewAsync();
+        }
+    }
+
+    private async Task UpdateSimilarityPreviewAsync()
+    {
+        MediaPreviewData? preview = ViewModel.SimilarityPreview;
+        if (preview is null)
+        {
+            SimilarityPreviewImage.Source = null;
+            return;
+        }
+
+        using SoftwareBitmap bitmap = SoftwareBitmap.CreateCopyFromBuffer(
+            preview.Bgra8.AsBuffer(),
+            BitmapPixelFormat.Bgra8,
+            preview.Width,
+            preview.Height,
+            BitmapAlphaMode.Premultiplied);
+        var source = new SoftwareBitmapSource();
+        await source.SetBitmapAsync(bitmap);
+        if (ReferenceEquals(ViewModel.SimilarityPreview, preview))
+        {
+            SimilarityPreviewImage.Source = source;
+        }
     }
 
     private void NewAnalysisRequested(object? sender, ToolKind tool)

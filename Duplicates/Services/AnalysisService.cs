@@ -14,20 +14,39 @@ public interface IAnalysisService
         ToolOptions toolOptions,
         IProgress<AnalysisProgress>? progress,
         CancellationToken cancellationToken);
+
+    Task<bool> RevalidateSimilarityItemAsync(
+        ToolKind tool,
+        SimilarityItem item,
+        CancellationToken cancellationToken);
+
+    IReadOnlyList<SimilarityGroup> RegroupSimilarityItems(
+        ToolKind tool,
+        ToolOptions options,
+        IReadOnlyList<SimilarityItem> items);
 }
 
 public sealed class AnalysisService : IAnalysisService
 {
     private readonly IFileFormatProbe? _fileFormatProbe;
+    private readonly IImageSampleProvider? _imageSampleProvider;
 
     public AnalysisService()
-        : this(null)
+        : this(null, null)
     {
     }
 
     public AnalysisService(IFileFormatProbe? fileFormatProbe)
+        : this(fileFormatProbe, null)
+    {
+    }
+
+    public AnalysisService(
+        IFileFormatProbe? fileFormatProbe,
+        IImageSampleProvider? imageSampleProvider)
     {
         _fileFormatProbe = fileFormatProbe;
+        _imageSampleProvider = imageSampleProvider;
     }
 
     public async Task<AnalysisResult> RunAsync(
@@ -55,7 +74,18 @@ public sealed class AnalysisService : IAnalysisService
             throw new ArgumentException($"Options do not match {tool}.", nameof(toolOptions));
         }
 
+        if (toolOptions is SimilarImageToolOptions { MaximumHammingDistance: < 0 or > 12 })
+        {
+            throw new ArgumentOutOfRangeException(nameof(toolOptions));
+        }
+
         if (tool == ToolKind.BrokenFiles && _fileFormatProbe is null)
+        {
+            throw new NotSupportedException(
+                $"The {ToolDescriptor.For(tool).Title} analyzer is not installed yet.");
+        }
+
+        if (tool == ToolKind.SimilarImages && _imageSampleProvider is null)
         {
             throw new NotSupportedException(
                 $"The {ToolDescriptor.For(tool).Title} analyzer is not installed yet.");
@@ -93,6 +123,11 @@ public sealed class AnalysisService : IAnalysisService
                 inventory,
                 new TemporaryFileOptions(options.MinimumAge, options.UtcNow),
                 cancellationToken).ConfigureAwait(false),
+            (ToolKind.SimilarImages, SimilarImageToolOptions options) => await new SimilarImageAnalyzer(
+                _imageSampleProvider!).AnalyzeAsync(
+                    inventory,
+                    new SimilarImageOptions(options.MaximumHammingDistance),
+                    cancellationToken).ConfigureAwait(false),
             _ => throw new NotSupportedException(
                 $"The {ToolDescriptor.For(tool).Title} analyzer is not installed yet."),
         };
@@ -100,4 +135,26 @@ public sealed class AnalysisService : IAnalysisService
         stopwatch.Stop();
         return result with { Elapsed = stopwatch.Elapsed };
     }
+
+    public Task<bool> RevalidateSimilarityItemAsync(
+        ToolKind tool,
+        SimilarityItem item,
+        CancellationToken cancellationToken) => (tool, _imageSampleProvider) switch
+        {
+            (ToolKind.SimilarImages, not null) => new SimilarImageAnalyzer(_imageSampleProvider)
+                .RevalidateAsync(item, cancellationToken),
+            _ => throw new NotSupportedException($"Revalidation is not available for {tool}."),
+        };
+
+    public IReadOnlyList<SimilarityGroup> RegroupSimilarityItems(
+        ToolKind tool,
+        ToolOptions options,
+        IReadOnlyList<SimilarityItem> items) => (tool, options, _imageSampleProvider) switch
+        {
+            (ToolKind.SimilarImages, SimilarImageToolOptions imageOptions, not null) =>
+                new SimilarImageAnalyzer(_imageSampleProvider).Regroup(
+                    items,
+                    new SimilarImageOptions(imageOptions.MaximumHammingDistance)),
+            _ => throw new NotSupportedException($"Regrouping is not available for {tool} with these options."),
+        };
 }

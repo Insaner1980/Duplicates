@@ -63,12 +63,21 @@
                                     AutomationProperties.Name="Select similar item for action"
                                     IsChecked="{Binding IsSelected, Mode=TwoWay}" />
                                 <StackPanel Grid.Column="1" Spacing="2">
-                                    <TextBlock Text="{Binding DisplayName}" />
+                                    <HyperlinkButton
+                                        Padding="0"
+                                        HorizontalAlignment="Left"
+                                        Command="{Binding DataContext.SelectSimilarityPreviewItemCommand, ElementName=PageRoot}"
+                                        CommandParameter="{Binding}"
+                                        Content="{Binding DisplayName}" />
                                     <TextBlock
                                         MaxLines="2"
                                         Style="{StaticResource PathTextBlockStyle}"
                                         Text="{Binding FullPath}"
+                                        ToolTipService.ToolTip="{Binding FullPath}"
                                         TextWrapping="Wrap" />
+                                    <TextBlock
+                                        Style="{StaticResource MutedTextBlockStyle}"
+                                        Text="{Binding MediaDetailsText}" />
                                     <TextBlock
                                         Style="{StaticResource MutedTextBlockStyle}"
                                         Text="{Binding SummaryText}" />
@@ -244,6 +253,18 @@
                 Visibility="{Binding ResultsVisibility}">
                 <SplitView.Pane>
                     <StackPanel Padding="20,0,0,0" Spacing="12">
+                        <Image
+                            x:Name="SimilarityPreviewImage"
+                            MaxWidth="512"
+                            MaxHeight="512"
+                            HorizontalAlignment="Left"
+                            Stretch="Uniform"
+                            Visibility="{Binding SimilarityPreviewVisibility}" />
+                        <TextBlock
+                            AutomationProperties.LiveSetting="Polite"
+                            Style="{StaticResource MutedTextBlockStyle}"
+                            Text="{Binding SimilarityPreviewStatusText}"
+                            Visibility="{Binding SimilarityPreviewStatusVisibility}" />
                         <TextBlock
                             AutomationProperties.HeadingLevel="Level2"
                             Style="{StaticResource SectionHeaderTextBlockStyle}"

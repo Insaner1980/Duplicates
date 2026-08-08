@@ -266,6 +266,24 @@ public sealed class NativeWinUiContractTests
     }
 
     [Fact]
+    public void AnalysisPage_UsesOneNativeSimilarImagePresetComboBox()
+    {
+        XDocument page = LoadXaml(@"Views\AnalysisPage.xaml");
+        XElement combo = page.Descendants(Presentation + "ComboBox")
+            .Single(element => (string?)element.Attribute("Header") == "Image similarity");
+
+        Assert.Equal(
+            "{Binding ImageSimilarityPreset, Mode=TwoWay}",
+            (string?)combo.Attribute("SelectedIndex"));
+        Assert.Equal(
+            "{Binding SimilarImageOptionsVisibility}",
+            (string?)combo.Parent?.Attribute("Visibility"));
+        Assert.Equal(
+            new[] { "Strict", "Balanced", "Broad" },
+            combo.Elements(Presentation + "ComboBoxItem").Select(item => (string?)item.Attribute("Content")));
+    }
+
+    [Fact]
     public void AnalysisResultsPage_UsesOneNativeListCommandBarAndResponsivePreview()
     {
         XDocument page = LoadXaml(@"Views\AnalysisResultsPage.xaml");
@@ -306,10 +324,45 @@ public sealed class NativeWinUiContractTests
         Assert.Contains(
             similarityItems.Descendants(Presentation + "CheckBox"),
             checkBox => (string?)checkBox.Attribute("IsChecked") == "{Binding IsSelected, Mode=TwoWay}");
+        XElement previewCommand = Assert.Single(similarityItems.Descendants(Presentation + "HyperlinkButton"));
+        Assert.Equal("{Binding DisplayName}", (string?)previewCommand.Attribute("Content"));
+        Assert.Equal(
+            "{Binding DataContext.SelectSimilarityPreviewItemCommand, ElementName=PageRoot}",
+            (string?)previewCommand.Attribute("Command"));
+        Assert.Equal("{Binding}", (string?)previewCommand.Attribute("CommandParameter"));
+        Assert.Empty(similarityItems.Descendants(Presentation + "ListView"));
+        Assert.Contains(
+            similarityItems.Descendants(Presentation + "TextBlock"),
+            text => (string?)text.Attribute("Text") == "{Binding MediaDetailsText}");
+        Assert.Contains(
+            similarityItems.Descendants(Presentation + "TextBlock"),
+            text =>
+                (string?)text.Attribute("Text") == "{Binding FullPath}" &&
+                (string?)text.Attribute("ToolTipService.ToolTip") == "{Binding FullPath}");
 
         XElement list = Assert.Single(page.Descendants(Presentation + "ListView"));
         Assert.Equal("Single", (string?)list.Attribute("SelectionMode"));
         Assert.Equal("{Binding SelectedResult, Mode=TwoWay}", (string?)list.Attribute("SelectedItem"));
+    }
+
+    [Fact]
+    public void AnalysisResultsPage_UsesCappedNativeImagePreviewAndNonfatalFallback()
+    {
+        XDocument page = LoadXaml(@"Views\AnalysisResultsPage.xaml");
+        XElement preview = page.Descendants(Presentation + "Image")
+            .Single(element => (string?)element.Attribute(Xaml + "Name") == "SimilarityPreviewImage");
+
+        Assert.Equal("512", (string?)preview.Attribute("MaxWidth"));
+        Assert.Equal("512", (string?)preview.Attribute("MaxHeight"));
+        Assert.Equal("Uniform", (string?)preview.Attribute("Stretch"));
+        Assert.Equal(
+            "{Binding SimilarityPreviewVisibility}",
+            (string?)preview.Attribute("Visibility"));
+        Assert.Contains(
+            page.Descendants(Presentation + "TextBlock"),
+            text =>
+                (string?)text.Attribute("Text") == "{Binding SimilarityPreviewStatusText}" &&
+                (string?)text.Attribute("Visibility") == "{Binding SimilarityPreviewStatusVisibility}");
     }
 
     [Fact]

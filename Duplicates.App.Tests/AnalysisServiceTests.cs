@@ -195,6 +195,72 @@ public sealed class AnalysisServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task SimilarImages_UsesInjectedProviderAndExposesFreshRevalidationAndPureRegroupArms()
+    {
+        string first = Path.Combine(_root, "first.jpg");
+        string second = Path.Combine(_root, "second.png");
+        await File.WriteAllBytesAsync(first, [1]);
+        await File.WriteAllBytesAsync(second, [2]);
+        var provider = new FakeImageSampleProvider();
+        var service = new AnalysisService(fileFormatProbe: null, imageSampleProvider: provider);
+        var options = new SimilarImageToolOptions(8);
+
+        AnalysisResult result = await service.RunAsync(
+            ToolKind.SimilarImages,
+            new AnalysisScope { IncludedFiles = [second, first] },
+            options,
+            progress: null,
+            CancellationToken.None);
+
+        SimilarityGroup group = Assert.Single(result.Groups);
+        Assert.Equal(2, group.Items.Count);
+        Assert.Equal([first, second], provider.CachedPaths);
+        Assert.True(result.Elapsed >= TimeSpan.Zero);
+
+        Assert.True(await service.RevalidateSimilarityItemAsync(
+            ToolKind.SimilarImages,
+            group.Items[0],
+            CancellationToken.None));
+        Assert.Equal([group.Items[0].FullPath], provider.FreshPaths);
+
+        IReadOnlyList<SimilarityGroup> regrouped = service.RegroupSimilarityItems(
+            ToolKind.SimilarImages,
+            options,
+            group.Items);
+        Assert.Equal(group.Items.Select(static item => item.FullPath), Assert.Single(regrouped).Items.Select(static item => item.FullPath));
+    }
+
+    [Fact]
+    public async Task SimilarImageServiceArms_FailClosedForMissingProviderAndWrongToolOptionPairs()
+    {
+        var missing = new AnalysisService();
+        await Assert.ThrowsAsync<NotSupportedException>(() => missing.RunAsync(
+            ToolKind.SimilarImages,
+            new AnalysisScope { IncludedFolders = [Path.Combine(_root, "missing")] },
+            new SimilarImageToolOptions(8),
+            progress: null,
+            CancellationToken.None));
+
+        SimilarityItem item = new()
+        {
+            FullPath = Path.Combine(_root, "item.jpg"),
+            SizeBytes = 1,
+            ModifiedUtc = DateTime.UnixEpoch,
+            SimilarityPercent = 100,
+            Evidence = new ImageSimilarityEvidence(0, 100, 100, "JPEG"),
+        };
+        var configured = new AnalysisService(null, new FakeImageSampleProvider());
+        await Assert.ThrowsAsync<NotSupportedException>(() => configured.RevalidateSimilarityItemAsync(
+            ToolKind.SimilarVideos,
+            item,
+            CancellationToken.None));
+        Assert.Throws<NotSupportedException>(() => configured.RegroupSimilarityItems(
+            ToolKind.SimilarImages,
+            new NoToolOptions(),
+            [item]));
+    }
+
+    [Fact]
     public void AppServices_ComposesOneProbeIntoAnalysisAndActionRevalidation()
     {
         var services = new AppServices();
@@ -210,6 +276,17 @@ public sealed class AnalysisServiceTests : IDisposable
             typeof(Duplicates.ViewModels.AnalysisResultsViewModel)
                 .GetField("_fileFormatProbe", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
                 .GetValue(services.AnalysisResultsViewModel));
+        Assert.Same(
+            services.ImageSampleProvider,
+            typeof(AnalysisService)
+                .GetField("_imageSampleProvider", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .GetValue(services.AnalysisService));
+        Assert.Same(
+            services.AnalysisService,
+            typeof(Duplicates.ViewModels.AnalysisResultsViewModel)
+                .GetField("_analysisService", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .GetValue(services.AnalysisResultsViewModel));
+        Assert.IsType<WindowsMediaPreviewLoader>(services.MediaPreviewLoader);
     }
 
     private static void CreateFileSymbolicLinkOrSkip(string linkPath, string targetPath)

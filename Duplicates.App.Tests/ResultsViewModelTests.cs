@@ -600,7 +600,7 @@ public sealed class ResultsViewModelTests
     }
 
     [Fact]
-    public async Task AnalysisMutations_SimilarityItemsFailClosedWithoutCallingFileActions()
+    public async Task AnalysisMutations_SimilarityItemsRequireConfiguredRevalidationBeforeFileActions()
     {
         string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
@@ -636,7 +636,7 @@ public sealed class ResultsViewModelTests
                 });
             viewModel.Groups[0].Items.Single(item => !item.IsReference).IsSelected = true;
 
-            Assert.False(viewModel.CanActOnSelection);
+            Assert.True(viewModel.CanActOnSelection);
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
                 viewModel.DeleteSelectedAsync(CancellationToken.None));
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
@@ -833,5 +833,6 @@ public sealed class ResultsViewModelTests
         SizeBytes = 1,
         ModifiedUtc = new DateTime(2026, 8, 7, 12, 0, 0, DateTimeKind.Utc),
         SimilarityPercent = similarity,
+        Evidence = new ImageSimilarityEvidence(0, 100, 100, "JPEG"),
     };
 }

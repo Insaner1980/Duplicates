@@ -150,6 +150,31 @@ internal sealed class FakeFileFormatProbe : IFileFormatProbe
     }
 }
 
+internal sealed class FakeImageSampleProvider : IImageSampleProvider
+{
+    public Func<string, CancellationToken, Task<ImageSample>> CachedHandler { get; set; } =
+        (_, _) => Task.FromResult(new ImageSample(100, 100, new byte[1024], "JPEG"));
+
+    public Func<string, CancellationToken, Task<ImageSample>> FreshHandler { get; set; } =
+        (_, _) => Task.FromResult(new ImageSample(100, 100, new byte[1024], "JPEG"));
+
+    public List<string> CachedPaths { get; } = [];
+
+    public List<string> FreshPaths { get; } = [];
+
+    public Task<ImageSample> GetSampleAsync(string path, CancellationToken cancellationToken)
+    {
+        CachedPaths.Add(path);
+        return CachedHandler(path, cancellationToken);
+    }
+
+    public Task<ImageSample> GetFreshSampleAsync(string path, CancellationToken cancellationToken)
+    {
+        FreshPaths.Add(path);
+        return FreshHandler(path, cancellationToken);
+    }
+}
+
 internal sealed class FakeResultExportService : IResultExportService
 {
     public ResultExportSnapshot? Snapshot { get; private set; }

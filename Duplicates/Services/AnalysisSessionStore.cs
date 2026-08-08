@@ -46,7 +46,7 @@ public sealed class AnalysisSessionStore
     private static ToolOptions DefaultOptions(ToolKind tool) => tool switch
     {
         ToolKind.BigFiles => new LargeFileToolOptions(1_073_741_824),
-        ToolKind.SimilarImages => new SimilarImageToolOptions(10),
+        ToolKind.SimilarImages => new SimilarImageToolOptions(8),
         ToolKind.SimilarVideos => new SimilarVideoToolOptions(10),
         ToolKind.MusicDuplicates => new MusicDuplicateToolOptions(TimeSpan.FromSeconds(2)),
         _ => new NoToolOptions(),
