@@ -163,7 +163,7 @@ public sealed partial class MainWindow : Window
         AppOperationKind.ExactResultsAction => pageType == typeof(ResultsPage),
         AppOperationKind.AnalysisResultsAction => pageType == typeof(AnalysisResultsPage),
         AppOperationKind.ExifCleaning => pageType == typeof(ExifRemoverPage),
-        AppOperationKind.VideoOptimization => pageType?.Name == "VideoOptimizerPage",
+        AppOperationKind.VideoOptimization => pageType == typeof(VideoOptimizerPage),
         _ => false,
     };
 
@@ -171,6 +171,7 @@ public sealed partial class MainWindow : Window
     {
         ToolKind.DuplicateFiles => typeof(ScanPage),
         ToolKind.ExifRemover => typeof(ExifRemoverPage),
+        ToolKind.VideoOptimizer => typeof(VideoOptimizerPage),
         _ => null,
     };
 

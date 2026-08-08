@@ -1,0 +1,248 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="Duplicates.Views.VideoOptimizerPage"
+    x:Name="PageRoot"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:Duplicates.Views.Controls"
+    Loaded="Page_Loaded"
+    Unloaded="Page_Unloaded">
+    <Page.Resources>
+        <DataTemplate x:Key="VideoOptimizationQueueTemplate">
+            <Grid Padding="8,10" RowSpacing="4">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <TextBlock
+                    Style="{ThemeResource BodyStrongTextBlockStyle}"
+                    Text="{Binding SourcePath}"
+                    TextWrapping="Wrap"
+                    ToolTipService.ToolTip="{Binding SourcePath}" />
+                <TextBlock
+                    Grid.Row="1"
+                    Style="{StaticResource MutedTextBlockStyle}"
+                    Text="{Binding SnapshotText}" />
+                <TextBlock Grid.Row="2" Text="{Binding SourceSummary}" TextWrapping="Wrap" />
+                <TextBlock Grid.Row="3" Text="{Binding TargetSummary}" TextWrapping="Wrap" />
+                <TextBlock
+                    Grid.Row="4"
+                    Style="{StaticResource PathTextBlockStyle}"
+                    Text="{Binding DestinationPath}"
+                    TextWrapping="Wrap"
+                    ToolTipService.ToolTip="{Binding DestinationPath}" />
+                <ProgressBar Grid.Row="5" Maximum="100" Value="{Binding Progress}" />
+                <TextBlock Grid.Row="6" Text="{Binding OutputSummary}" TextWrapping="Wrap" />
+                <TextBlock Grid.Row="7" Text="{Binding Detail}" TextWrapping="Wrap" />
+                <StackPanel Grid.Row="8" Spacing="4">
+                    <TextBlock
+                        Style="{StaticResource PathTextBlockStyle}"
+                        Text="{Binding OutputPath}"
+                        TextWrapping="Wrap"
+                        ToolTipService.ToolTip="{Binding OutputPath}" />
+                    <TextBlock
+                        Style="{StaticResource PathTextBlockStyle}"
+                        Text="{Binding RecoveryPathsText}"
+                        TextWrapping="Wrap" />
+                </StackPanel>
+                <StackPanel
+                    Grid.Row="9"
+                    Orientation="Horizontal"
+                    Spacing="{StaticResource SpacingSmall}"
+                    Visibility="{Binding OutputActionsVisibility}">
+                    <Button
+                        AutomationProperties.Name="Open optimized video"
+                        Command="{Binding DataContext.OpenOutputCommand, ElementName=PageRoot}"
+                        CommandParameter="{Binding}"
+                        Content="Open" />
+                    <Button
+                        AutomationProperties.Name="Reveal optimized video in Explorer"
+                        Command="{Binding DataContext.RevealOutputCommand, ElementName=PageRoot}"
+                        CommandParameter="{Binding}"
+                        Content="Reveal in Explorer" />
+                </StackPanel>
+            </Grid>
+        </DataTemplate>
+    </Page.Resources>
+
+    <Grid Background="{ThemeResource BgBaseBrush}">
+        <VisualStateManager.VisualStateGroups>
+            <VisualStateGroup x:Name="WindowWidthStates">
+                <VisualState x:Name="Small">
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="0" />
+                    </VisualState.StateTriggers>
+                    <VisualState.Setters>
+                        <Setter Target="HeaderActionRail.(Grid.Row)" Value="1" />
+                    </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="Medium">
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="641" />
+                    </VisualState.StateTriggers>
+                </VisualState>
+            </VisualStateGroup>
+        </VisualStateManager.VisualStateGroups>
+
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Grid
+            MaxWidth="{StaticResource ContentMaxWidth}"
+            Padding="{StaticResource PageHeaderPadding}"
+            HorizontalAlignment="Stretch">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <StackPanel Spacing="6">
+                <TextBlock
+                    AutomationProperties.HeadingLevel="Level1"
+                    Style="{ThemeResource TitleTextBlockStyle}"
+                    Text="Video optimizer" />
+                <TextBlock
+                    Style="{StaticResource MutedTextBlockStyle}"
+                    Text="Create smaller MP4 copies while preserving the original videos."
+                    TextWrapping="Wrap" />
+            </StackPanel>
+            <Grid
+                x:Name="HeaderActionRail"
+                Grid.ColumnSpan="2"
+                MaxWidth="{StaticResource ScanWorkAreaMaxWidth}"
+                HorizontalAlignment="Stretch">
+                <Button
+                    HorizontalAlignment="Right"
+                    VerticalAlignment="Center"
+                    AccessKey="O"
+                    Command="{Binding OptimizeVideosCommand}"
+                    Style="{StaticResource AccentButtonStyle}">
+                    <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpacingSmall}">
+                        <SymbolIcon Symbol="Play" />
+                        <TextBlock Text="Optimize videos" />
+                    </StackPanel>
+                </Button>
+            </Grid>
+        </Grid>
+
+        <ScrollViewer
+            Grid.Row="1"
+            HorizontalScrollBarVisibility="Disabled"
+            HorizontalScrollMode="Disabled">
+            <Grid
+                MaxWidth="{StaticResource ContentMaxWidth}"
+                Padding="{StaticResource PageContentPadding}"
+                HorizontalAlignment="Stretch">
+                <StackPanel Spacing="{StaticResource SpacingExtraLarge}">
+                    <InfoBar
+                        AutomationProperties.LiveSetting="Polite"
+                        AutomationProperties.Name="Video optimization status"
+                        IsOpen="{Binding IsStatusOpen}"
+                        Message="{Binding StatusMessage}"
+                        Severity="{Binding StatusSeverity}" />
+
+                    <controls:PathScopeEditor
+                        x:Name="PathScopeEditor"
+                        MaxWidth="{StaticResource ScanWorkAreaMaxWidth}"
+                        HorizontalAlignment="Stretch"
+                        DataContext="{Binding PathScope}"
+                        FileTypeFilter=".mp4,.mkv,.mov,.avi,.wmv,.flv,.webm,.m4v,.mpg,.mpeg,.3gp,.ts"
+                        IsEnabled="{Binding DataContext.CanEditQueue, ElementName=PageRoot}" />
+
+                    <StackPanel
+                        MaxWidth="{StaticResource ScanWorkAreaMaxWidth}"
+                        HorizontalAlignment="Stretch"
+                        Spacing="{StaticResource SpacingMedium}">
+                        <TextBlock
+                            AutomationProperties.HeadingLevel="Level2"
+                            Style="{StaticResource SectionHeaderTextBlockStyle}"
+                            Text="Optimization options" />
+                        <ComboBox
+                            Header="Quality preset"
+                            IsEnabled="{Binding CanEditQueue}"
+                            SelectedIndex="{Binding Preset, Mode=TwoWay}">
+                            <ComboBoxItem Content="Smaller" />
+                            <ComboBoxItem Content="Balanced" />
+                            <ComboBoxItem Content="High quality" />
+                        </ComboBox>
+                        <ToggleSwitch
+                            Header="Use hardware acceleration"
+                            IsEnabled="{Binding CanEditQueue}"
+                            IsOn="{Binding HardwareAccelerationEnabled, Mode=TwoWay}" />
+                        <ToggleSwitch
+                            Header="Keep output when it is not smaller"
+                            IsEnabled="{Binding CanEditQueue}"
+                            IsOn="{Binding KeepOutputWhenNotSmaller, Mode=TwoWay}" />
+                        <InfoBar
+                            IsClosable="False"
+                            IsOpen="{Binding KeepOutputWhenNotSmaller}"
+                            Message="An optimized copy may be the same size as the source or larger."
+                            Severity="Warning" />
+                    </StackPanel>
+
+                    <StackPanel
+                        AutomationProperties.LiveSetting="Polite"
+                        MaxWidth="{StaticResource ScanWorkAreaMaxWidth}"
+                        HorizontalAlignment="Stretch"
+                        Spacing="{StaticResource SpacingMedium}">
+                        <TextBlock
+                            AutomationProperties.HeadingLevel="Level2"
+                            Style="{StaticResource SectionHeaderTextBlockStyle}"
+                            Text="Optimization progress" />
+                        <TextBlock Style="{ThemeResource CaptionTextBlockStyle}" Text="Overall progress" />
+                        <ProgressBar Maximum="100" Value="{Binding ProgressValue}" />
+                        <TextBlock Style="{ThemeResource CaptionTextBlockStyle}" Text="Current video" />
+                        <ProgressBar Maximum="100" Value="{Binding CurrentFileProgress}" />
+                        <TextBlock
+                            Style="{StaticResource PathTextBlockStyle}"
+                            Text="{Binding CurrentPath}"
+                            TextWrapping="Wrap"
+                            ToolTipService.ToolTip="{Binding CurrentPath}" />
+                        <Button
+                            HorizontalAlignment="Right"
+                            Command="{Binding CancelOptimizationCommand}"
+                            IsEnabled="{Binding IsOptimizing}">
+                            <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpacingSmall}">
+                                <SymbolIcon Symbol="Cancel" />
+                                <TextBlock Text="Cancel" />
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
+
+                    <StackPanel Spacing="{StaticResource SpacingMedium}">
+                        <TextBlock
+                            AutomationProperties.HeadingLevel="Level2"
+                            Style="{StaticResource SectionHeaderTextBlockStyle}"
+                            Text="Queue and results" />
+                        <ListView
+                            AutomationProperties.Name="Video optimization queue and results"
+                            ItemTemplate="{StaticResource VideoOptimizationQueueTemplate}"
+                            ItemsSource="{Binding Queue}"
+                            ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                            ScrollViewer.HorizontalScrollMode="Disabled"
+                            SelectionMode="None">
+                            <ListView.ItemContainerStyle>
+                                <Style TargetType="ListViewItem">
+                                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                </Style>
+                            </ListView.ItemContainerStyle>
+                        </ListView>
+                    </StackPanel>
+                </StackPanel>
+            </Grid>
+        </ScrollViewer>
+    </Grid>
+</Page>

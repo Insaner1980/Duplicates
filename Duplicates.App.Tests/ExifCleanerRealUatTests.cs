@@ -52,7 +52,7 @@ public sealed class ExifCleanerRealUatTests : IDisposable
         var backend = new WicMetadataBackend();
         WicImageInspection before = backend.Inspect(fixture.Path);
         var recycle = new RecordingRecycleBinService();
-        var service = new ExifCleanerService(backend, new ExifFileTransactions(), recycle);
+        var service = new ExifCleanerService(backend, new IdentityFileTransactions(), recycle);
         var progress = new InlineProgress();
         Assert.All(fixture.RequiredQueries, query => Assert.Contains(query, before.Metadata));
 
@@ -81,7 +81,7 @@ public sealed class ExifCleanerRealUatTests : IDisposable
         var backend = new WicMetadataBackend();
         WicImageInspection before = backend.Inspect(fixture.Path);
         var recycle = new RecordingRecycleBinService();
-        var service = new ExifCleanerService(backend, new ExifFileTransactions(), recycle);
+        var service = new ExifCleanerService(backend, new IdentityFileTransactions(), recycle);
         Assert.All(fixture.RequiredQueries, query => Assert.Contains(query, before.Metadata));
 
         ExifCleanResult result = await service.CleanAsync(
@@ -111,7 +111,7 @@ public sealed class ExifCleanerRealUatTests : IDisposable
         byte[] sourceHash = await HashFileAsync(source);
         var service = new ExifCleanerService(
             new WicMetadataBackend(),
-            new ExifFileTransactions(),
+            new IdentityFileTransactions(),
             new RecordingRecycleBinService());
 
         ExifCleanResult result = await service.CleanAsync(
@@ -134,7 +134,7 @@ public sealed class ExifCleanerRealUatTests : IDisposable
         ExifCleanRequest request = CreateRequest(source, replaceOriginal: false);
         var service = new ExifCleanerService(
             new WicMetadataBackend(),
-            new ExifFileTransactions(),
+            new IdentityFileTransactions(),
             new RecordingRecycleBinService());
         using var exclusive = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.None);
 
@@ -156,7 +156,7 @@ public sealed class ExifCleanerRealUatTests : IDisposable
         string tiff = WriteTwoFrameTiff("multiframe.tiff");
         var service = new ExifCleanerService(
             new WicMetadataBackend(),
-            new ExifFileTransactions(),
+            new IdentityFileTransactions(),
             new RecordingRecycleBinService());
 
         ExifCleanResult pngResult = await service.CleanAsync(
@@ -188,7 +188,7 @@ public sealed class ExifCleanerRealUatTests : IDisposable
         byte[] sourceHash = await HashFileAsync(source);
         var service = new ExifCleanerService(
             new WicMetadataBackend(),
-            new ExifFileTransactions(),
+            new IdentityFileTransactions(),
             new RecordingRecycleBinService());
         var options = new ExifCleanOptions(
             RemoveGps: false,
@@ -231,7 +231,7 @@ public sealed class ExifCleanerRealUatTests : IDisposable
         });
         var service = new ExifCleanerService(
             new WicMetadataBackend(),
-            new ExifFileTransactions(),
+            new IdentityFileTransactions(),
             new RecordingRecycleBinService());
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.CleanAsync(
@@ -551,8 +551,8 @@ public sealed class ExifCleanerRealUatTests : IDisposable
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var transactions = new ExifFileTransactions();
-            ExifTrackedFile rollback = transactions.Capture(path);
+            var transactions = new IdentityFileTransactions();
+            IdentityTrackedFile rollback = transactions.Capture(path);
             Assert.Equal(expectedIdentity, rollback.Identity);
             transactions.DeleteOwned(rollback);
             Paths.Add(path);

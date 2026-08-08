@@ -1,3 +1,4 @@
+using System.Reflection;
 using Duplicates.Models;
 using Duplicates.Services;
 
@@ -24,4 +25,37 @@ public sealed class AppServicesCompositionTests
         lease!.Dispose();
         Assert.True(services.ExifRemoverViewModel.CleanImagesCommand.CanExecute(false));
     }
+
+    [Fact]
+    public void VideoOptimizerUsesSharedScopeCoordinatorAndIdentityTransactions()
+    {
+        var services = new AppServices();
+
+        Assert.IsType<VideoOptimizerService>(services.VideoOptimizerService);
+        var transactions = Assert.IsType<IdentityFileTransactions>(services.IdentityFileTransactions);
+        Assert.Same(services.PathScopeViewModel, services.VideoOptimizerViewModel.PathScope);
+        Assert.Same(
+            transactions,
+            GetPrivateField(Assert.IsType<ExifCleanerService>(services.ExifCleanerService), "_transactions"));
+        Assert.Same(
+            transactions,
+            GetPrivateField(Assert.IsType<VideoOptimizerService>(services.VideoOptimizerService), "_transactions"));
+
+        services.PathScopeViewModel.AddFolder("C:\\VideoOptimizerComposition");
+        Assert.True(services.VideoOptimizerViewModel.OptimizeVideosCommand.CanExecute(null));
+
+        Assert.True(services.OperationCoordinator.TryAcquire(
+            new AppOperationDescriptor(AppOperationKind.ExifCleaning),
+            static () => { },
+            out IAppOperationLease? lease));
+        Assert.False(services.VideoOptimizerViewModel.OptimizeVideosCommand.CanExecute(null));
+
+        lease!.Dispose();
+        Assert.True(services.VideoOptimizerViewModel.OptimizeVideosCommand.CanExecute(null));
+    }
+
+    private static object? GetPrivateField(object instance, string name) =>
+        instance.GetType()
+            .GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(instance);
 }

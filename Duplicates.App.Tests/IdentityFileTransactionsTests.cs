@@ -3,14 +3,14 @@ using Duplicates.Services;
 
 namespace Duplicates.App.Tests;
 
-public sealed class ExifFileTransactionsTests : IDisposable
+public sealed class IdentityFileTransactionsTests : IDisposable
 {
     private readonly string _root = Path.Combine(
         Path.GetTempPath(),
-        "Duplicates-ExifTransactions",
+        "Duplicates-IdentityTransactions",
         Guid.NewGuid().ToString("N"));
 
-    public ExifFileTransactionsTests()
+    public IdentityFileTransactionsTests()
     {
         Directory.CreateDirectory(_root);
     }
@@ -28,11 +28,11 @@ public sealed class ExifFileTransactionsTests : IDisposable
     {
         string sourcePath = Write("source.jpg", Enumerable.Range(0, 300_000).Select(index => (byte)index).ToArray());
         string destinationPath = Path.Combine(_root, "owned.tmp");
-        var transactions = new ExifFileTransactions();
-        ExifTrackedFile source = transactions.Capture(sourcePath);
+        var transactions = new IdentityFileTransactions();
+        IdentityTrackedFile source = transactions.Capture(sourcePath);
         var progress = new List<double>();
 
-        ExifTrackedFile owned = transactions.CreateOwnedNew(destinationPath);
+        IdentityTrackedFile owned = transactions.CreateOwnedNew(destinationPath);
         FileSystemIdentity creationIdentity = owned.Identity;
         owned = await transactions.CopyAndFlushAsync(
             source,
@@ -57,7 +57,7 @@ public sealed class ExifFileTransactionsTests : IDisposable
     {
         string sourcePath = Write("source.jpg", [1, 2, 3]);
         string destinationPath = Write("collision.tmp", [9, 9, 9]);
-        var transactions = new ExifFileTransactions();
+        var transactions = new IdentityFileTransactions();
 
         Assert.ThrowsAny<IOException>(() =>
         {
@@ -72,8 +72,8 @@ public sealed class ExifFileTransactionsTests : IDisposable
     {
         string sourcePath = Write("large.jpg", new byte[2 * 1024 * 1024]);
         string destinationPath = Path.Combine(_root, "cancel.tmp");
-        var transactions = new ExifFileTransactions();
-        ExifTrackedFile owned = transactions.CreateOwnedNew(destinationPath);
+        var transactions = new IdentityFileTransactions();
+        IdentityTrackedFile owned = transactions.CreateOwnedNew(destinationPath);
         using var cancellation = new CancellationTokenSource();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => transactions.CopyAndFlushAsync(
@@ -88,11 +88,11 @@ public sealed class ExifFileTransactionsTests : IDisposable
             }),
             cancellation.Token));
 
-        ExifPathProbe probe = transactions.Probe(destinationPath);
-        Assert.Equal(ExifPathState.Present, probe.State);
+        IdentityPathProbe probe = transactions.Probe(destinationPath);
+        Assert.Equal(IdentityPathState.Present, probe.State);
         Assert.Equal(owned.Identity, probe.Identity);
         transactions.DeleteOwned(owned);
-        Assert.Equal(ExifPathState.Missing, transactions.Probe(destinationPath).State);
+        Assert.Equal(IdentityPathState.Missing, transactions.Probe(destinationPath).State);
     }
 
     [Fact]
@@ -100,8 +100,8 @@ public sealed class ExifFileTransactionsTests : IDisposable
     {
         string sourcePath = Write("copy-source.jpg", [1, 2, 3]);
         string destinationPath = Path.Combine(_root, "copy-owned.tmp");
-        var transactions = new ExifFileTransactions();
-        ExifTrackedFile owned = transactions.CreateOwnedNew(destinationPath);
+        var transactions = new IdentityFileTransactions();
+        IdentityTrackedFile owned = transactions.CreateOwnedNew(destinationPath);
         string aside = destinationPath + ".aside";
         File.Move(destinationPath, aside);
         File.WriteAllBytes(destinationPath, [9, 9, 9]);
@@ -122,21 +122,21 @@ public sealed class ExifFileTransactionsTests : IDisposable
         string sourcePath = Write("move.tmp", [1]);
         string destinationPath = Path.Combine(_root, "moved.tmp");
         string collisionPath = Write("collision.tmp", [2]);
-        var transactions = new ExifFileTransactions();
-        ExifTrackedFile source = transactions.Capture(sourcePath);
+        var transactions = new IdentityFileTransactions();
+        IdentityTrackedFile source = transactions.Capture(sourcePath);
 
-        ExifMoveResult move = transactions.MoveNoOverwrite(source, destinationPath);
-        ExifTrackedFile moved = move.File;
+        IdentityMoveResult move = transactions.MoveNoOverwrite(source, destinationPath);
+        IdentityTrackedFile moved = move.File;
 
-        Assert.Equal(ExifMoveCommitState.Committed, move.CommitState);
+        Assert.Equal(IdentityMoveCommitState.Committed, move.CommitState);
         Assert.Equal(source.Identity, moved.Identity);
         Assert.Equal(source.Identity, transactions.Capture(destinationPath).Identity);
-        Assert.Equal(ExifPathState.Missing, transactions.Probe(sourcePath).State);
-        ExifMoveException collision = Assert.Throws<ExifMoveException>(() =>
+        Assert.Equal(IdentityPathState.Missing, transactions.Probe(sourcePath).State);
+        IdentityMoveException collision = Assert.Throws<IdentityMoveException>(() =>
         {
             _ = transactions.MoveNoOverwrite(moved, collisionPath);
         });
-        Assert.Equal(ExifMoveCommitState.NotCommitted, collision.CommitState);
+        Assert.Equal(IdentityMoveCommitState.NotCommitted, collision.CommitState);
         Assert.Equal(moved.Identity, collision.ExpectedIdentity);
         Assert.Equal(moved.Path, collision.SourcePath);
         Assert.Equal(collisionPath, collision.DestinationPath);
@@ -149,8 +149,8 @@ public sealed class ExifFileTransactionsTests : IDisposable
     {
         string path = Write("owned.tmp", [1, 2, 3]);
         DateTime modifiedUtc = File.GetLastWriteTimeUtc(path);
-        var transactions = new ExifFileTransactions();
-        ExifTrackedFile owned = transactions.Capture(path);
+        var transactions = new IdentityFileTransactions();
+        IdentityTrackedFile owned = transactions.Capture(path);
         string originalAside = path + ".original";
         File.Move(path, originalAside);
         File.WriteAllBytes(path, [9, 8, 7]);
@@ -185,7 +185,7 @@ public sealed class ExifFileTransactionsTests : IDisposable
 
         string linkedPath = Path.Combine(linkedDirectory, "owned.tmp");
         string actualPath = Path.Combine(actualDirectory, "owned.tmp");
-        var transactions = new ExifFileTransactions();
+        var transactions = new IdentityFileTransactions();
 
         Exception? failure = Record.Exception(() => transactions.CreateOwnedNew(linkedPath));
 
@@ -199,7 +199,7 @@ public sealed class ExifFileTransactionsTests : IDisposable
     {
         string directory = Path.Combine(_root, "directory.jpg");
         Directory.CreateDirectory(directory);
-        var transactions = new ExifFileTransactions();
+        var transactions = new IdentityFileTransactions();
 
         Assert.ThrowsAny<IOException>(() =>
         {
@@ -228,7 +228,7 @@ public sealed class ExifFileTransactionsTests : IDisposable
     {
         _ = Write("Name.CLEAN.JPG", [1]);
         Directory.CreateDirectory(Path.Combine(_root, "Folder.CLEAN.JPG"));
-        var transactions = new ExifFileTransactions();
+        var transactions = new IdentityFileTransactions();
 
         Assert.True(transactions.EntryExistsCaseInsensitive(Path.Combine(_root, "name.clean.jpg")));
         Assert.True(transactions.EntryExistsCaseInsensitive(Path.Combine(_root, "folder.clean.jpg")));
@@ -240,8 +240,8 @@ public sealed class ExifFileTransactionsTests : IDisposable
     {
         string path = Write("guarded.tmp", [1, 2, 3]);
         string aside = path + ".aside";
-        var transactions = new ExifFileTransactions();
-        ExifTrackedFile owned = transactions.Capture(path);
+        var transactions = new IdentityFileTransactions();
+        IdentityTrackedFile owned = transactions.Capture(path);
 
         using IDisposable guard = transactions.GuardOwnedPath(owned);
 
@@ -253,13 +253,13 @@ public sealed class ExifFileTransactionsTests : IDisposable
     public void GuardSourceSnapshot_ValidatesTheFullSnapshotAndBlocksMutation()
     {
         string path = Write("source-guard.jpg", [1, 2, 3]);
-        var transactions = new ExifFileTransactions();
-        ExifTrackedFile stale = transactions.Capture(path);
+        var transactions = new IdentityFileTransactions();
+        IdentityTrackedFile stale = transactions.Capture(path);
         File.AppendAllText(path, "changed");
 
-        Assert.Throws<ExifSourceChangedException>(() => transactions.GuardSourceSnapshot(stale));
+        Assert.Throws<IdentitySourceChangedException>(() => transactions.GuardSourceSnapshot(stale));
 
-        ExifTrackedFile current = transactions.Capture(path);
+        IdentityTrackedFile current = transactions.Capture(path);
         using IDisposable guard = transactions.GuardSourceSnapshot(current);
         Assert.ThrowsAny<IOException>(() => File.AppendAllText(path, "blocked"));
         Assert.ThrowsAny<IOException>(() => File.Move(path, path + ".aside"));
@@ -270,11 +270,11 @@ public sealed class ExifFileTransactionsTests : IDisposable
     {
         string sourcePath = Write("source-rename.jpg", [1, 2, 3]);
         string destinationPath = Path.Combine(_root, "source-rollback.jpg");
-        var transactions = new ExifFileTransactions();
-        ExifTrackedFile stale = transactions.Capture(sourcePath);
+        var transactions = new IdentityFileTransactions();
+        IdentityTrackedFile stale = transactions.Capture(sourcePath);
         File.AppendAllText(sourcePath, "changed");
 
-        Assert.Throws<ExifSourceChangedException>(() =>
+        Assert.Throws<IdentitySourceChangedException>(() =>
             transactions.MoveSourceNoOverwrite(stale, destinationPath));
 
         Assert.True(File.Exists(sourcePath));

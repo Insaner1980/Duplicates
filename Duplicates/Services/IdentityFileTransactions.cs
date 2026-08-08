@@ -7,7 +7,7 @@ using Microsoft.Win32.SafeHandles;
 
 namespace Duplicates.Services;
 
-internal sealed class ExifFileTransactions : IExifFileTransactions
+internal sealed class IdentityFileTransactions : IIdentityFileTransactions
 {
     private const uint GenericRead = 0x80000000;
     private const uint GenericWrite = 0x40000000;
@@ -32,7 +32,7 @@ internal sealed class ExifFileTransactions : IExifFileTransactions
     private const int ErrorFileExists = 80;
     private const int ErrorAlreadyExists = 183;
 
-    public ExifTrackedFile Capture(string path)
+    public IdentityTrackedFile Capture(string path)
     {
         string canonicalPath = Canonicalize(path);
         using SafeFileHandle handle = Open(
@@ -44,7 +44,7 @@ internal sealed class ExifFileTransactions : IExifFileTransactions
         return CaptureOrdinary(handle, canonicalPath);
     }
 
-    public ExifTrackedFile CreateOwnedNew(string destinationPath)
+    public IdentityTrackedFile CreateOwnedNew(string destinationPath)
     {
         string destination = Canonicalize(destinationPath);
         using SafeFileHandle handle = Open(
@@ -65,7 +65,7 @@ internal sealed class ExifFileTransactions : IExifFileTransactions
             }
             catch (Exception cleanupFailure)
             {
-                throw new ExifOwnedCreationRecoveryException(
+                throw new IdentityOwnedCreationRecoveryException(
                     destination,
                     creationFailure,
                     cleanupFailure);
@@ -75,9 +75,9 @@ internal sealed class ExifFileTransactions : IExifFileTransactions
         }
     }
 
-    public async Task<ExifTrackedFile> CopyAndFlushAsync(
-        ExifTrackedFile source,
-        ExifTrackedFile destination,
+    public async Task<IdentityTrackedFile> CopyAndFlushAsync(
+        IdentityTrackedFile source,
+        IdentityTrackedFile destination,
         IProgress<double>? progress,
         CancellationToken cancellationToken)
     {
@@ -137,10 +137,10 @@ internal sealed class ExifFileTransactions : IExifFileTransactions
             await output.FlushAsync(cancellationToken).ConfigureAwait(false);
             output.Flush(flushToDisk: true);
             cancellationToken.ThrowIfCancellationRequested();
-            ExifTrackedFile completed = CaptureOrdinary(output.SafeFileHandle, destinationPath);
+            IdentityTrackedFile completed = CaptureOrdinary(output.SafeFileHandle, destinationPath);
             if (completed.Identity != destination.Identity || completed.Length != source.Length)
             {
-                throw new IOException("The owned EXIF temporary copy changed during creation.");
+                throw new IOException("The owned temporary copy changed during creation.");
             }
 
             progress?.Report(1);
@@ -156,13 +156,13 @@ internal sealed class ExifFileTransactions : IExifFileTransactions
     {
         string canonicalPath = Canonicalize(path);
         string directory = Path.GetDirectoryName(canonicalPath) ??
-            throw new IOException("The EXIF artifact path has no parent directory.");
+            throw new IOException("The identity-owned artifact path has no parent directory.");
         string name = Path.GetFileName(canonicalPath);
         return Directory.EnumerateFileSystemEntries(directory)
             .Any(entry => string.Equals(Path.GetFileName(entry), name, StringComparison.OrdinalIgnoreCase));
     }
 
-    public IDisposable GuardOwnedPath(ExifTrackedFile file)
+    public IDisposable GuardOwnedPath(IdentityTrackedFile file)
     {
         ArgumentNullException.ThrowIfNull(file);
         string path = Canonicalize(file.Path);
@@ -184,7 +184,7 @@ internal sealed class ExifFileTransactions : IExifFileTransactions
         }
     }
 
-    public IDisposable GuardSourceSnapshot(ExifTrackedFile source)
+    public IDisposable GuardSourceSnapshot(IdentityTrackedFile source)
     {
         ArgumentNullException.ThrowIfNull(source);
         string path = Canonicalize(source.Path);
@@ -206,14 +206,14 @@ internal sealed class ExifFileTransactions : IExifFileTransactions
         }
     }
 
-    public ExifMoveResult MoveNoOverwrite(ExifTrackedFile source, string destinationPath) =>
+    public IdentityMoveResult MoveNoOverwrite(IdentityTrackedFile source, string destinationPath) =>
         MoveNoOverwriteCore(source, destinationPath, validateSnapshot: false);
 
-    public ExifMoveResult MoveSourceNoOverwrite(ExifTrackedFile source, string destinationPath) =>
+    public IdentityMoveResult MoveSourceNoOverwrite(IdentityTrackedFile source, string destinationPath) =>
         MoveNoOverwriteCore(source, destinationPath, validateSnapshot: true);
 
-    private ExifMoveResult MoveNoOverwriteCore(
-        ExifTrackedFile source,
+    private IdentityMoveResult MoveNoOverwriteCore(
+        IdentityTrackedFile source,
         string destinationPath,
         bool validateSnapshot)
     {
@@ -223,9 +223,9 @@ internal sealed class ExifFileTransactions : IExifFileTransactions
         EnsureSibling(sourcePath, destination);
         if (EntryExistsCaseInsensitive(destination))
         {
-            throw new ExifMoveException(
-                "The EXIF transaction destination already exists.",
-                ExifMoveCommitState.NotCommitted,
+            throw new IdentityMoveException(
+                "The identity transaction destination already exists.",
+                IdentityMoveCommitState.NotCommitted,
                 sourcePath,
                 destination,
                 source.Identity);
@@ -248,21 +248,21 @@ internal sealed class ExifFileTransactions : IExifFileTransactions
         try
         {
             RenameByHandle(handle, destination);
-            ExifTrackedFile moved = CaptureOrdinary(handle, destination);
+            IdentityTrackedFile moved = CaptureOrdinary(handle, destination);
             if (moved.Identity != source.Identity)
             {
-                throw new IOException("The moved EXIF artifact identity changed.");
+                throw new IOException("The moved artifact identity changed.");
             }
 
-            return new ExifMoveResult(
-                ExifMoveCommitState.Committed,
+            return new IdentityMoveResult(
+                IdentityMoveCommitState.Committed,
                 moved with { Identity = source.Identity });
         }
         catch (Exception ex) when (ex is IOException or Win32Exception or InvalidOperationException)
         {
-            ExifMoveCommitState commitState = DetermineMoveState(handle, sourcePath, destination);
-            throw new ExifMoveException(
-                "The handle-owned EXIF move did not reach a verified terminal state.",
+            IdentityMoveCommitState commitState = DetermineMoveState(handle, sourcePath, destination);
+            throw new IdentityMoveException(
+                "The handle-owned move did not reach a verified terminal state.",
                 commitState,
                 sourcePath,
                 destination,
@@ -271,7 +271,7 @@ internal sealed class ExifFileTransactions : IExifFileTransactions
         }
     }
 
-    public void DeleteOwned(ExifTrackedFile file)
+    public void DeleteOwned(IdentityTrackedFile file)
     {
         ArgumentNullException.ThrowIfNull(file);
         string path = Canonicalize(file.Path);
@@ -291,13 +291,13 @@ internal sealed class ExifFileTransactions : IExifFileTransactions
             handle.Dispose();
         }
 
-        if (Probe(path).State != ExifPathState.Missing)
+        if (Probe(path).State != IdentityPathState.Missing)
         {
-            throw new IOException("The owned EXIF artifact still exists after deletion.");
+            throw new IOException("The owned artifact still exists after deletion.");
         }
     }
 
-    public ExifPathProbe Probe(string path)
+    public IdentityPathProbe Probe(string path)
     {
         string canonicalPath;
         try
@@ -306,7 +306,7 @@ internal sealed class ExifFileTransactions : IExifFileTransactions
         }
         catch
         {
-            return new ExifPathProbe(ExifPathState.Indeterminate, null);
+            return new IdentityPathProbe(IdentityPathState.Indeterminate, null);
         }
 
         try
@@ -317,39 +317,39 @@ internal sealed class ExifFileTransactions : IExifFileTransactions
                 ShareRead | ShareWrite | ShareDelete,
                 OpenExisting,
                 FileFlagBackupSemantics | FileFlagOpenReparsePoint);
-            return new ExifPathProbe(ExifPathState.Present, GetIdentity(handle));
+            return new IdentityPathProbe(IdentityPathState.Present, GetIdentity(handle));
         }
         catch (Win32Exception ex) when (ex.NativeErrorCode is ErrorFileNotFound or ErrorPathNotFound)
         {
-            return new ExifPathProbe(ExifPathState.Missing, null);
+            return new IdentityPathProbe(IdentityPathState.Missing, null);
         }
         catch (FileNotFoundException)
         {
-            return new ExifPathProbe(ExifPathState.Missing, null);
+            return new IdentityPathProbe(IdentityPathState.Missing, null);
         }
         catch (DirectoryNotFoundException)
         {
-            return new ExifPathProbe(ExifPathState.Missing, null);
+            return new IdentityPathProbe(IdentityPathState.Missing, null);
         }
         catch
         {
-            return new ExifPathProbe(ExifPathState.Indeterminate, null);
+            return new IdentityPathProbe(IdentityPathState.Indeterminate, null);
         }
     }
 
-    private static ExifTrackedFile CaptureOrdinary(SafeFileHandle handle, string expectedPath)
+    private static IdentityTrackedFile CaptureOrdinary(SafeFileHandle handle, string expectedPath)
     {
         FileBasicInformation basic = GetBasicInfo(handle);
         FileAttributes attributes = (FileAttributes)basic.FileAttributes;
         if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint | FileAttributes.Device)) != 0)
         {
-            throw new ExifTransactionException("Only an ordinary non-link file can be used by the EXIF transaction.");
+            throw new IdentityTransactionException("Only an ordinary non-link file can be used by the identity transaction.");
         }
 
         string finalPath = GetFinalPath(handle);
         if (!string.Equals(finalPath, expectedPath, StringComparison.OrdinalIgnoreCase))
         {
-            throw new ExifTransactionException("The EXIF transaction path changed while its handle was open.");
+            throw new IdentityTransactionException("The identity transaction path changed while its handle was open.");
         }
 
         if (!GetFileSizeEx(handle, out long length))
@@ -357,7 +357,7 @@ internal sealed class ExifFileTransactions : IExifFileTransactions
             throw CreateTransactionException();
         }
 
-        return new ExifTrackedFile(
+        return new IdentityTrackedFile(
             finalPath,
             GetIdentity(handle),
             length,
@@ -365,23 +365,23 @@ internal sealed class ExifFileTransactions : IExifFileTransactions
             attributes);
     }
 
-    private static void ValidateExpected(SafeFileHandle handle, ExifTrackedFile expected)
+    private static void ValidateExpected(SafeFileHandle handle, IdentityTrackedFile expected)
     {
-        ExifTrackedFile current = CaptureOrdinary(handle, Canonicalize(expected.Path));
+        IdentityTrackedFile current = CaptureOrdinary(handle, Canonicalize(expected.Path));
         if (current.Identity != expected.Identity)
         {
-            throw new ExifTransactionException("The EXIF transaction path is occupied by a different file identity.");
+            throw new IdentityTransactionException("The identity transaction path is occupied by a different file identity.");
         }
     }
 
-    private static void ValidateSnapshot(SafeFileHandle handle, ExifTrackedFile expected)
+    private static void ValidateSnapshot(SafeFileHandle handle, IdentityTrackedFile expected)
     {
-        ExifTrackedFile current = CaptureOrdinary(handle, Canonicalize(expected.Path));
+        IdentityTrackedFile current = CaptureOrdinary(handle, Canonicalize(expected.Path));
         if (current.Identity != expected.Identity ||
             current.Length != expected.Length ||
             current.ModifiedUtc != expected.ModifiedUtc)
         {
-            throw new ExifSourceChangedException();
+            throw new IdentitySourceChangedException();
         }
     }
 
@@ -437,7 +437,7 @@ internal sealed class ExifFileTransactions : IExifFileTransactions
             string actualPath = GetFinalPath(handle);
             if (!string.Equals(actualPath, destinationPath, StringComparison.OrdinalIgnoreCase))
             {
-                throw new IOException("The handle-owned EXIF rename reached an unexpected path.");
+                throw new IOException("The handle-owned rename reached an unexpected path.");
             }
         }
         finally
@@ -459,7 +459,7 @@ internal sealed class ExifFileTransactions : IExifFileTransactions
         }
     }
 
-    private static ExifMoveCommitState DetermineMoveState(
+    private static IdentityMoveCommitState DetermineMoveState(
         SafeFileHandle handle,
         string sourcePath,
         string destinationPath)
@@ -469,19 +469,19 @@ internal sealed class ExifFileTransactions : IExifFileTransactions
             string currentPath = GetFinalPath(handle);
             if (string.Equals(currentPath, destinationPath, StringComparison.OrdinalIgnoreCase))
             {
-                return ExifMoveCommitState.Committed;
+                return IdentityMoveCommitState.Committed;
             }
 
             if (string.Equals(currentPath, sourcePath, StringComparison.OrdinalIgnoreCase))
             {
-                return ExifMoveCommitState.NotCommitted;
+                return IdentityMoveCommitState.NotCommitted;
             }
         }
         catch
         {
         }
 
-        return ExifMoveCommitState.Indeterminate;
+        return IdentityMoveCommitState.Indeterminate;
     }
 
     private static SafeFileHandle Open(
@@ -514,7 +514,7 @@ internal sealed class ExifFileTransactions : IExifFileTransactions
             }
 
             string detail = error is ErrorFileExists or ErrorAlreadyExists
-                ? "The EXIF transaction destination already exists."
+                ? "The identity transaction destination already exists."
                 : new Win32Exception(error).Message;
             throw new IOException(detail, new Win32Exception(error));
         }
@@ -561,14 +561,14 @@ internal sealed class ExifFileTransactions : IExifFileTransactions
                 Path.GetDirectoryName(destinationPath),
                 StringComparison.OrdinalIgnoreCase))
         {
-            throw new IOException("EXIF transaction files must stay in the source directory.");
+            throw new IOException("Identity transaction files must stay in the source directory.");
         }
     }
 
-    private static ExifTransactionException CreateTransactionException()
+    private static IdentityTransactionException CreateTransactionException()
     {
         var failure = new Win32Exception(Marshal.GetLastWin32Error());
-        return new ExifTransactionException(failure.Message, failure);
+        return new IdentityTransactionException(failure.Message, failure);
     }
 
     private static string Canonicalize(string path)
@@ -576,7 +576,7 @@ internal sealed class ExifFileTransactions : IExifFileTransactions
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         if (!Path.IsPathFullyQualified(path))
         {
-            throw new ArgumentException("The EXIF transaction path must be fully qualified.", nameof(path));
+            throw new ArgumentException("The identity transaction path must be fully qualified.", nameof(path));
         }
 
         return Path.GetFullPath(path);

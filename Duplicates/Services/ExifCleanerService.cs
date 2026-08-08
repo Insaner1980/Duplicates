@@ -18,12 +18,12 @@ public sealed class ExifCleanerService : IExifCleanerService
     };
 
     private readonly IWicMetadataBackend _metadataBackend;
-    private readonly IExifFileTransactions _transactions;
+    private readonly IIdentityFileTransactions _transactions;
     private readonly IRecycleBinService _recycleBinService;
 
     internal ExifCleanerService(
         IWicMetadataBackend metadataBackend,
-        IExifFileTransactions transactions,
+        IIdentityFileTransactions transactions,
         IRecycleBinService recycleBinService)
     {
         _metadataBackend = metadataBackend;
@@ -54,7 +54,7 @@ public sealed class ExifCleanerService : IExifCleanerService
             return Result(ExifCleanOutcome.Failed, sourcePath, "The source path must be canonical.");
         }
 
-        ExifTrackedFile source;
+        IdentityTrackedFile source;
         try
         {
             source = _transactions.Capture(sourcePath);
@@ -117,7 +117,7 @@ public sealed class ExifCleanerService : IExifCleanerService
             return Result(ExifCleanOutcome.Failed, sourcePath, "A safe sibling output path could not be selected.");
         }
 
-        ExifTrackedFile? artifact = null;
+        IdentityTrackedFile? artifact = null;
         try
         {
             var copyProgress = progress is null
@@ -131,7 +131,7 @@ public sealed class ExifCleanerService : IExifCleanerService
                 cancellationToken).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
 
-            ExifTrackedFile currentSource = _transactions.Capture(sourcePath);
+            IdentityTrackedFile currentSource = _transactions.Capture(sourcePath);
             if (currentSource.Identity != source.Identity || !MatchesRequest(currentSource, request))
             {
                 return CleanupOrRecovery(
@@ -214,13 +214,13 @@ public sealed class ExifCleanerService : IExifCleanerService
             }
 
             cancellationToken.ThrowIfCancellationRequested();
-            ExifMoveResult publication;
+            IdentityMoveResult publication;
             try
             {
                 using IDisposable sourceGuard = _transactions.GuardSourceSnapshot(source);
                 publication = MoveWithResolution(artifact, finalPath);
             }
-            catch (ExifSourceChangedException)
+            catch (IdentitySourceChangedException)
             {
                 return CleanupOrRecovery(
                     ExifCleanOutcome.SourceChanged,
@@ -229,7 +229,7 @@ public sealed class ExifCleanerService : IExifCleanerService
                     artifact);
             }
 
-            if (publication.CommitState == ExifMoveCommitState.NotCommitted)
+            if (publication.CommitState == IdentityMoveCommitState.NotCommitted)
             {
                 return CleanupOrRecovery(
                     publication.DestinationOccupied
@@ -242,7 +242,7 @@ public sealed class ExifCleanerService : IExifCleanerService
                     artifact);
             }
 
-            if (publication.CommitState == ExifMoveCommitState.Indeterminate)
+            if (publication.CommitState == IdentityMoveCommitState.Indeterminate)
             {
                 return RecoveryRequired(
                     sourcePath,
@@ -252,7 +252,7 @@ public sealed class ExifCleanerService : IExifCleanerService
 
             artifact = publication.File;
             WicImageInspection finalInspection;
-            ExifTrackedFile verifiedArtifact;
+            IdentityTrackedFile verifiedArtifact;
             try
             {
                 using IDisposable verificationGuard = _transactions.GuardOwnedPath(artifact);
@@ -294,7 +294,7 @@ public sealed class ExifCleanerService : IExifCleanerService
                 "Image cleaned.",
                 []);
         }
-        catch (ExifOwnedCreationRecoveryException exception)
+        catch (IdentityOwnedCreationRecoveryException exception)
         {
             return RecoveryRequired(
                 sourcePath,
@@ -331,8 +331,8 @@ public sealed class ExifCleanerService : IExifCleanerService
     }
 
     private async Task<ExifCleanResult> ReplaceOriginalAsync(
-        ExifTrackedFile original,
-        ExifTrackedFile cleaned,
+        IdentityTrackedFile original,
+        IdentityTrackedFile cleaned,
         WicImageInspection sourceInspection,
         IReadOnlyList<string> selectedQueries,
         IProgress<double>? progress,
@@ -340,15 +340,15 @@ public sealed class ExifCleanerService : IExifCleanerService
     {
         string sourcePath = original.Path;
         string rollbackPath = GetAvailableOwnedPath(sourcePath, "rollback");
-        ExifTrackedFile? rollback = null;
+        IdentityTrackedFile? rollback = null;
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            ExifMoveResult rollbackMove = MoveWithResolution(
+            IdentityMoveResult rollbackMove = MoveWithResolution(
                 original,
                 rollbackPath,
                 validateSourceSnapshot: true);
-            if (rollbackMove.CommitState == ExifMoveCommitState.NotCommitted)
+            if (rollbackMove.CommitState == IdentityMoveCommitState.NotCommitted)
             {
                 return CleanupOrRecovery(
                     ExifCleanOutcome.Failed,
@@ -357,7 +357,7 @@ public sealed class ExifCleanerService : IExifCleanerService
                     cleaned);
             }
 
-            if (rollbackMove.CommitState == ExifMoveCommitState.Indeterminate)
+            if (rollbackMove.CommitState == IdentityMoveCommitState.Indeterminate)
             {
                 return RecoveryRequired(
                     sourcePath,
@@ -374,8 +374,8 @@ public sealed class ExifCleanerService : IExifCleanerService
                     [sourcePath, rollbackPath, cleaned.Path]);
             }
 
-            ExifMoveResult replacementMove = MoveWithResolution(cleaned, sourcePath);
-            if (replacementMove.CommitState == ExifMoveCommitState.NotCommitted)
+            IdentityMoveResult replacementMove = MoveWithResolution(cleaned, sourcePath);
+            if (replacementMove.CommitState == IdentityMoveCommitState.NotCommitted)
             {
                 return RestoreReplacement(
                     original,
@@ -386,7 +386,7 @@ public sealed class ExifCleanerService : IExifCleanerService
                     cancellationToken);
             }
 
-            if (replacementMove.CommitState == ExifMoveCommitState.Indeterminate)
+            if (replacementMove.CommitState == IdentityMoveCommitState.Indeterminate)
             {
                 return RecoveryRequired(
                     sourcePath,
@@ -396,7 +396,7 @@ public sealed class ExifCleanerService : IExifCleanerService
 
             cleaned = replacementMove.File;
             WicImageInspection finalInspection;
-            ExifTrackedFile verifiedCleaned;
+            IdentityTrackedFile verifiedCleaned;
             try
             {
                 using IDisposable verificationGuard = _transactions.GuardOwnedPath(cleaned);
@@ -462,7 +462,7 @@ public sealed class ExifCleanerService : IExifCleanerService
                 "Image cleaned and original replaced.",
                 []);
         }
-        catch (ExifSourceChangedException) when (rollback is null)
+        catch (IdentitySourceChangedException) when (rollback is null)
         {
             return CleanupOrRecovery(
                 ExifCleanOutcome.SourceChanged,
@@ -492,9 +492,9 @@ public sealed class ExifCleanerService : IExifCleanerService
     }
 
     private ExifCleanResult RestoreReplacement(
-        ExifTrackedFile original,
-        ExifTrackedFile rollback,
-        ExifTrackedFile cleaned,
+        IdentityTrackedFile original,
+        IdentityTrackedFile rollback,
+        IdentityTrackedFile cleaned,
         ExifCleanOutcome safeOutcome,
         string detail,
         CancellationToken cancellationToken)
@@ -504,12 +504,12 @@ public sealed class ExifCleanerService : IExifCleanerService
         string? asidePath = null;
         try
         {
-            ExifPathProbe sourceProbe = _transactions.Probe(sourcePath);
-            if (sourceProbe.State == ExifPathState.Present && sourceProbe.Identity == cleaned.Identity)
+            IdentityPathProbe sourceProbe = _transactions.Probe(sourcePath);
+            if (sourceProbe.State == IdentityPathState.Present && sourceProbe.Identity == cleaned.Identity)
             {
                 asidePath = GetAvailableOwnedPath(sourcePath, "cleaned-aside");
-                ExifMoveResult asideMove = MoveWithResolution(cleaned, asidePath);
-                if (asideMove.CommitState != ExifMoveCommitState.Committed)
+                IdentityMoveResult asideMove = MoveWithResolution(cleaned, asidePath);
+                if (asideMove.CommitState != IdentityMoveCommitState.Committed)
                 {
                     return RecoveryRequired(
                         sourcePath,
@@ -521,10 +521,10 @@ public sealed class ExifCleanerService : IExifCleanerService
                 sourceProbe = _transactions.Probe(sourcePath);
             }
 
-            if (sourceProbe.State == ExifPathState.Missing)
+            if (sourceProbe.State == IdentityPathState.Missing)
             {
-                ExifPathProbe rollbackProbe = _transactions.Probe(rollbackPath);
-                if (rollbackProbe.State != ExifPathState.Present || rollbackProbe.Identity != original.Identity)
+                IdentityPathProbe rollbackProbe = _transactions.Probe(rollbackPath);
+                if (rollbackProbe.State != IdentityPathState.Present || rollbackProbe.Identity != original.Identity)
                 {
                     return RecoveryRequired(
                         sourcePath,
@@ -532,8 +532,8 @@ public sealed class ExifCleanerService : IExifCleanerService
                         [sourcePath, rollbackPath, cleaned.Path]);
                 }
 
-                ExifMoveResult restoreMove = MoveWithResolution(rollback, sourcePath);
-                if (restoreMove.CommitState != ExifMoveCommitState.Committed)
+                IdentityMoveResult restoreMove = MoveWithResolution(rollback, sourcePath);
+                if (restoreMove.CommitState != IdentityMoveCommitState.Committed)
                 {
                     return RecoveryRequired(
                         sourcePath,
@@ -545,7 +545,7 @@ public sealed class ExifCleanerService : IExifCleanerService
                 sourceProbe = _transactions.Probe(sourcePath);
             }
 
-            if (sourceProbe.State != ExifPathState.Present || sourceProbe.Identity != original.Identity)
+            if (sourceProbe.State != IdentityPathState.Present || sourceProbe.Identity != original.Identity)
             {
                 return RecoveryRequired(
                     sourcePath,
@@ -636,7 +636,7 @@ public sealed class ExifCleanerService : IExifCleanerService
         return false;
     }
 
-    private static bool MatchesRequest(ExifTrackedFile file, ExifCleanRequest request) =>
+    private static bool MatchesRequest(IdentityTrackedFile file, ExifCleanRequest request) =>
         file.Length == request.ExpectedLength &&
         file.ModifiedUtc == request.ExpectedModifiedUtc;
 
@@ -685,69 +685,69 @@ public sealed class ExifCleanerService : IExifCleanerService
         left.PixelChecksum == right.PixelChecksum &&
         left.ColorContexts.SequenceEqual(right.ColorContexts, StringComparer.Ordinal);
 
-    private ExifMoveResult MoveWithResolution(
-        ExifTrackedFile source,
+    private IdentityMoveResult MoveWithResolution(
+        IdentityTrackedFile source,
         string destinationPath,
         bool validateSourceSnapshot = false)
     {
         try
         {
-            ExifMoveResult result = validateSourceSnapshot
+            IdentityMoveResult result = validateSourceSnapshot
                 ? _transactions.MoveSourceNoOverwrite(source, destinationPath)
                 : _transactions.MoveNoOverwrite(source, destinationPath);
             return result.File.Identity == source.Identity
                 ? result with { File = result.File with { Identity = source.Identity } }
-                : new ExifMoveResult(ExifMoveCommitState.Indeterminate, source);
+                : new IdentityMoveResult(IdentityMoveCommitState.Indeterminate, source);
         }
-        catch (ExifMoveException exception)
+        catch (IdentityMoveException exception)
         {
-            ExifPathProbe sourceProbe = _transactions.Probe(source.Path);
-            ExifPathProbe destinationProbe = _transactions.Probe(destinationPath);
-            bool sourceOwned = sourceProbe.State == ExifPathState.Present && sourceProbe.Identity == source.Identity;
-            bool destinationOwned = destinationProbe.State == ExifPathState.Present && destinationProbe.Identity == source.Identity;
-            bool destinationOccupied = destinationProbe.State == ExifPathState.Present && !destinationOwned;
+            IdentityPathProbe sourceProbe = _transactions.Probe(source.Path);
+            IdentityPathProbe destinationProbe = _transactions.Probe(destinationPath);
+            bool sourceOwned = sourceProbe.State == IdentityPathState.Present && sourceProbe.Identity == source.Identity;
+            bool destinationOwned = destinationProbe.State == IdentityPathState.Present && destinationProbe.Identity == source.Identity;
+            bool destinationOccupied = destinationProbe.State == IdentityPathState.Present && !destinationOwned;
             if (!sourceOwned && destinationOwned)
             {
-                return new ExifMoveResult(
-                    ExifMoveCommitState.Committed,
+                return new IdentityMoveResult(
+                    IdentityMoveCommitState.Committed,
                     source with { Path = Path.GetFullPath(destinationPath) });
             }
 
-            if (sourceOwned && exception.CommitState == ExifMoveCommitState.NotCommitted)
+            if (sourceOwned && exception.CommitState == IdentityMoveCommitState.NotCommitted)
             {
-                return new ExifMoveResult(
-                    ExifMoveCommitState.NotCommitted,
+                return new IdentityMoveResult(
+                    IdentityMoveCommitState.NotCommitted,
                     source,
                     destinationOccupied);
             }
 
-            if (sourceOwned && destinationProbe.State == ExifPathState.Missing)
+            if (sourceOwned && destinationProbe.State == IdentityPathState.Missing)
             {
-                return new ExifMoveResult(ExifMoveCommitState.NotCommitted, source);
+                return new IdentityMoveResult(IdentityMoveCommitState.NotCommitted, source);
             }
 
-            return new ExifMoveResult(ExifMoveCommitState.Indeterminate, source);
+            return new IdentityMoveResult(IdentityMoveCommitState.Indeterminate, source);
         }
     }
 
-    private static bool IsOrdinaryFile(ExifTrackedFile file) =>
+    private static bool IsOrdinaryFile(IdentityTrackedFile file) =>
         (file.Attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint | FileAttributes.Device)) == 0;
 
     private ExifCleanResult CleanupOrRecovery(
         ExifCleanOutcome safeOutcome,
         string sourcePath,
         string detail,
-        ExifTrackedFile artifact)
+        IdentityTrackedFile artifact)
     {
         try
         {
-            ExifPathProbe probe = _transactions.Probe(artifact.Path);
-            if (probe.State == ExifPathState.Missing)
+            IdentityPathProbe probe = _transactions.Probe(artifact.Path);
+            if (probe.State == IdentityPathState.Missing)
             {
                 return Result(safeOutcome, sourcePath, detail);
             }
 
-            if (probe.State != ExifPathState.Present || probe.Identity != artifact.Identity)
+            if (probe.State != IdentityPathState.Present || probe.Identity != artifact.Identity)
             {
                 return RecoveryRequired(
                     sourcePath,
@@ -756,8 +756,8 @@ public sealed class ExifCleanerService : IExifCleanerService
             }
 
             _transactions.DeleteOwned(artifact);
-            ExifPathProbe afterDelete = _transactions.Probe(artifact.Path);
-            return afterDelete.State == ExifPathState.Missing
+            IdentityPathProbe afterDelete = _transactions.Probe(artifact.Path);
+            return afterDelete.State == IdentityPathState.Missing
                 ? Result(safeOutcome, sourcePath, detail)
                 : RecoveryRequired(
                     sourcePath,
@@ -783,7 +783,7 @@ public sealed class ExifCleanerService : IExifCleanerService
         {
             try
             {
-                if (_transactions.Probe(path).State != ExifPathState.Missing)
+                if (_transactions.Probe(path).State != IdentityPathState.Missing)
                 {
                     paths.Add(path);
                 }

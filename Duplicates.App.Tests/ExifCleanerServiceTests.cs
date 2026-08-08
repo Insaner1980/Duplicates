@@ -35,7 +35,7 @@ public sealed class ExifCleanerServiceTests
         Assert.Null(result.OutputPath);
         Assert.Single(result.RecoveryPaths);
         Assert.NotNull(typeof(IWicMetadataBackend));
-        Assert.NotNull(typeof(IExifFileTransactions));
+        Assert.NotNull(typeof(IIdentityFileTransactions));
     }
 
     [Fact]
@@ -45,7 +45,7 @@ public sealed class ExifCleanerServiceTests
         string source = fixture.Write("photo.jpg", [0xFF, 0xD8, 0xFF, 1, 2, 3, 0xFF, 0xD9]);
         byte[] sourceBytes = await File.ReadAllBytesAsync(source);
         var backend = new FakeWicMetadataBackend(WicContainerKind.Jpeg);
-        var transactions = new FakeExifFileTransactions();
+        var transactions = new FakeIdentityFileTransactions();
         var service = new ExifCleanerService(backend, transactions, new NoOpRecycleBinService());
 
         ExifCleanResult result = await service.CleanAsync(
@@ -77,7 +77,7 @@ public sealed class ExifCleanerServiceTests
     {
         using var fixture = new TempFixture();
         string source = fixture.Write(name, bytes);
-        var transactions = new FakeExifFileTransactions();
+        var transactions = new FakeIdentityFileTransactions();
         var backend = new FakeWicMetadataBackend(WicContainerKind.Jpeg);
         var service = new ExifCleanerService(backend, transactions, new NoOpRecycleBinService());
 
@@ -98,7 +98,7 @@ public sealed class ExifCleanerServiceTests
     {
         using var fixture = new TempFixture();
         string source = fixture.Write("mismatch.jpg", [0xFF, 0xD8, 0xFF, 0xD9]);
-        var transactions = new FakeExifFileTransactions();
+        var transactions = new FakeIdentityFileTransactions();
         var service = new ExifCleanerService(
             new FakeWicMetadataBackend(WicContainerKind.Tiff),
             transactions,
@@ -155,7 +155,7 @@ public sealed class ExifCleanerServiceTests
         using var fixture = new TempFixture();
         string source = fixture.Write("swap.jpg", [0xFF, 0xD8, 0xFF, 1, 2, 3, 0xFF, 0xD9]);
         DateTime modifiedUtc = File.GetLastWriteTimeUtc(source);
-        var transactions = new FakeExifFileTransactions();
+        var transactions = new FakeIdentityFileTransactions();
         transactions.AfterCopy = (_, _) =>
         {
             string aside = source + ".aside";
@@ -194,7 +194,7 @@ public sealed class ExifCleanerServiceTests
         };
         var service = new ExifCleanerService(
             backend,
-            new FakeExifFileTransactions(),
+            new FakeIdentityFileTransactions(),
             new NoOpRecycleBinService());
 
         ExifCleanResult result = await service.CleanAsync(
@@ -219,7 +219,7 @@ public sealed class ExifCleanerServiceTests
         };
         var service = new ExifCleanerService(
             backend,
-            new FakeExifFileTransactions(),
+            new FakeIdentityFileTransactions(),
             new NoOpRecycleBinService());
 
         ExifCleanResult result = await service.CleanAsync(
@@ -242,7 +242,7 @@ public sealed class ExifCleanerServiceTests
         {
             BreakRenderOnInspection = 3,
         };
-        var transactions = new FakeExifFileTransactions
+        var transactions = new FakeIdentityFileTransactions
         {
             DeleteFailure = new IOException("Delete fault"),
         };
@@ -270,7 +270,7 @@ public sealed class ExifCleanerServiceTests
             MutateEditedFile = true,
         };
         var recycle = new RecordingRecycleBinService();
-        var service = new ExifCleanerService(backend, new FakeExifFileTransactions(), recycle);
+        var service = new ExifCleanerService(backend, new FakeIdentityFileTransactions(), recycle);
         ExifCleanOptions options = AllPrivacyOptions() with { ReplaceOriginal = true };
 
         ExifCleanResult result = await service.CleanAsync(
@@ -300,7 +300,7 @@ public sealed class ExifCleanerServiceTests
         {
             Failure = new IOException("Recycle fault"),
         };
-        var service = new ExifCleanerService(backend, new FakeExifFileTransactions(), recycle);
+        var service = new ExifCleanerService(backend, new FakeIdentityFileTransactions(), recycle);
 
         ExifCleanResult result = await service.CleanAsync(
             Request(source, AllPrivacyOptions() with { ReplaceOriginal = true }),
@@ -319,7 +319,7 @@ public sealed class ExifCleanerServiceTests
     {
         using var fixture = new TempFixture();
         string source = fixture.Write("partial.jpg", [0xFF, 0xD8, 0xFF, 1, 2, 3, 0xFF, 0xD9]);
-        var transactions = new FakeExifFileTransactions
+        var transactions = new FakeIdentityFileTransactions
         {
             CopyFailure = new IOException("Copy fault"),
         };
@@ -343,7 +343,7 @@ public sealed class ExifCleanerServiceTests
     {
         using var fixture = new TempFixture();
         string source = fixture.Write("partial-recovery.jpg", [0xFF, 0xD8, 0xFF, 1, 0xFF, 0xD9]);
-        var transactions = new FakeExifFileTransactions
+        var transactions = new FakeIdentityFileTransactions
         {
             CopyFailure = new IOException("Copy fault"),
             DeleteFailure = new IOException("Delete fault"),
@@ -368,7 +368,7 @@ public sealed class ExifCleanerServiceTests
     {
         using var fixture = new TempFixture();
         string source = fixture.Write("create-recovery.jpg", [0xFF, 0xD8, 0xFF, 0xD9]);
-        var transactions = new FakeExifFileTransactions
+        var transactions = new FakeIdentityFileTransactions
         {
             FailOwnedCreationCleanup = true,
         };
@@ -393,9 +393,9 @@ public sealed class ExifCleanerServiceTests
     {
         using var fixture = new TempFixture();
         string source = fixture.Write("commit.jpg", [0xFF, 0xD8, 0xFF, 0xD9]);
-        var transactions = new FakeExifFileTransactions
+        var transactions = new FakeIdentityFileTransactions
         {
-            MoveThrowState = ExifMoveCommitState.Committed,
+            MoveThrowState = IdentityMoveCommitState.Committed,
         };
         var service = new ExifCleanerService(
             new FakeWicMetadataBackend(WicContainerKind.Jpeg),
@@ -423,7 +423,7 @@ public sealed class ExifCleanerServiceTests
         };
         var service = new ExifCleanerService(
             backend,
-            new FakeExifFileTransactions(),
+            new FakeIdentityFileTransactions(),
             new NoOpRecycleBinService());
 
         ExifCleanResult result = await service.CleanAsync(
@@ -457,7 +457,7 @@ public sealed class ExifCleanerServiceTests
         };
         var service = new ExifCleanerService(
             backend,
-            new FakeExifFileTransactions(),
+            new FakeIdentityFileTransactions(),
             new NoOpRecycleBinService());
         var options = new ExifCleanOptions(
             RemoveGps: true,
@@ -491,7 +491,7 @@ public sealed class ExifCleanerServiceTests
         Assert.True(((Dictionary<string, string>)backend.Inspection.Metadata).Remove(disabledQuery));
         var service = new ExifCleanerService(
             backend,
-            new FakeExifFileTransactions(),
+            new FakeIdentityFileTransactions(),
             new NoOpRecycleBinService());
         var options = new ExifCleanOptions(
             RemoveGps: true,
@@ -518,7 +518,7 @@ public sealed class ExifCleanerServiceTests
         using var fixture = new TempFixture();
         string source = fixture.Write("deferred.jpg", [0xFF, 0xD8, 0xFF, 0xD9]);
         using var cancellation = new CancellationTokenSource();
-        var transactions = new FakeExifFileTransactions
+        var transactions = new FakeIdentityFileTransactions
         {
             AfterMove = call =>
             {
@@ -567,7 +567,7 @@ public sealed class ExifCleanerServiceTests
         };
         var service = new ExifCleanerService(
             backend,
-            new ExifFileTransactions(),
+            new IdentityFileTransactions(),
             new NoOpRecycleBinService());
 
         ExifCleanResult result = await service.CleanAsync(
@@ -596,7 +596,7 @@ public sealed class ExifCleanerServiceTests
         };
         var service = new ExifCleanerService(
             backend,
-            new ExifFileTransactions(),
+            new IdentityFileTransactions(),
             new NoOpRecycleBinService());
 
         ExifCleanResult result = await service.CleanAsync(
@@ -624,7 +624,7 @@ public sealed class ExifCleanerServiceTests
         };
         var service = new ExifCleanerService(
             backend,
-            new ExifFileTransactions(),
+            new IdentityFileTransactions(),
             new RecordingRecycleBinService());
 
         ExifCleanResult result = await service.CleanAsync(
@@ -641,7 +641,7 @@ public sealed class ExifCleanerServiceTests
     {
         using var fixture = new TempFixture();
         string source = fixture.Write("publish-identity.jpg", [0xFF, 0xD8, 0xFF, 0xD9]);
-        var transactions = new FakeExifFileTransactions();
+        var transactions = new FakeIdentityFileTransactions();
         var backend = new FakeWicMetadataBackend(WicContainerKind.Jpeg)
         {
             AfterInspect = (count, path) =>
@@ -672,7 +672,7 @@ public sealed class ExifCleanerServiceTests
     {
         using var fixture = new TempFixture();
         string source = fixture.Write("replace-identity.jpg", [0xFF, 0xD8, 0xFF, 0xD9]);
-        var transactions = new FakeExifFileTransactions();
+        var transactions = new FakeIdentityFileTransactions();
         var backend = new FakeWicMetadataBackend(WicContainerKind.Jpeg)
         {
             AfterInspect = (count, path) =>
@@ -705,7 +705,7 @@ public sealed class ExifCleanerServiceTests
     {
         using var fixture = new TempFixture();
         string source = fixture.Write("transaction-fault.jpg", [0xFF, 0xD8, 0xFF, 0xD9]);
-        var transactions = new FakeExifFileTransactions
+        var transactions = new FakeIdentityFileTransactions
         {
             CopyFailure = win32Failure
                 ? new System.ComponentModel.Win32Exception(5)
@@ -731,9 +731,9 @@ public sealed class ExifCleanerServiceTests
     {
         using var fixture = new TempFixture();
         string source = fixture.Write("collision-race.jpg", [0xFF, 0xD8, 0xFF, 0xD9]);
-        var transactions = new FakeExifFileTransactions
+        var transactions = new FakeIdentityFileTransactions
         {
-            MoveThrowState = ExifMoveCommitState.NotCommitted,
+            MoveThrowState = IdentityMoveCommitState.NotCommitted,
             BeforeMove = (_, destination) => File.WriteAllBytes(destination, [9, 9, 9]),
         };
         var service = new ExifCleanerService(
@@ -756,9 +756,9 @@ public sealed class ExifCleanerServiceTests
     {
         using var fixture = new TempFixture();
         string source = fixture.Write("move-io.jpg", [0xFF, 0xD8, 0xFF, 0xD9]);
-        var transactions = new FakeExifFileTransactions
+        var transactions = new FakeIdentityFileTransactions
         {
-            MoveThrowState = ExifMoveCommitState.NotCommitted,
+            MoveThrowState = IdentityMoveCommitState.NotCommitted,
         };
         var service = new ExifCleanerService(
             new FakeWicMetadataBackend(WicContainerKind.Jpeg),
@@ -781,7 +781,7 @@ public sealed class ExifCleanerServiceTests
         using var fixture = new TempFixture();
         string source = fixture.Write("vacancy-cancel.jpg", [0xFF, 0xD8, 0xFF, 0xD9]);
         using var cancellation = new CancellationTokenSource();
-        var transactions = new FakeExifFileTransactions
+        var transactions = new FakeIdentityFileTransactions
         {
             AfterEntryExists = call =>
             {
@@ -810,7 +810,7 @@ public sealed class ExifCleanerServiceTests
     {
         using var fixture = new TempFixture();
         string source = fixture.Write("late-source-change.jpg", [0xFF, 0xD8, 0xFF, 0xD9]);
-        var transactions = new FakeExifFileTransactions
+        var transactions = new FakeIdentityFileTransactions
         {
             AfterEntryExists = call =>
             {
@@ -842,7 +842,7 @@ public sealed class ExifCleanerServiceTests
         using var fixture = new TempFixture();
         string source = fixture.Write("rollback-source-change.jpg", [0xFF, 0xD8, 0xFF, 0xD9]);
         bool firstMove = true;
-        var transactions = new FakeExifFileTransactions
+        var transactions = new FakeIdentityFileTransactions
         {
             BeforeMove = (tracked, _) =>
             {
@@ -1002,7 +1002,7 @@ public sealed class ExifCleanerServiceTests
         }
     }
 
-    private sealed class FakeExifFileTransactions : IExifFileTransactions
+    private sealed class FakeIdentityFileTransactions : IIdentityFileTransactions
     {
         private readonly Dictionary<string, FileSystemIdentity> _identities =
             new(StringComparer.OrdinalIgnoreCase);
@@ -1012,7 +1012,7 @@ public sealed class ExifCleanerServiceTests
 
         public int MoveCallCount { get; private set; }
 
-        public Action<ExifTrackedFile, ExifTrackedFile>? AfterCopy { get; set; }
+        public Action<IdentityTrackedFile, IdentityTrackedFile>? AfterCopy { get; set; }
 
         public Exception? DeleteFailure { get; set; }
 
@@ -1022,11 +1022,11 @@ public sealed class ExifCleanerServiceTests
 
         public string? LastCreatedPath { get; private set; }
 
-        public ExifMoveCommitState? MoveThrowState { get; set; }
+        public IdentityMoveCommitState? MoveThrowState { get; set; }
 
         public Action<int>? AfterMove { get; set; }
 
-        public Action<ExifTrackedFile, string>? BeforeMove { get; set; }
+        public Action<IdentityTrackedFile, string>? BeforeMove { get; set; }
 
         public Action<int>? AfterEntryExists { get; set; }
 
@@ -1034,7 +1034,7 @@ public sealed class ExifCleanerServiceTests
 
         public void ForgetIdentity(string path) => _identities.Remove(Path.GetFullPath(path));
 
-        public ExifTrackedFile Capture(string path)
+        public IdentityTrackedFile Capture(string path)
         {
             string canonical = Path.GetFullPath(path);
             var info = new FileInfo(canonical);
@@ -1049,7 +1049,7 @@ public sealed class ExifCleanerServiceTests
                 _identities.Add(canonical, identity);
             }
 
-            return new ExifTrackedFile(
+            return new IdentityTrackedFile(
                 canonical,
                 identity,
                 info.Length,
@@ -1057,17 +1057,17 @@ public sealed class ExifCleanerServiceTests
                 info.Attributes);
         }
 
-        public ExifTrackedFile CreateOwnedNew(string destinationPath)
+        public IdentityTrackedFile CreateOwnedNew(string destinationPath)
         {
             using (new FileStream(destinationPath, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.Read))
             {
             }
 
-            ExifTrackedFile created = Capture(destinationPath);
+            IdentityTrackedFile created = Capture(destinationPath);
             LastCreatedPath = created.Path;
             if (FailOwnedCreationCleanup)
             {
-                throw new ExifOwnedCreationRecoveryException(
+                throw new IdentityOwnedCreationRecoveryException(
                     created.Path,
                     new IOException("Injected identity validation failure"),
                     new IOException("Injected owned cleanup failure"));
@@ -1076,9 +1076,9 @@ public sealed class ExifCleanerServiceTests
             return created;
         }
 
-        public async Task<ExifTrackedFile> CopyAndFlushAsync(
-            ExifTrackedFile source,
-            ExifTrackedFile destination,
+        public async Task<IdentityTrackedFile> CopyAndFlushAsync(
+            IdentityTrackedFile source,
+            IdentityTrackedFile destination,
             IProgress<double>? progress,
             CancellationToken cancellationToken)
         {
@@ -1094,11 +1094,11 @@ public sealed class ExifCleanerServiceTests
             if (CopyFailure is not null)
             {
                 throw CopyFailure is System.ComponentModel.Win32Exception or InvalidOperationException
-                    ? new ExifTransactionException("Injected transaction failure", CopyFailure)
+                    ? new IdentityTransactionException("Injected transaction failure", CopyFailure)
                     : CopyFailure;
             }
 
-            ExifTrackedFile copied = Capture(destination.Path);
+            IdentityTrackedFile copied = Capture(destination.Path);
             AfterCopy?.Invoke(source, copied);
             return copied;
         }
@@ -1114,27 +1114,27 @@ public sealed class ExifCleanerServiceTests
             return exists;
         }
 
-        public IDisposable GuardOwnedPath(ExifTrackedFile file) => new NoOpGuard();
+        public IDisposable GuardOwnedPath(IdentityTrackedFile file) => new NoOpGuard();
 
-        public IDisposable GuardSourceSnapshot(ExifTrackedFile source)
+        public IDisposable GuardSourceSnapshot(IdentityTrackedFile source)
         {
-            ExifTrackedFile current = Capture(source.Path);
+            IdentityTrackedFile current = Capture(source.Path);
             if (!MatchesSnapshot(current, source))
             {
-                throw new ExifSourceChangedException();
+                throw new IdentitySourceChangedException();
             }
 
             return new NoOpGuard();
         }
 
-        public ExifMoveResult MoveNoOverwrite(ExifTrackedFile source, string destinationPath) =>
+        public IdentityMoveResult MoveNoOverwrite(IdentityTrackedFile source, string destinationPath) =>
             MoveNoOverwriteCore(source, destinationPath, validateSnapshot: false);
 
-        public ExifMoveResult MoveSourceNoOverwrite(ExifTrackedFile source, string destinationPath) =>
+        public IdentityMoveResult MoveSourceNoOverwrite(IdentityTrackedFile source, string destinationPath) =>
             MoveNoOverwriteCore(source, destinationPath, validateSnapshot: true);
 
-        private ExifMoveResult MoveNoOverwriteCore(
-            ExifTrackedFile source,
+        private IdentityMoveResult MoveNoOverwriteCore(
+            IdentityTrackedFile source,
             string destinationPath,
             bool validateSnapshot)
         {
@@ -1142,11 +1142,11 @@ public sealed class ExifCleanerServiceTests
             BeforeMove?.Invoke(source, destinationPath);
             if (validateSnapshot && !MatchesSnapshot(Capture(source.Path), source))
             {
-                throw new ExifSourceChangedException();
+                throw new IdentitySourceChangedException();
             }
 
-            ExifMoveCommitState state = MoveThrowState ?? ExifMoveCommitState.Committed;
-            if (state == ExifMoveCommitState.Committed)
+            IdentityMoveCommitState state = MoveThrowState ?? IdentityMoveCommitState.Committed;
+            if (state == IdentityMoveCommitState.Committed)
             {
                 File.Move(source.Path, destinationPath, overwrite: false);
                 _identities.Remove(source.Path);
@@ -1157,7 +1157,7 @@ public sealed class ExifCleanerServiceTests
             if (MoveThrowState is not null)
             {
                 MoveThrowState = null;
-                throw new ExifMoveException(
+                throw new IdentityMoveException(
                     "Injected move fault",
                     state,
                     source.Path,
@@ -1165,17 +1165,17 @@ public sealed class ExifCleanerServiceTests
                     source.Identity);
             }
 
-            return new ExifMoveResult(
+            return new IdentityMoveResult(
                 state,
                 source with { Path = destinationPath });
         }
 
-        private static bool MatchesSnapshot(ExifTrackedFile current, ExifTrackedFile expected) =>
+        private static bool MatchesSnapshot(IdentityTrackedFile current, IdentityTrackedFile expected) =>
             current.Identity == expected.Identity &&
             current.Length == expected.Length &&
             current.ModifiedUtc == expected.ModifiedUtc;
 
-        public void DeleteOwned(ExifTrackedFile file)
+        public void DeleteOwned(IdentityTrackedFile file)
         {
             if (DeleteFailure is not null)
             {
@@ -1186,14 +1186,14 @@ public sealed class ExifCleanerServiceTests
             _identities.Remove(file.Path);
         }
 
-        public ExifPathProbe Probe(string path)
+        public IdentityPathProbe Probe(string path)
         {
             if (!File.Exists(path) && !Directory.Exists(path))
             {
-                return new ExifPathProbe(ExifPathState.Missing, null);
+                return new IdentityPathProbe(IdentityPathState.Missing, null);
             }
 
-            return new ExifPathProbe(ExifPathState.Present, Capture(path).Identity);
+            return new IdentityPathProbe(IdentityPathState.Present, Capture(path).Identity);
         }
 
         private sealed class NoOpGuard : IDisposable

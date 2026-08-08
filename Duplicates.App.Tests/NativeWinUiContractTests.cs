@@ -1066,6 +1066,141 @@ public sealed class NativeWinUiContractTests
     }
 
     [Fact]
+    public void VideoOptimizerPage_UsesNativeResponsiveOptimizationControls()
+    {
+        XDocument page = LoadXaml(@"Views\VideoOptimizerPage.xaml");
+        XElement scopeEditor = Assert.Single(
+            page.Descendants(),
+            element => element.Name.LocalName == "PathScopeEditor");
+        Assert.Equal(
+            ".mp4,.mkv,.mov,.avi,.wmv,.flv,.webm,.m4v,.mpg,.mpeg,.3gp,.ts",
+            (string?)scopeEditor.Attribute("FileTypeFilter"));
+        Assert.Equal(
+            "{Binding DataContext.CanEditQueue, ElementName=PageRoot}",
+            (string?)scopeEditor.Attribute("IsEnabled"));
+
+        XElement preset = Assert.Single(page.Descendants(Presentation + "ComboBox"));
+        Assert.Equal("{Binding Preset, Mode=TwoWay}", (string?)preset.Attribute("SelectedIndex"));
+        Assert.Equal(
+            ["Smaller", "Balanced", "High quality"],
+            preset.Elements(Presentation + "ComboBoxItem")
+                .Select(item => (string?)item.Attribute("Content")));
+        Assert.Equal("{Binding CanEditQueue}", (string?)preset.Attribute("IsEnabled"));
+
+        XElement[] toggles = page.Descendants(Presentation + "ToggleSwitch").ToArray();
+        Assert.Equal(2, toggles.Length);
+        Assert.Equal(
+            [
+                "{Binding HardwareAccelerationEnabled, Mode=TwoWay}",
+                "{Binding KeepOutputWhenNotSmaller, Mode=TwoWay}",
+            ],
+            toggles.Select(toggle => (string?)toggle.Attribute("IsOn")));
+        Assert.All(
+            toggles,
+            toggle => Assert.Equal("{Binding CanEditQueue}", (string?)toggle.Attribute("IsEnabled")));
+        XElement keepWarning = page
+            .Descendants(Presentation + "InfoBar")
+            .Single(infoBar => (string?)infoBar.Attribute("Severity") == "Warning");
+        Assert.Equal("{Binding KeepOutputWhenNotSmaller}", (string?)keepWarning.Attribute("IsOpen"));
+        Assert.Equal("False", (string?)keepWarning.Attribute("IsClosable"));
+
+        XElement optimizeButton = Assert.Single(
+            page.Descendants(Presentation + "Button"),
+            button => (string?)button.Attribute("Style") == "{StaticResource AccentButtonStyle}");
+        Assert.Equal("O", (string?)optimizeButton.Attribute("AccessKey"));
+        Assert.Contains(
+            optimizeButton.Descendants(Presentation + "TextBlock"),
+            text => (string?)text.Attribute("Text") == "Optimize videos");
+        XElement cancelButton = page
+            .Descendants(Presentation + "Button")
+            .Single(button => button.Descendants(Presentation + "TextBlock")
+                .Any(text => (string?)text.Attribute("Text") == "Cancel"));
+        Assert.Null(cancelButton.Attribute("Style"));
+
+        Assert.Equal(
+            ["{Binding Progress}", "{Binding ProgressValue}", "{Binding CurrentFileProgress}"],
+            page.Descendants(Presentation + "ProgressBar")
+                .Select(progress => (string?)progress.Attribute("Value")));
+        XElement queue = Assert.Single(page.Descendants(Presentation + "ListView"));
+        Assert.Equal("{Binding Queue}", (string?)queue.Attribute("ItemsSource"));
+        Assert.Equal("Disabled", (string?)queue.Attribute("ScrollViewer.HorizontalScrollMode"));
+        Assert.Equal("Disabled", (string?)queue.Attribute("ScrollViewer.HorizontalScrollBarVisibility"));
+        XElement itemTemplate = page
+            .Descendants(Presentation + "DataTemplate")
+            .Single(template => (string?)template.Attribute(Xaml + "Key") == "VideoOptimizationQueueTemplate");
+        foreach (string binding in new[]
+                 {
+                     "{Binding SourcePath}",
+                     "{Binding DestinationPath}",
+                     "{Binding OutputPath}",
+                 })
+        {
+            XElement path = itemTemplate
+                .Descendants(Presentation + "TextBlock")
+                .Single(text => (string?)text.Attribute("Text") == binding);
+            Assert.Equal("Wrap", (string?)path.Attribute("TextWrapping"));
+            Assert.Null(path.Attribute("TextTrimming"));
+        }
+
+        foreach (string binding in new[]
+                 {
+                     "{Binding SnapshotText}",
+                     "{Binding SourceSummary}",
+                     "{Binding TargetSummary}",
+                     "{Binding OutputSummary}",
+                     "{Binding Detail}",
+                     "{Binding RecoveryPathsText}",
+                 })
+        {
+            Assert.Contains(
+                itemTemplate.Descendants(Presentation + "TextBlock"),
+                text => (string?)text.Attribute("Text") == binding);
+        }
+
+        XElement[] outputActions = itemTemplate.Descendants(Presentation + "Button").ToArray();
+        Assert.Equal(2, outputActions.Length);
+        Assert.Equal(
+            ["Open optimized video", "Reveal optimized video in Explorer"],
+            outputActions.Select(button => (string?)button.Attribute("AutomationProperties.Name")));
+        Assert.Equal(
+            [
+                "{Binding DataContext.OpenOutputCommand, ElementName=PageRoot}",
+                "{Binding DataContext.RevealOutputCommand, ElementName=PageRoot}",
+            ],
+            outputActions.Select(button => (string?)button.Attribute("Command")));
+
+        XElement scrollViewer = Assert.Single(page.Descendants(Presentation + "ScrollViewer"));
+        Assert.Equal("Disabled", (string?)scrollViewer.Attribute("HorizontalScrollMode"));
+        Assert.Equal("Disabled", (string?)scrollViewer.Attribute("HorizontalScrollBarVisibility"));
+        Assert.Contains(
+            page.Descendants(Presentation + "AdaptiveTrigger"),
+            trigger => (string?)trigger.Attribute("MinWindowWidth") == "641");
+    }
+
+    [Fact]
+    public void MainWindow_RoutesVideoOptimizerDirectlyAndUsesTheTypedPageAsOperationOwner()
+    {
+        Type? pageType = typeof(MainWindow).Assembly.GetType("Duplicates.Views.VideoOptimizerPage");
+        Assert.NotNull(pageType);
+        MethodInfo? resolver = typeof(MainWindow).GetMethod(
+            "ResolveDirectToolPage",
+            BindingFlags.NonPublic | BindingFlags.Static);
+        MethodInfo? owner = typeof(MainWindow).GetMethod(
+            "IsOwningPage",
+            BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(resolver);
+        Assert.NotNull(owner);
+
+        Assert.Equal(pageType, resolver.Invoke(null, [ToolKind.VideoOptimizer]));
+        Assert.True(Assert.IsType<bool>(owner.Invoke(
+            null,
+            [AppOperationKind.VideoOptimization, pageType])));
+        Assert.False(Assert.IsType<bool>(owner.Invoke(
+            null,
+            [AppOperationKind.VideoOptimization, typeof(VideoOptimizerPage)])));
+    }
+
+    [Fact]
     public void Manifest_RemainsNonElevatedForSymbolicLinkCreation()
     {
         string path = Path.Combine(AppContext.BaseDirectory, "UiSource", "app.manifest");
@@ -1125,6 +1260,10 @@ public sealed class NativeWinUiContractTests
     }
 
     private sealed class ExifRemoverPage
+    {
+    }
+
+    private sealed class VideoOptimizerPage
     {
     }
 }

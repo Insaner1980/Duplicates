@@ -67,21 +67,30 @@ public sealed class WindowsVideoSampleProvider : IVideoSampleProvider
         double pixelAspectRatio = hasPixelAspectRatio
             ? (double)parNumerator / parDenominator
             : 1;
-        double aspectRatio = ((double)codedWidth / codedHeight) * pixelAspectRatio;
         bool quarterTurn = orientation is VideoOrientation.Rotate90 or VideoOrientation.Rotate270;
-        if (quarterTurn)
-        {
-            aspectRatio = 1 / aspectRatio;
-        }
+        double squarePixelDisplayWidth = quarterTurn
+            ? codedHeight
+            : codedWidth * pixelAspectRatio;
+        double squarePixelDisplayHeight = quarterTurn
+            ? codedWidth * pixelAspectRatio
+            : codedHeight;
+        double aspectRatio = squarePixelDisplayWidth / squarePixelDisplayHeight;
 
-        if (!double.IsFinite(aspectRatio) || aspectRatio <= 0)
+        if (!double.IsFinite(squarePixelDisplayWidth) || squarePixelDisplayWidth <= 0 ||
+            !double.IsFinite(squarePixelDisplayHeight) || squarePixelDisplayHeight <= 0 ||
+            !double.IsFinite(aspectRatio) || aspectRatio <= 0)
         {
             throw new InvalidDataException("The video display aspect ratio is invalid.");
         }
 
         int width = checked((int)(quarterTurn ? codedHeight : codedWidth));
         int height = checked((int)(quarterTurn ? codedWidth : codedHeight));
-        return new VideoDisplayGeometry(width, height, aspectRatio);
+        return new VideoDisplayGeometry(
+            width,
+            height,
+            squarePixelDisplayWidth,
+            squarePixelDisplayHeight,
+            aspectRatio);
     }
 
     private static async Task<VideoSample> SampleAsync(string path, CancellationToken cancellationToken)
@@ -212,4 +221,9 @@ public sealed class WindowsVideoSampleProvider : IVideoSampleProvider
         sample.LuminanceFrames32x32.Distinct(ReferenceEqualityComparer.Instance).Count() == 5;
 }
 
-internal readonly record struct VideoDisplayGeometry(int Width, int Height, double AspectRatio);
+internal readonly record struct VideoDisplayGeometry(
+    int Width,
+    int Height,
+    double SquarePixelDisplayWidth,
+    double SquarePixelDisplayHeight,
+    double AspectRatio);

@@ -532,11 +532,11 @@ public sealed class WindowsMediaProviderTests : IDisposable
     }
 
     [Theory]
-    [InlineData(1920u, 1080u, 1u, 1u, true, VideoOrientation.Normal, 1920, 1080, 1.7777777777777777)]
-    [InlineData(720u, 480u, 8u, 9u, true, VideoOrientation.Normal, 720, 480, 1.3333333333333333)]
-    [InlineData(1920u, 1080u, 1u, 1u, true, VideoOrientation.Rotate90, 1080, 1920, 0.5625)]
-    [InlineData(720u, 480u, 8u, 9u, true, VideoOrientation.Rotate270, 480, 720, 0.75)]
-    [InlineData(640u, 480u, 0u, 0u, false, VideoOrientation.Normal, 640, 480, 1.3333333333333333)]
+    [InlineData(1920u, 1080u, 1u, 1u, true, VideoOrientation.Normal, 1920, 1080, 1920d, 1080d, 1.7777777777777777)]
+    [InlineData(720u, 480u, 8u, 9u, true, VideoOrientation.Normal, 720, 480, 640d, 480d, 1.3333333333333333)]
+    [InlineData(1920u, 1080u, 1u, 1u, true, VideoOrientation.Rotate90, 1080, 1920, 1080d, 1920d, 0.5625)]
+    [InlineData(720u, 480u, 8u, 9u, true, VideoOrientation.Rotate270, 480, 720, 480d, 640d, 0.75)]
+    [InlineData(640u, 480u, 0u, 0u, false, VideoOrientation.Normal, 640, 480, 640d, 480d, 1.3333333333333333)]
     public void CalculateDisplayGeometry_UsesParAndOrientation(
         uint codedWidth,
         uint codedHeight,
@@ -546,6 +546,8 @@ public sealed class WindowsMediaProviderTests : IDisposable
         VideoOrientation orientation,
         int expectedWidth,
         int expectedHeight,
+        double expectedSquarePixelDisplayWidth,
+        double expectedSquarePixelDisplayHeight,
         double expectedAspectRatio)
     {
         VideoDisplayGeometry result = WindowsVideoSampleProvider.CalculateDisplayGeometry(
@@ -558,6 +560,8 @@ public sealed class WindowsMediaProviderTests : IDisposable
 
         Assert.Equal(expectedWidth, result.Width);
         Assert.Equal(expectedHeight, result.Height);
+        Assert.Equal(expectedSquarePixelDisplayWidth, result.SquarePixelDisplayWidth, 12);
+        Assert.Equal(expectedSquarePixelDisplayHeight, result.SquarePixelDisplayHeight, 12);
         Assert.Equal(expectedAspectRatio, result.AspectRatio, 12);
     }
 
