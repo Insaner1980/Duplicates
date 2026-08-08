@@ -1,8 +1,11 @@
+using System.ComponentModel;
+using System.Diagnostics;
 using Duplicates.Engine.Analysis.Media;
 using Duplicates.Engine.Analysis;
 using Duplicates.Engine.Analysis.Analyzers;
 using Duplicates.Models;
 using Duplicates.Services;
+using Duplicates.ViewModels;
 using Windows.Foundation;
 using Windows.Graphics.Imaging;
 using Windows.Media.Editing;
@@ -11,6 +14,7 @@ using Windows.Media.Transcoding;
 using Windows.Storage;
 using Windows.Storage.FileProperties;
 using Windows.UI;
+using Xunit.Sdk;
 
 namespace Duplicates.App.Tests;
 
@@ -397,6 +401,77 @@ public sealed class WindowsMediaProviderTests : IDisposable
     }
 
     [Fact]
+    public async Task MusicDuplicateWindowsUat_GroupsTaggedNormalizedTracksExcludesDifferentArtistAndLeavesCacheUntouched()
+    {
+        string first = Path.Combine(_root, "tagged-source.mp3");
+        string second = Path.Combine(_root, "tagged-variant.mp3");
+        string differentArtist = Path.Combine(_root, "tagged-other-artist.mp3");
+        await CreateTaggedMp3Async(first, " Ｓｏｎｇ—Name ", "Artist", durationSeconds: 3, bitrate: "192k");
+        await CreateTaggedMp3Async(second, "song name", "artist", durationSeconds: 4, bitrate: "128k");
+        await CreateTaggedMp3Async(differentArtist, "song name", "Different Artist", durationSeconds: 3, bitrate: "128k");
+        string cacheSource = await WriteSourceAsync("cache-source.png", [1]);
+        string cachePath = Path.Combine(_root, "music-uat-cache.json");
+        var cache = new MediaFingerprintCache(cachePath);
+        _ = await cache.GetOrCreateImageAsync(
+            cacheSource,
+            _ => Task.FromResult(Image(7)),
+            CancellationToken.None);
+        byte[] cacheBefore = await File.ReadAllBytesAsync(cachePath);
+        InventoryFile[] files = new[] { first, second, differentArtist }
+            .Select(static path =>
+            {
+                var info = new FileInfo(path);
+                info.Refresh();
+                return new InventoryFile(
+                    path,
+                    info.Name,
+                    info.Extension.ToLowerInvariant(),
+                    info.DirectoryName!,
+                    info.Length,
+                    info.CreationTimeUtc,
+                    info.LastWriteTimeUtc,
+                    System.IO.FileAttributes.Normal);
+            })
+            .ToArray();
+
+        AnalysisResult result = await new MusicDuplicateAnalyzer(new WindowsMusicMetadataProvider()).AnalyzeAsync(
+            new FileInventory(files, [], [], [], []),
+            new MusicDuplicateOptions(TimeSpan.FromSeconds(2)),
+            CancellationToken.None);
+
+        SimilarityGroup group = Assert.Single(result.Groups);
+        Assert.True(
+            new HashSet<string>([first, second], StringComparer.OrdinalIgnoreCase)
+                .SetEquals(group.Items.Select(static item => item.FullPath)),
+            string.Join(
+                Environment.NewLine,
+                group.Items.Select(item =>
+                {
+                    var evidence = Assert.IsType<MusicSimilarityEvidence>(item.Evidence);
+                    return $"{Path.GetFileName(item.FullPath)}: {evidence.Title} / {evidence.Artist} / " +
+                        $"{evidence.AlbumArtist} / {evidence.Duration:c}";
+                })));
+        Assert.DoesNotContain(group.Items, item => string.Equals(
+            item.FullPath,
+            differentArtist,
+            StringComparison.OrdinalIgnoreCase));
+        Assert.Empty(result.SkippedPaths);
+        var store = new AnalysisSessionStore();
+        var viewModel = new AnalysisResultsViewModel(store);
+        store.SetCompleted(
+            ToolKind.MusicDuplicates,
+            new AnalysisScope { IncludedFiles = [first, second, differentArtist] },
+            new MusicDuplicateToolOptions(TimeSpan.FromSeconds(2)),
+            result);
+        SimilarityGroupViewModel presented = Assert.Single(viewModel.Groups);
+        Assert.Equal("High confidence", presented.ReferenceItem.SimilarityText);
+        Assert.DoesNotContain(
+            presented.Items,
+            item => item.SummaryText.Contains("100% similar", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(cacheBefore, await File.ReadAllBytesAsync(cachePath));
+    }
+
+    [Fact]
     public void ConvertBgraToLuminance_UsesChannelOrderAndExactAlphaComposite()
     {
         byte[] bgra =
@@ -480,6 +555,72 @@ public sealed class WindowsMediaProviderTests : IDisposable
         string path = Path.Combine(_root, name);
         await File.WriteAllBytesAsync(path, bytes);
         return path;
+    }
+
+    private static async Task CreateTaggedMp3Async(
+        string destinationPath,
+        string title,
+        string artist,
+        int durationSeconds,
+        string bitrate)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "ffmpeg",
+            UseShellExecute = false,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+        };
+        string[] arguments =
+        [
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            $"sine=frequency=440:duration={durationSeconds}",
+            "-metadata",
+            $"title={title}",
+            "-metadata",
+            $"artist={artist}",
+            "-metadata",
+            "album=Album",
+            "-metadata",
+            "track=1",
+            "-metadata",
+            "date=2025",
+            "-metadata",
+            "genre=Rock",
+            "-b:a",
+            bitrate,
+            destinationPath,
+        ];
+        foreach (string argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        Process process;
+        try
+        {
+            process = Process.Start(startInfo) ?? throw new InvalidOperationException("FFmpeg did not start.");
+        }
+        catch (Win32Exception ex)
+        {
+            throw SkipException.ForSkip($"A tagged MP3 fixture cannot be created: {ex.Message}");
+        }
+
+        using (process)
+        {
+            string error = await process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync();
+            if (process.ExitCode != 0)
+            {
+                throw SkipException.ForSkip($"A tagged MP3 fixture cannot be created: {error}");
+            }
+        }
     }
 
     private async Task<string> WriteSolidImageAsync(string name, uint width = 2, uint height = 1)

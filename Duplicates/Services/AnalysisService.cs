@@ -31,21 +31,22 @@ public sealed class AnalysisService : IAnalysisService
     private readonly IFileFormatProbe? _fileFormatProbe;
     private readonly IImageSampleProvider? _imageSampleProvider;
     private readonly IVideoSampleProvider? _videoSampleProvider;
+    private readonly IMusicMetadataProvider? _musicMetadataProvider;
 
     public AnalysisService()
-        : this(null, null, null)
+        : this(null, null, null, null)
     {
     }
 
     public AnalysisService(IFileFormatProbe? fileFormatProbe)
-        : this(fileFormatProbe, null, null)
+        : this(fileFormatProbe, null, null, null)
     {
     }
 
     public AnalysisService(
         IFileFormatProbe? fileFormatProbe,
         IImageSampleProvider? imageSampleProvider)
-        : this(fileFormatProbe, imageSampleProvider, null)
+        : this(fileFormatProbe, imageSampleProvider, null, null)
     {
     }
 
@@ -53,10 +54,20 @@ public sealed class AnalysisService : IAnalysisService
         IFileFormatProbe? fileFormatProbe,
         IImageSampleProvider? imageSampleProvider,
         IVideoSampleProvider? videoSampleProvider)
+        : this(fileFormatProbe, imageSampleProvider, videoSampleProvider, null)
+    {
+    }
+
+    public AnalysisService(
+        IFileFormatProbe? fileFormatProbe,
+        IImageSampleProvider? imageSampleProvider,
+        IVideoSampleProvider? videoSampleProvider,
+        IMusicMetadataProvider? musicMetadataProvider)
     {
         _fileFormatProbe = fileFormatProbe;
         _imageSampleProvider = imageSampleProvider;
         _videoSampleProvider = videoSampleProvider;
+        _musicMetadataProvider = musicMetadataProvider;
     }
 
     public async Task<AnalysisResult> RunAsync(
@@ -94,6 +105,12 @@ public sealed class AnalysisService : IAnalysisService
             throw new ArgumentOutOfRangeException(nameof(toolOptions));
         }
 
+        if (toolOptions is MusicDuplicateToolOptions musicOptions &&
+            musicOptions.MaximumDurationDifference < TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(toolOptions));
+        }
+
         if (tool == ToolKind.BrokenFiles && _fileFormatProbe is null)
         {
             throw new NotSupportedException(
@@ -107,6 +124,12 @@ public sealed class AnalysisService : IAnalysisService
         }
 
         if (tool == ToolKind.SimilarVideos && _videoSampleProvider is null)
+        {
+            throw new NotSupportedException(
+                $"The {ToolDescriptor.For(tool).Title} analyzer is not installed yet.");
+        }
+
+        if (tool == ToolKind.MusicDuplicates && _musicMetadataProvider is null)
         {
             throw new NotSupportedException(
                 $"The {ToolDescriptor.For(tool).Title} analyzer is not installed yet.");
@@ -154,6 +177,11 @@ public sealed class AnalysisService : IAnalysisService
                     inventory,
                     new SimilarVideoOptions(options.MaximumMeanFrameDistance),
                     cancellationToken).ConfigureAwait(false),
+            (ToolKind.MusicDuplicates, MusicDuplicateToolOptions options) => await new MusicDuplicateAnalyzer(
+                _musicMetadataProvider!).AnalyzeAsync(
+                    inventory,
+                    new MusicDuplicateOptions(options.MaximumDurationDifference),
+                    cancellationToken).ConfigureAwait(false),
             _ => throw new NotSupportedException(
                 $"The {ToolDescriptor.For(tool).Title} analyzer is not installed yet."),
         };
@@ -171,6 +199,8 @@ public sealed class AnalysisService : IAnalysisService
                 .RevalidateAsync(item, cancellationToken),
             (ToolKind.SimilarVideos, _) when _videoSampleProvider is not null =>
                 new SimilarVideoAnalyzer(_videoSampleProvider).RevalidateAsync(item, cancellationToken),
+            (ToolKind.MusicDuplicates, _) when _musicMetadataProvider is not null =>
+                new MusicDuplicateAnalyzer(_musicMetadataProvider).RevalidateAsync(item, cancellationToken),
             _ => throw new NotSupportedException($"Revalidation is not available for {tool}."),
         };
 
@@ -187,6 +217,10 @@ public sealed class AnalysisService : IAnalysisService
                 new SimilarVideoAnalyzer(_videoSampleProvider).Regroup(
                     items,
                     new SimilarVideoOptions(videoOptions.MaximumMeanFrameDistance)),
+            (ToolKind.MusicDuplicates, MusicDuplicateToolOptions musicOptions, _) when _musicMetadataProvider is not null =>
+                new MusicDuplicateAnalyzer(_musicMetadataProvider).Regroup(
+                    items,
+                    new MusicDuplicateOptions(musicOptions.MaximumDurationDifference)),
             _ => throw new NotSupportedException($"Regrouping is not available for {tool} with these options."),
         };
 }

@@ -289,6 +289,15 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         IsPreviewPaneOpen = true;
         _previewCancellation?.Cancel();
         _previewCancellation?.Dispose();
+        if (session.Tool == ToolKind.MusicDuplicates)
+        {
+            _previewCancellation = null;
+            _previewRequestGeneration++;
+            SimilarityPreview = null;
+            SimilarityPreviewStatusText = string.Empty;
+            return;
+        }
+
         var cancellation = new CancellationTokenSource();
         _previewCancellation = cancellation;
         long requestGeneration = ++_previewRequestGeneration;
@@ -600,6 +609,11 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
                     item.Source,
                     cancellationToken);
             }
+            catch (MissingRequiredMusicMetadataException ex)
+                when (snapshot.Session.Tool == ToolKind.MusicDuplicates)
+            {
+                providerFailure = ex;
+            }
             catch (Exception ex) when (IsExpectedSimilarityProviderFailure(ex))
             {
                 providerFailure = ex;
@@ -618,9 +632,14 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
 
             if (providerFailure is not null)
             {
-                string reason = snapshot.Session.Tool == ToolKind.SimilarVideos
-                    ? "Could not decode video."
-                    : "Could not decode image.";
+                string reason = providerFailure is MissingRequiredMusicMetadataException
+                    ? "Required music metadata is missing."
+                    : snapshot.Session.Tool switch
+                    {
+                        ToolKind.SimilarVideos => "Could not decode video.",
+                        ToolKind.MusicDuplicates => "Could not read music metadata.",
+                        _ => "Could not decode image.",
+                    };
                 failures.Add(new FileActionFailure(item.FullPath, reason));
                 continue;
             }
@@ -823,13 +842,14 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
                 static pair => pair.Value,
                 StringComparer.Ordinal)))
             .ToArray();
+        bool isMusic = session.Tool == ToolKind.MusicDuplicates;
         ResultExportItem[] similarityItems = _allGroups.SelectMany(group => group.Items.Select(item => new ResultExportItem(
             item.FullPath,
             FileActionTargetKind.File,
-            "Similarity match",
+            isMusic ? "Music metadata and duration match" : "Similarity match",
             "Review manually",
             group.Id,
-            item.Source.SimilarityPercent,
+            isMusic ? null : item.Source.SimilarityPercent,
             item.SizeBytes,
             null,
             item.ModifiedUtc,
@@ -947,7 +967,9 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
     private static bool Matches(SimilarityGroupViewModel group, string search) =>
         string.IsNullOrEmpty(search) ||
         group.Id.Contains(search, StringComparison.OrdinalIgnoreCase) ||
-        group.Items.Any(item => item.FullPath.Contains(search, StringComparison.OrdinalIgnoreCase)) ||
+        group.Items.Any(item =>
+            item.FullPath.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+            item.MetadataText.Contains(search, StringComparison.OrdinalIgnoreCase)) ||
         group.MetadataText.Contains(search, StringComparison.OrdinalIgnoreCase);
 
     private static string GetResultPath(object item) => item switch
@@ -1014,6 +1036,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         { Tool: ToolKind.BrokenFiles, ToolOptions: NoToolOptions } => true,
         { Tool: ToolKind.SimilarImages, ToolOptions: SimilarImageToolOptions } => true,
         { Tool: ToolKind.SimilarVideos, ToolOptions: SimilarVideoToolOptions } => true,
+        { Tool: ToolKind.MusicDuplicates, ToolOptions: MusicDuplicateToolOptions } => true,
         _ => false,
     };
 
@@ -1855,6 +1878,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
     {
         { Tool: ToolKind.SimilarImages, ToolOptions: SimilarImageToolOptions } => true,
         { Tool: ToolKind.SimilarVideos, ToolOptions: SimilarVideoToolOptions } => true,
+        { Tool: ToolKind.MusicDuplicates, ToolOptions: MusicDuplicateToolOptions } => true,
         _ => false,
     };
 

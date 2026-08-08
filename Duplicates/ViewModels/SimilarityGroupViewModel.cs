@@ -11,7 +11,7 @@ public sealed class SimilarityGroupViewModel
         Items = new ObservableCollection<SimilarityItemViewModel>(
             source.Items.Select(item => new SimilarityItemViewModel(
                 item,
-                ReferenceEquals(item, source.ReferenceItem) || item == source.ReferenceItem,
+                ReferenceEquals(item, source.ReferenceItem),
                 selectionChanged)));
     }
 
@@ -25,14 +25,19 @@ public sealed class SimilarityGroupViewModel
 
     public string FullPath => ReferenceItem.FullPath;
 
-    public string DisplayName => $"{Items.Count:N0} similar items";
+    public string DisplayName => Source.ReferenceItem.Evidence is MusicSimilarityEvidence
+        ? $"{Items.Count:N0} matching tracks"
+        : $"{Items.Count:N0} similar items";
 
     public string SummaryText
     {
         get
         {
             int candidateCount = Math.Max(0, Items.Count - 1);
-            return $"Reference: {ReferenceItem.DisplayName}, {candidateCount:N0} " +
+            string referencePrefix = Source.ReferenceItem.Evidence is MusicSimilarityEvidence
+                ? "High confidence, reference"
+                : "Reference";
+            return $"{referencePrefix}: {ReferenceItem.DisplayName}, {candidateCount:N0} " +
                 (candidateCount == 1 ? "candidate" : "candidates");
         }
     }

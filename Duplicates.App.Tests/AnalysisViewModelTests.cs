@@ -418,6 +418,51 @@ public sealed class AnalysisViewModelTests
     }
 
     [Fact]
+    public async Task MusicDuplicates_UsesExactDisclosureCollapsedOptionsAndImmutableTwoSecondSnapshot()
+    {
+        ToolOptions? requestedOptions = null;
+        var service = new FakeAnalysisService
+        {
+            Run = (_, _, options, _, _) =>
+            {
+                requestedOptions = options;
+                return Task.FromResult(NewResult());
+            },
+        };
+        var store = new AnalysisSessionStore();
+        var viewModel = new AnalysisViewModel(service, store, NewScope());
+
+        viewModel.SelectTool(ToolKind.MusicDuplicates);
+
+        Assert.Equal(
+            "Match tracks using Windows music metadata and duration, not acoustic fingerprinting.",
+            viewModel.Subtitle);
+        Assert.Equal(Visibility.Collapsed, viewModel.OptionsVisibility);
+        Assert.Equal(Visibility.Collapsed, viewModel.LargeFileOptionsVisibility);
+        Assert.Equal(Visibility.Collapsed, viewModel.TemporaryFileOptionsVisibility);
+        Assert.Equal(Visibility.Collapsed, viewModel.SimilarImageOptionsVisibility);
+        Assert.Equal(Visibility.Collapsed, viewModel.SimilarVideoOptionsVisibility);
+
+        await viewModel.StartAnalysisCommand.ExecuteAsync(null);
+
+        var options = Assert.IsType<MusicDuplicateToolOptions>(requestedOptions);
+        Assert.Equal(TimeSpan.FromSeconds(2), options.MaximumDurationDifference);
+        Assert.Same(options, Assert.IsType<AnalysisSession>(store.CurrentSession).ToolOptions);
+    }
+
+    [Fact]
+    public void MusicDuplicates_LegacySessionDefaultUsesExactTwoSeconds()
+    {
+        var store = new AnalysisSessionStore();
+
+        store.SetCompleted(ToolKind.MusicDuplicates, new AnalysisScope(), NewResult());
+
+        Assert.Equal(
+            TimeSpan.FromSeconds(2),
+            Assert.IsType<MusicDuplicateToolOptions>(store.CurrentSession!.ToolOptions).MaximumDurationDifference);
+    }
+
+    [Fact]
     public void BigFiles_PresetsUseExactByteValuesAndNoOptionStorageToolsHideOptions()
     {
         var viewModel = new AnalysisViewModel(

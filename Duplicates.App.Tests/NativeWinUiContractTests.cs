@@ -295,6 +295,40 @@ public sealed class NativeWinUiContractTests
     }
 
     [Fact]
+    public void MusicDuplicates_UsesExactDisclosureWithoutThresholdControlOrAcousticSimilarityCopy()
+    {
+        ToolDescriptor descriptor = ToolDescriptor.For(ToolKind.MusicDuplicates);
+        XDocument setup = LoadXaml(@"Views\AnalysisPage.xaml");
+        XDocument results = LoadXaml(@"Views\AnalysisResultsPage.xaml");
+
+        Assert.Equal(
+            "Match tracks using Windows music metadata and duration, not acoustic fingerprinting.",
+            descriptor.Subtitle);
+        Assert.DoesNotContain(
+            setup.Descendants(Presentation + "NumberBox"),
+            input => ((string?)input.Attribute("Header"))?.Contains("music", StringComparison.OrdinalIgnoreCase) == true);
+        Assert.DoesNotContain(
+            setup.Descendants(Presentation + "ComboBox"),
+            input => ((string?)input.Attribute("Header"))?.Contains("music", StringComparison.OrdinalIgnoreCase) == true);
+        Assert.DoesNotContain(
+            setup.DescendantNodes().OfType<XText>().Concat(results.DescendantNodes().OfType<XText>()),
+            text => text.Value.Contains("100% similar", StringComparison.OrdinalIgnoreCase));
+
+        XElement groupTemplate = results
+            .Descendants(Presentation + "DataTemplate")
+            .Single(template => (string?)template.Attribute(Xaml + "Key") == "SimilarityGroupTemplate");
+        Assert.Contains(
+            groupTemplate.Descendants(Presentation + "TextBlock"),
+            text => (string?)text.Attribute("Text") == "{Binding SummaryText}");
+        Assert.Contains(
+            groupTemplate.Descendants(Presentation + "TextBlock"),
+            text =>
+                (string?)text.Attribute("Text") == "{Binding FullPath}" &&
+                (string?)text.Attribute("TextWrapping") == "Wrap" &&
+                (string?)text.Attribute("ToolTipService.ToolTip") == "{Binding FullPath}");
+    }
+
+    [Fact]
     public void AnalysisResultsPage_UsesOneNativeListCommandBarAndResponsivePreview()
     {
         XDocument page = LoadXaml(@"Views\AnalysisResultsPage.xaml");

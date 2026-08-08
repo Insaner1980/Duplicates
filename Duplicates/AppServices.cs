@@ -23,7 +23,8 @@ public sealed class AppServices
         AnalysisService = new AnalysisService(
             fileFormatProbe: FileFormatProbe,
             imageSampleProvider: ImageSampleProvider,
-            videoSampleProvider: VideoSampleProvider);
+            videoSampleProvider: VideoSampleProvider,
+            musicMetadataProvider: MusicMetadataProvider);
         FileActionService = new FileActionService(SettingsService);
         ResultExportService = new ResultExportService();
         PathScopeViewModel = new PathScopeViewModel();

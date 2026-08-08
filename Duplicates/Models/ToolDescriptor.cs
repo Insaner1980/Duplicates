@@ -12,7 +12,12 @@ public sealed record ToolDescriptor(
         ToolKind.DuplicateFiles => new(kind, "Duplicate files", "Find byte-identical files.", "Find duplicates", "\uE8C8"),
         ToolKind.SimilarImages => new(kind, "Similar images", "Find visually similar images.", "Find duplicates", "\uEB9F"),
         ToolKind.SimilarVideos => new(kind, "Similar videos", "Find visually similar videos.", "Find duplicates", "\uE714"),
-        ToolKind.MusicDuplicates => new(kind, "Music duplicates", "Find matching music by metadata.", "Find duplicates", "\uE8D6"),
+        ToolKind.MusicDuplicates => new(
+            kind,
+            "Music duplicates",
+            "Match tracks using Windows music metadata and duration, not acoustic fingerprinting.",
+            "Find duplicates",
+            "\uE8D6"),
         ToolKind.EmptyFolders => new(kind, "Empty folders", "Find folders with no contents.", "Clean storage", "\uE8B7"),
         ToolKind.BigFiles => new(kind, "Big files", "Find files that use the most space.", "Clean storage", "\uE8A5"),
         ToolKind.EmptyFiles => new(kind, "Empty files", "Find zero-byte files.", "Clean storage", "\uE8A5"),

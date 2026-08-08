@@ -271,6 +271,98 @@ public sealed class AnalysisServiceTests : IDisposable
             Assert.Single(regrouped).Items.Select(static item => item.FullPath));
     }
 
+    [Fact]
+    public async Task MusicDuplicates_UsesInjectedProviderAndExposesFreshRevalidationAndPureRegroupArms()
+    {
+        string first = Path.Combine(_root, "first.mp3");
+        string second = Path.Combine(_root, "second.wma");
+        await File.WriteAllBytesAsync(first, [1]);
+        await File.WriteAllBytesAsync(second, [2]);
+        var provider = new FakeMusicMetadataProvider();
+        var service = new AnalysisService(
+            fileFormatProbe: null,
+            imageSampleProvider: null,
+            videoSampleProvider: null,
+            musicMetadataProvider: provider);
+        var options = new MusicDuplicateToolOptions(TimeSpan.FromSeconds(2));
+
+        AnalysisResult result = await service.RunAsync(
+            ToolKind.MusicDuplicates,
+            new AnalysisScope { IncludedFiles = [second, first] },
+            options,
+            progress: null,
+            CancellationToken.None);
+
+        SimilarityGroup group = Assert.Single(result.Groups);
+        Assert.Equal([first, second], provider.Paths);
+        Assert.True(result.Elapsed >= TimeSpan.Zero);
+
+        Assert.True(await service.RevalidateSimilarityItemAsync(
+            ToolKind.MusicDuplicates,
+            group.Items[0],
+            CancellationToken.None));
+        Assert.Equal(group.Items[0].FullPath, provider.Paths[^1]);
+
+        IReadOnlyList<SimilarityGroup> regrouped = service.RegroupSimilarityItems(
+            ToolKind.MusicDuplicates,
+            options,
+            group.Items);
+        SimilarityGroup rebuilt = Assert.Single(regrouped);
+        Assert.Equal(group.Items.Select(static item => item.FullPath), rebuilt.Items.Select(static item => item.FullPath));
+        Assert.Same(rebuilt.Items[0], rebuilt.ReferenceItem);
+    }
+
+    [Fact]
+    public async Task MusicServiceArms_RejectMissingProviderAndNegativeOptionsBeforeInventory()
+    {
+        var reports = new List<AnalysisProgress>();
+        var missing = new AnalysisService();
+
+        await Assert.ThrowsAsync<NotSupportedException>(() => missing.RunAsync(
+            ToolKind.MusicDuplicates,
+            new AnalysisScope { IncludedFolders = [Path.Combine(_root, "missing")] },
+            new MusicDuplicateToolOptions(TimeSpan.FromSeconds(2)),
+            new RecordingProgress(reports),
+            CancellationToken.None));
+
+        var configured = new AnalysisService(null, null, null, new FakeMusicMetadataProvider());
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => configured.RunAsync(
+            ToolKind.MusicDuplicates,
+            new AnalysisScope { IncludedFolders = [Path.Combine(_root, "missing")] },
+            new MusicDuplicateToolOptions(TimeSpan.FromTicks(-1)),
+            new RecordingProgress(reports),
+            CancellationToken.None));
+
+        SimilarityItem item = new()
+        {
+            FullPath = Path.Combine(_root, "item.mp3"),
+            SizeBytes = 1,
+            ModifiedUtc = DateTime.UnixEpoch,
+            SimilarityPercent = 100,
+            Evidence = new MusicSimilarityEvidence(
+                "song",
+                "artist",
+                "Song",
+                "Artist",
+                "Album Artist",
+                "Album",
+                1,
+                2025,
+                ["Rock"],
+                192_000,
+                TimeSpan.FromSeconds(100)),
+        };
+        await Assert.ThrowsAsync<NotSupportedException>(() => missing.RevalidateSimilarityItemAsync(
+            ToolKind.MusicDuplicates,
+            item,
+            CancellationToken.None));
+        Assert.Throws<NotSupportedException>(() => missing.RegroupSimilarityItems(
+            ToolKind.MusicDuplicates,
+            new MusicDuplicateToolOptions(TimeSpan.FromSeconds(2)),
+            [item]));
+        Assert.Empty(reports);
+    }
+
     [Theory]
     [InlineData(-1)]
     [InlineData(14)]
@@ -351,6 +443,11 @@ public sealed class AnalysisServiceTests : IDisposable
             services.VideoSampleProvider,
             typeof(AnalysisService)
                 .GetField("_videoSampleProvider", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+                .GetValue(services.AnalysisService));
+        Assert.Same(
+            services.MusicMetadataProvider,
+            typeof(AnalysisService)
+                .GetField("_musicMetadataProvider", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
                 .GetValue(services.AnalysisService));
         Assert.Same(
             services.AnalysisService,

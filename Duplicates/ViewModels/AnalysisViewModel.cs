@@ -55,7 +55,7 @@ public sealed partial class AnalysisViewModel : ObservableObject
     };
 
     public Visibility OptionsVisibility => Tool is ToolKind.EmptyFolders or ToolKind.EmptyFiles or
-        ToolKind.BrokenFiles or ToolKind.BadNames
+        ToolKind.BrokenFiles or ToolKind.BadNames or ToolKind.MusicDuplicates
         ? Visibility.Collapsed
         : Visibility.Visible;
 

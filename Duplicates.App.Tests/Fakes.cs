@@ -212,6 +212,40 @@ internal sealed class FakeVideoSampleProvider : IVideoSampleProvider
             .ToArray());
 }
 
+internal sealed class FakeMusicMetadataProvider : IMusicMetadataProvider
+{
+    public Func<string, CancellationToken, Task<MusicMetadata>> Handler { get; set; } =
+        (_, _) => Task.FromResult(Music());
+
+    public List<string> Paths { get; } = [];
+
+    public Task<MusicMetadata> GetMetadataAsync(string path, CancellationToken cancellationToken)
+    {
+        Paths.Add(path);
+        return Handler(path, cancellationToken);
+    }
+
+    public static MusicMetadata Music(
+        string title = "Song",
+        string artist = "Artist",
+        string albumArtist = "Album Artist",
+        string album = "Album",
+        uint trackNumber = 1,
+        uint year = 2025,
+        IReadOnlyList<string>? genres = null,
+        uint bitrate = 192_000,
+        TimeSpan? duration = null) => new(
+            title,
+            artist,
+            albumArtist,
+            album,
+            trackNumber,
+            year,
+            genres ?? ["Rock"],
+            bitrate,
+            duration ?? TimeSpan.FromSeconds(100));
+}
+
 internal sealed class FakeResultExportService : IResultExportService
 {
     public ResultExportSnapshot? Snapshot { get; private set; }
