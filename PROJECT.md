@@ -915,10 +915,11 @@ Task 20 wrapper evidence:
 | --- | --- |
 | `lc.ps1` | PASS; format/analyzers completed, 0 files changed |
 | `sc.ps1` dependency audit | PASS; no vulnerable direct/transitive packages reported from configured sources |
-| Semgrep C# scan | UNAVAILABLE; `semgrep` was not found on PATH and the wrapper report says `SKIPPED` |
+| Semgrep C# scan | FAIL; Semgrep 1.172.0 scanned 183 tracked C# targets with 27 rules and reported 3 blocking `unsafe-path-combine` findings in test helpers |
 | `bc.ps1` | PASS on the final single run; restore, Engine 331/331, App 737 passed plus 2 explicit capability skips, and Debug x64 build with 0 warnings/errors |
 | `tc.ps1` | PASS on the final single run; Engine 331/331 and App 737 passed plus 2 explicit capability skips |
-| gitleaks/trufflehog secret scan | UNAVAILABLE; neither executable was found on PATH and `ss.ps1` reported `SKIPPED` |
+| Gitleaks secret scan | PASS; Gitleaks 8.30.1 scanned 55 commits / about 2.50 MB and reported no leaks |
+| TruffleHog installation probe | PASS; TruffleHog 3.96.0 completed a no-verification filesystem scan of a benign temporary probe with 0 findings; the project wrapper prefers Gitleaks when both are installed |
 | Scoped regex secret review | PASS; 31 intended Task 20 content-diff/new files, no matching private-key, provider-token, or assigned-secret patterns |
 
 Wrapper exit code alone is not capability evidence: a `SKIPPED` scanner remains `UNAVAILABLE`. Reports go to gitignored `reports/`. `dc/ql/db` were outside Task 20 because there was no dependency or remote-CI change. Do not route this WinUI/.NET project through Android tooling.
@@ -1056,6 +1057,6 @@ The current Task 20 Gate D passed for fresh unpackaged and packaged Debug x64. T
 - High hashing concurrency under memory/I/O pressure.
 - Objective Narrator spoken-audio capture, the legacy UIA client's unsupported `LiveSetting` property query, and deterministic `.txt` Open behavior without controlling the external default association remain unavailable. Dynamic accessible cache names and source live-region contracts passed.
 - The historical accumulated-process Windows-media lifetime hang remains worth monitoring even though bounded cleanup, three fresh full runs, the final blame-hang run, and both wrappers passed.
-- Semgrep, gitleaks, and trufflehog scans remain `UNAVAILABLE` on this host. The dependency audit passed, and the final scoped regex review of 31 intended Task 20 content-diff/new files found no matching secret patterns.
+- Semgrep, Gitleaks, and TruffleHog are installed on this host. Gitleaks reported no leaks, while Semgrep reported three blocking `unsafe-path-combine` findings in test helpers that remain to be adjudicated. TruffleHog passed an installation probe but was not used for the repository scan because the wrapper prefers Gitleaks when both are available. The dependency audit and the scoped regex review also passed.
 - External Windows-check implementations and any remote CI/security service.
 - Windows App SDK 1.8.260710003, Windows App SDK 2.3.1, and `System.IO.Hashing` 10.0.10 compatibility; availability was verified, migration was not.
