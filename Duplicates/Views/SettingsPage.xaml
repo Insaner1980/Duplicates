@@ -193,10 +193,11 @@
                                 Description="Derived fingerprints only; scan results are never stored.">
                                 <StackPanel Spacing="{StaticResource SpacingSmall}">
                                     <TextBlock
-                                        AutomationProperties.Name="Media fingerprint cache status"
+                                        AutomationProperties.LiveSetting="Polite"
+                                        AutomationProperties.Name="{Binding CacheStatusText}"
                                         Text="{Binding CacheStatusText}" />
                                     <TextBlock
-                                        AutomationProperties.Name="Media fingerprint cache path"
+                                        AutomationProperties.Name="{Binding CachePath}"
                                         Style="{StaticResource MutedTextBlockStyle}"
                                         Text="{Binding CachePath}"
                                         TextWrapping="Wrap" />
@@ -233,6 +234,7 @@
                     </toolkit:SettingsExpander>
 
                     <InfoBar
+                        AutomationProperties.LiveSetting="Polite"
                         AutomationProperties.Name="Settings operation status"
                         IsOpen="{Binding IsSettingsInfoOpen}"
                         Message="{Binding SettingsInfoMessage}"

@@ -74,9 +74,12 @@ public sealed partial class AnalysisResultsPage : Page
         }
     }
 
-    private void NewAnalysisRequested(object? sender, ToolKind tool)
+    private async void NewAnalysisRequested(object? sender, ToolKind tool)
     {
-        App.Current.MainWindow?.ShowAnalysisPage(tool);
+        if (App.Current.MainWindow is MainWindow window)
+        {
+            await window.RequestNewAnalysisAsync(tool);
+        }
     }
 
     private void FocusSearch_Invoked(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
@@ -229,7 +232,11 @@ public sealed partial class AnalysisResultsPage : Page
             : ResultExportFormat.Csv;
         try
         {
-            await ViewModel.ExportAsync(format, result.Path, CancellationToken.None);
+            await ViewModel.ExportAsync(
+                format,
+                result.Path,
+                CancellationToken.None,
+                overwriteExisting: true);
             ViewModel.ActionStatusMessage = "Results exported.";
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException)

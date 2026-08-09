@@ -32,6 +32,53 @@ public sealed class ResultsViewModelTests
     }
 
     [Fact]
+    public void BulkSelectionChanges_RefreshTotalsOnceAndManualChangeStillRefreshes()
+    {
+        const int fileCount = 32;
+        var store = new ResultsStore();
+        var viewModel = NewViewModel(store);
+        var group = new DuplicateGroup
+        {
+            ContentHash = 1,
+            SizeBytes = 100,
+            Files = Enumerable.Range(0, fileCount)
+                .Select(index => NewFile(
+                    "bulk",
+                    $"copy-{index:D2}.bin",
+                    100,
+                    DateTime.UtcNow.AddMinutes(index)))
+                .ToArray(),
+        };
+        store.SetResult(NewResult(group));
+        int selectedFileCountNotifications = 0;
+        viewModel.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(ResultsViewModel.SelectedFileCount))
+            {
+                selectedFileCountNotifications++;
+            }
+        };
+
+        viewModel.ClearSelectionCommand.Execute(null);
+
+        Assert.Equal(0, viewModel.SelectedFileCount);
+        Assert.Equal(1, selectedFileCountNotifications);
+
+        selectedFileCountNotifications = 0;
+        viewModel.UndoSelectionCommand.Execute(null);
+
+        Assert.Equal(fileCount - 1, viewModel.SelectedFileCount);
+        Assert.Equal(1, selectedFileCountNotifications);
+
+        selectedFileCountNotifications = 0;
+        DuplicateFileViewModel selected = viewModel.Groups[0].Files.First(static file => file.IsSelected);
+        selected.IsSelected = false;
+
+        Assert.Equal(fileCount - 2, viewModel.SelectedFileCount);
+        Assert.Equal(1, selectedFileCountNotifications);
+    }
+
+    [Fact]
     public void KeepNewestRule_UsesShortestPathAsDeterministicTieBreaker()
     {
         DateTime modifiedUtc = DateTime.UtcNow;
@@ -50,6 +97,63 @@ public sealed class ResultsViewModelTests
 
         Assert.True(group.Files[0].IsSelected);
         Assert.False(group.Files[1].IsSelected);
+    }
+
+    [Fact]
+    public void DeletionSelectionEnablement_PreservesOneSurvivorAndTracksGroupState()
+    {
+        var group = new DuplicateGroupViewModel(
+            NewGroup(1, "files", "oldest.bin", "newer.bin", "newest.bin"));
+        Dictionary<DuplicateFileViewModel, int> toggleNotifications = group.Files
+            .ToDictionary(static file => file, static _ => 0);
+        foreach (DuplicateFileViewModel file in group.Files)
+        {
+            file.PropertyChanged += (_, args) =>
+            {
+                if (args.PropertyName == "CanToggleDeletionSelection")
+                {
+                    toggleNotifications[file]++;
+                }
+            };
+        }
+
+        Assert.All(group.Files, static file => Assert.True(file.CanToggleDeletionSelection));
+
+        group.ApplyKeepNewest();
+
+        Assert.All(group.Files, file => Assert.True(toggleNotifications[file] > 0));
+        ResetToggleNotifications();
+        Assert.All(
+            group.Files.Where(static file => file.IsSelected),
+            static file => Assert.True(file.CanToggleDeletionSelection));
+        DuplicateFileViewModel survivor = Assert.Single(
+            group.Files,
+            static file => !file.IsSelected);
+        Assert.False(survivor.CanToggleDeletionSelection);
+
+        DuplicateFileViewModel cleared = group.Files.First(static file => file.IsSelected);
+        cleared.IsSelected = false;
+
+        Assert.All(group.Files, file => Assert.True(toggleNotifications[file] > 0));
+        ResetToggleNotifications();
+        DuplicateFileViewModel[] keptFiles = group.Files
+            .Where(static file => !file.IsSelected)
+            .ToArray();
+        Assert.Equal(2, keptFiles.Length);
+        Assert.All(keptFiles, static file => Assert.True(file.CanToggleDeletionSelection));
+
+        group.SetCanMutateSelection(false);
+
+        Assert.All(group.Files, file => Assert.True(toggleNotifications[file] > 0));
+        Assert.All(group.Files, static file => Assert.False(file.CanToggleDeletionSelection));
+
+        void ResetToggleNotifications()
+        {
+            foreach (DuplicateFileViewModel file in group.Files)
+            {
+                toggleNotifications[file] = 0;
+            }
+        }
     }
 
     [Fact]
@@ -492,6 +596,16 @@ public sealed class ResultsViewModelTests
         Assert.Contains(snapshot.Items, item => item.FullPath.EndsWith(@"hidden\b-copy.txt", StringComparison.Ordinal));
         Assert.Equal(ResultExportFormat.Json, exporter.Format);
         Assert.Equal(@"C:\exports\results.json", exporter.DestinationPath);
+        Assert.False(exporter.OverwriteExisting);
+
+        System.Reflection.MethodInfo? pickerExport = typeof(ResultsViewModel).GetMethod(
+            nameof(ResultsViewModel.ExportAsync),
+            [typeof(ResultExportFormat), typeof(string), typeof(CancellationToken), typeof(bool)]);
+        Assert.NotNull(pickerExport);
+        await Assert.IsAssignableFrom<Task>(pickerExport.Invoke(
+            viewModel,
+            [ResultExportFormat.Csv, @"C:\exports\picked.csv", CancellationToken.None, true]));
+        Assert.True(exporter.OverwriteExisting);
     }
 
     [Fact]

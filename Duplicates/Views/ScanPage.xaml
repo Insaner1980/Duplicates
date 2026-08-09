@@ -72,6 +72,7 @@
                     HorizontalAlignment="Right"
                     VerticalAlignment="Center"
                     AccessKey="S"
+                    AutomationProperties.Name="Start scan"
                     Command="{Binding StartScanCommand}"
                     Style="{StaticResource AccentButtonStyle}"
                     Visibility="{Binding SetupVisibility}">
@@ -140,7 +141,7 @@
                                             <ComboBoxItem Content="Categories" />
                                             <ComboBoxItem Content="Custom extensions" />
                                         </ComboBox>
-                                        <WrapGrid
+                                        <VariableSizedWrapGrid
                                             Orientation="Horizontal"
                                             MaximumRowsOrColumns="3"
                                             Visibility="{Binding CategoryFiltersVisibility}">
@@ -150,7 +151,7 @@
                                             <CheckBox Content="Documents" IsChecked="{Binding DocumentsSelected, Mode=TwoWay}" />
                                             <CheckBox Content="Archives" IsChecked="{Binding ArchivesSelected, Mode=TwoWay}" />
                                             <CheckBox Content="Code" IsChecked="{Binding CodeSelected, Mode=TwoWay}" />
-                                        </WrapGrid>
+                                        </VariableSizedWrapGrid>
                                         <TextBox
                                             Header="Custom extensions"
                                             PlaceholderText="psd, ai, sketch"
@@ -219,7 +220,7 @@
                             Maximum="100"
                             IsIndeterminate="{Binding IsProgressIndeterminate}"
                             Value="{Binding ProgressValue}" />
-                        <WrapGrid Orientation="Horizontal">
+                        <VariableSizedWrapGrid Orientation="Horizontal">
                             <StackPanel Margin="0,0,24,12">
                                 <TextBlock Style="{ThemeResource CaptionTextBlockStyle}" Text="Discovered" />
                                 <TextBlock Text="{Binding FilesDiscoveredText}" />
@@ -240,10 +241,11 @@
                                 <TextBlock Style="{ThemeResource CaptionTextBlockStyle}" Text="ETA" />
                                 <TextBlock Text="{Binding EtaText}" />
                             </StackPanel>
-                        </WrapGrid>
+                        </VariableSizedWrapGrid>
                         <TextBlock Style="{StaticResource PathTextBlockStyle}" Text="{Binding CurrentFilePath}" />
                         <Button
                             HorizontalAlignment="Right"
+                            AutomationProperties.Name="Cancel scan"
                             Command="{Binding CancelScanCommand}">
                             <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpacingSmall}">
                                 <SymbolIcon Symbol="Cancel" />

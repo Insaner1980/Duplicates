@@ -47,6 +47,9 @@ public sealed class DuplicateFileViewModel : ObservableObject
 
     public bool CanMutateSelection => _parent.CanMutateSelection;
 
+    public bool CanToggleDeletionSelection =>
+        CanMutateSelection && (IsSelected || _parent.CanSelectForDeletion(this));
+
     public bool CanBeLinkSurvivor => CanMutateSelection && !IsSelected;
 
     public bool IsLinkSurvivor
@@ -119,6 +122,7 @@ public sealed class DuplicateFileViewModel : ObservableObject
         OnPropertyChanged(nameof(IsKept));
         OnPropertyChanged(nameof(KeptVisibility));
         OnPropertyChanged(nameof(DeleteVisibility));
+        OnPropertyChanged(nameof(CanToggleDeletionSelection));
         OnPropertyChanged(nameof(CanBeLinkSurvivor));
     }
 
@@ -130,6 +134,7 @@ public sealed class DuplicateFileViewModel : ObservableObject
     internal void NotifyMutationAvailabilityChanged()
     {
         OnPropertyChanged(nameof(CanMutateSelection));
+        OnPropertyChanged(nameof(CanToggleDeletionSelection));
         OnPropertyChanged(nameof(CanBeLinkSurvivor));
     }
 

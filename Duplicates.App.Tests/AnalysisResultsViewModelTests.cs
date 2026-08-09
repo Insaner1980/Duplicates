@@ -284,6 +284,16 @@ public sealed class AnalysisResultsViewModelTests
             Assert.True(item.Metadata.ContainsKey("MeanFrameDistance"));
             Assert.DoesNotContain(item.Metadata.Keys, key => key.StartsWith("FrameHash", StringComparison.Ordinal));
         });
+        Assert.False(exporter.OverwriteExisting);
+
+        System.Reflection.MethodInfo? pickerExport = typeof(AnalysisResultsViewModel).GetMethod(
+            nameof(AnalysisResultsViewModel.ExportAsync),
+            [typeof(ResultExportFormat), typeof(string), typeof(CancellationToken), typeof(bool)]);
+        Assert.NotNull(pickerExport);
+        await Assert.IsAssignableFrom<Task>(pickerExport.Invoke(
+            viewModel,
+            [ResultExportFormat.Csv, @"C:\exports\picked.csv", CancellationToken.None, true]));
+        Assert.True(exporter.OverwriteExisting);
     }
 
     [Fact]
@@ -451,7 +461,7 @@ public sealed class AnalysisResultsViewModelTests
     }
 
     [Fact]
-    public void NewAnalysisClearsSessionFiltersSelectionsAndPreview()
+    public void ResetCapturedAnalysisClearsSessionFiltersSelectionsAndPreview()
     {
         var store = new AnalysisSessionStore();
         var viewModel = new AnalysisResultsViewModel(store);
@@ -463,7 +473,7 @@ public sealed class AnalysisResultsViewModelTests
         viewModel.SelectedResult = viewModel.Findings[0];
         viewModel.SearchText = "large";
 
-        viewModel.NewAnalysisCommand.Execute(null);
+        Assert.True(viewModel.TryResetSession(store.CurrentSession!));
 
         Assert.Null(store.CurrentSession);
         Assert.Empty(viewModel.Findings);
@@ -2197,6 +2207,54 @@ public sealed class AnalysisResultsViewModelTests
             Assert.Equal(0, fileActions.DeleteCallCount);
             Assert.Equal("File changed since scan.", Assert.Single(summary.Failures).Reason);
             Assert.Same(replacement, Assert.Single(viewModel.Findings).Source);
+            Assert.Equal(string.Empty, viewModel.ActionStatusMessage);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task BrokenFilesMove_SessionReplacementDuringProbeDoesNotSetReplacementStatus()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            string path = await WritePngAsync(Path.Combine(root, "broken.png"));
+            PathFinding oldFinding = NewBrokenFinding(path, FileProbeStatus.Invalid, "ImageDecodeFailure", "PNG", "Image");
+            PathFinding replacement = NewBrokenFinding(path, FileProbeStatus.Invalid, "ImageDecodeFailure", "PNG", "Image");
+            var probeStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var continueProbe = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var probe = new FakeFileFormatProbe
+            {
+                Handler = async (_, _, cancellationToken) =>
+                {
+                    probeStarted.SetResult();
+                    await continueProbe.Task.WaitAsync(cancellationToken);
+                    return new FileProbeResult(FileProbeStatus.Invalid, "ImageDecodeFailure", null);
+                },
+            };
+            var fileActions = new FakeFileActionService();
+            var store = new AnalysisSessionStore();
+            var viewModel = NewBrokenResultsViewModel(store, fileActions, probe);
+            store.SetCompleted(ToolKind.BrokenFiles, new AnalysisScope(), new NoToolOptions(), NewResult([oldFinding]));
+            viewModel.Findings[0].IsSelected = true;
+
+            Task<FileOperationSummary> moving = viewModel.MoveSelectedAsync(
+                Path.Combine(root, "moved"),
+                MoveCollisionBehavior.Skip,
+                CancellationToken.None);
+            await probeStarted.Task;
+            store.SetCompleted(ToolKind.BrokenFiles, new AnalysisScope(), new NoToolOptions(), NewResult([replacement]));
+            continueProbe.SetResult();
+            FileOperationSummary summary = await moving;
+
+            Assert.Equal(0, fileActions.MoveCallCount);
+            Assert.Equal("File changed since scan.", Assert.Single(summary.Results).Failure!.Reason);
+            Assert.Same(replacement, Assert.Single(viewModel.Findings).Source);
+            Assert.Equal(string.Empty, viewModel.ActionStatusMessage);
         }
         finally
         {

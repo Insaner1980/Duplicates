@@ -16,6 +16,7 @@ public sealed class VideoOptimizerRealUatTests : IDisposable
 {
     private const string UatCategory = "Task18RealUat";
     private static readonly TimeSpan FixtureTimeout = TimeSpan.FromSeconds(45);
+    private static readonly TimeSpan FileSystemActionTimeout = TimeSpan.FromSeconds(15);
 
     private readonly ITestOutputHelper _output;
     private readonly string _root = Path.Combine(
@@ -41,7 +42,10 @@ public sealed class VideoOptimizerRealUatTests : IDisposable
             File.SetAttributes(path, FileAttributes.Normal);
         }
 
-        Directory.Delete(_root, recursive: true);
+        RunBoundedFileSystemAction(
+            "Delete video optimizer UAT root",
+            _root,
+            () => Directory.Delete(_root, recursive: true));
     }
 
     [Fact]
@@ -91,12 +95,45 @@ public sealed class VideoOptimizerRealUatTests : IDisposable
         await new WindowsVideoMediaProbe().ProbeAsync(source, CancellationToken.None);
         string movedSource = Path.Combine(_root, "source-renamed.mp4");
         string movedOutput = Path.Combine(_root, "output-renamed.mp4");
-        File.Move(source, movedSource);
-        File.Move(destination, movedOutput);
-        File.Delete(movedSource);
-        File.Delete(movedOutput);
+        RunBoundedFileSystemAction(
+            "Move optimized source fixture",
+            $"{source} -> {movedSource}",
+            () => File.Move(source, movedSource));
+        RunBoundedFileSystemAction(
+            "Move optimized output fixture",
+            $"{destination} -> {movedOutput}",
+            () => File.Move(destination, movedOutput));
+        RunBoundedFileSystemAction(
+            "Delete moved source fixture",
+            movedSource,
+            () => File.Delete(movedSource));
+        RunBoundedFileSystemAction(
+            "Delete moved output fixture",
+            movedOutput,
+            () => File.Delete(movedOutput));
         Assert.False(File.Exists(movedSource));
         Assert.False(File.Exists(movedOutput));
+    }
+
+    private static void RunBoundedFileSystemAction(string action, string path, Action operation)
+    {
+        try
+        {
+            Task.Run(operation)
+                .WaitAsync(FileSystemActionTimeout)
+                .GetAwaiter()
+                .GetResult();
+        }
+        catch (TimeoutException ex)
+        {
+            throw new TimeoutException(
+                $"{action} timed out after {FileSystemActionTimeout.TotalSeconds:0} seconds for '{path}'.",
+                ex);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException($"{action} failed for '{path}'.", ex);
+        }
     }
 
     [Theory]

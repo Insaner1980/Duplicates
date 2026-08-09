@@ -96,6 +96,12 @@ public sealed partial class MainWindow : Window
         }
 
         _lastNavigationItem = requestedItem;
+        if (kind == ToolKind.DuplicateFiles)
+        {
+            NavigateTo(ResolveExactDestination(_services.ResultsStore.CurrentSession));
+            return;
+        }
+
         Type? directPage = ResolveDirectToolPage(kind);
         if (directPage is not null)
         {
@@ -169,11 +175,13 @@ public sealed partial class MainWindow : Window
 
     private static Type? ResolveDirectToolPage(ToolKind tool) => tool switch
     {
-        ToolKind.DuplicateFiles => typeof(ScanPage),
         ToolKind.ExifRemover => typeof(ExifRemoverPage),
         ToolKind.VideoOptimizer => typeof(VideoOptimizerPage),
         _ => null,
     };
+
+    private static Type ResolveExactDestination(ExactResultsSession? session) =>
+        session is null ? typeof(ScanPage) : typeof(ResultsPage);
 
     private void RestoreNavigationSelection(object? item)
     {
@@ -211,6 +219,65 @@ public sealed partial class MainWindow : Window
         {
             RootFrame.Navigate(typeof(ScanPage));
         }
+    }
+
+    public async Task RequestNewScanAsync()
+    {
+        ExactResultsSession? session = _services.ResultsStore.CurrentSession;
+        if (session is null)
+        {
+            ShowScanPage();
+            return;
+        }
+
+        bool reset = await _operationGuard.ConfirmResetAsync(
+            () => ShowResultResetConfirmationAsync(
+                "Start a new scan?",
+                "The current duplicate results, selection, search, sort, and preview will be cleared.",
+                "Start new scan"),
+            () => _services.ResultsViewModel.TryResetSession(session));
+        if (reset)
+        {
+            ShowScanPage();
+        }
+    }
+
+    public async Task RequestNewAnalysisAsync(ToolKind tool)
+    {
+        AnalysisSession? session = _services.AnalysisSessionStore.CurrentSession;
+        if (session is null)
+        {
+            ShowAnalysisPage(tool);
+            return;
+        }
+
+        bool reset = await _operationGuard.ConfirmResetAsync(
+            () => ShowResultResetConfirmationAsync(
+                "Start a new analysis?",
+                "The current analysis results, selection, search, sort, and preview will be cleared.",
+                "Start new analysis"),
+            () => _services.AnalysisResultsViewModel.TryResetSession(session));
+        if (reset)
+        {
+            ShowAnalysisPage(tool);
+        }
+    }
+
+    private async Task<bool> ShowResultResetConfirmationAsync(
+        string title,
+        string content,
+        string primaryButtonText)
+    {
+        var dialog = new ContentDialog
+        {
+            XamlRoot = Root.XamlRoot,
+            Title = title,
+            Content = content,
+            PrimaryButtonText = primaryButtonText,
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+        };
+        return await dialog.ShowAsync() == ContentDialogResult.Primary;
     }
 
     public void ShowAnalysisPage(ToolKind tool)

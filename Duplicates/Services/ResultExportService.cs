@@ -18,11 +18,12 @@ public sealed class ResultExportService : IResultExportService
         ResultExportSnapshot snapshot,
         ResultExportFormat format,
         string destinationPath,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool overwriteExisting = false)
     {
         ResultExportSnapshot copy = CopySnapshot(snapshot);
         string destination = ValidateDestination(destinationPath);
-        if (File.Exists(destination) || Directory.Exists(destination))
+        if (Directory.Exists(destination) || (!overwriteExisting && File.Exists(destination)))
         {
             throw new IOException("The export destination already exists.");
         }
@@ -56,7 +57,7 @@ public sealed class ResultExportService : IResultExportService
             }
 
             cancellationToken.ThrowIfCancellationRequested();
-            File.Move(temporaryPath, destination, overwrite: false);
+            File.Move(temporaryPath, destination, overwrite: overwriteExisting);
         }
         finally
         {

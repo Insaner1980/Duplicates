@@ -29,22 +29,8 @@
                 </StackPanel>
                 <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4">
                     <Button
-                        AutomationProperties.Name="Path actions"
-                        ToolTipService.ToolTip="Path actions">
-                        <SymbolIcon Symbol="More" />
-                        <Button.Flyout>
-                            <MenuFlyout>
-                                <MenuFlyoutItem
-                                    Command="{Binding DataContext.PreferFolderCommand, ElementName=Root}"
-                                    CommandParameter="{Binding}"
-                                    Text="Prefer copies in this folder" />
-                            </MenuFlyout>
-                        </Button.Flyout>
-                    </Button>
-                    <Button
                         AutomationProperties.Name="Remove path"
-                        Command="{Binding DataContext.RemoveIncludedPathCommand, ElementName=Root}"
-                        CommandParameter="{Binding}"
+                        Click="RemoveIncludedPath_Click"
                         ToolTipService.ToolTip="Remove path">
                         <SymbolIcon Symbol="Cancel" />
                     </Button>
@@ -78,8 +64,7 @@
                     Grid.Column="2"
                     VerticalAlignment="Center"
                     AutomationProperties.Name="Remove exclusion"
-                    Command="{Binding DataContext.RemoveExcludedPathCommand, ElementName=Root}"
-                    CommandParameter="{Binding}"
+                    Click="RemoveExcludedPath_Click"
                     ToolTipService.ToolTip="Remove exclusion">
                     <SymbolIcon Symbol="Cancel" />
                 </Button>
@@ -90,6 +75,7 @@
     <Grid
         x:Name="IncludedPathsRegion"
         AllowDrop="True"
+        Background="Transparent"
         DragOver="IncludedPathsRegion_DragOver"
         Drop="IncludedPathsRegion_Drop">
         <StackPanel Spacing="{StaticResource SpacingLarge}">
@@ -117,6 +103,7 @@
                     Spacing="{StaticResource SpacingSmall}">
                     <Button
                         AccessKey="F"
+                        AutomationProperties.Name="Add folder"
                         Click="AddIncludedFolder_Click"
                         ToolTipService.ToolTip="Add a folder to scan">
                         <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpacingSmall}">
@@ -126,6 +113,7 @@
                     </Button>
                     <Button
                         AccessKey="I"
+                        AutomationProperties.Name="Add file"
                         Click="AddIncludedFile_Click"
                         ToolTipService.ToolTip="Add individual files to scan">
                         <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpacingSmall}">
@@ -171,6 +159,7 @@
                     <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpacingSmall}">
                         <Button
                             AccessKey="X"
+                            AutomationProperties.Name="Exclude folder"
                             Click="AddExcludedFolder_Click"
                             ToolTipService.ToolTip="Exclude a folder and its contents">
                             <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpacingSmall}">
@@ -180,6 +169,7 @@
                         </Button>
                         <Button
                             AccessKey="E"
+                            AutomationProperties.Name="Exclude file"
                             Click="AddExcludedFile_Click"
                             ToolTipService.ToolTip="Exclude individual files">
                             <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpacingSmall}">

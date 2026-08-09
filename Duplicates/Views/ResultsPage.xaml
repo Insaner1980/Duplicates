@@ -69,6 +69,11 @@
             <TextBlock
                 Style="{StaticResource MutedTextBlockStyle}"
                 Text="{Binding SummaryText}" />
+            <Button
+                HorizontalAlignment="Left"
+                Content="New scan"
+                IsEnabled="{Binding CanStartNewScan}"
+                Click="NewScan_Click" />
             <InfoBar
                 AutomationProperties.LiveSetting="Polite"
                 AutomationProperties.Name="Delete status"
@@ -222,11 +227,6 @@
                     HorizontalAlignment="Center"
                     Style="{StaticResource MutedTextBlockStyle}"
                     Text="Every file in the scanned folders is unique." />
-                <Button
-                    Content="New scan"
-                    Style="{StaticResource AccentButtonStyle}"
-                    IsEnabled="{Binding CanStartNewScan}"
-                    Click="NewScan_Click" />
             </StackPanel>
 
             <SplitView
@@ -258,6 +258,7 @@
                                 </Button>
                             </Grid>
                             <Image
+                                MaxWidth="512"
                                 MaxHeight="220"
                                 AutomationProperties.Name="{Binding PreviewFileName}"
                                 Stretch="Uniform"
@@ -365,7 +366,7 @@
                                         VerticalAlignment="Center"
                                         AutomationProperties.Name="Select file for deletion"
                                         IsChecked="{Binding IsSelected, Mode=TwoWay}"
-                                        IsEnabled="{Binding CanMutateSelection}" />
+                                        IsEnabled="{Binding CanToggleDeletionSelection}" />
                                     <RadioButton
                                         Grid.Column="1"
                                         VerticalAlignment="Center"

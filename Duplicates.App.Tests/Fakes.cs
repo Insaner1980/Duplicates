@@ -267,15 +267,19 @@ internal sealed class FakeResultExportService : IResultExportService
 
     public string? DestinationPath { get; private set; }
 
+    public bool OverwriteExisting { get; private set; }
+
     public Task ExportAsync(
         ResultExportSnapshot snapshot,
         ResultExportFormat format,
         string destinationPath,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool overwriteExisting = false)
     {
         Snapshot = snapshot;
         Format = format;
         DestinationPath = destinationPath;
+        OverwriteExisting = overwriteExisting;
         return Task.CompletedTask;
     }
 }

@@ -114,6 +114,7 @@
                     HorizontalAlignment="Right"
                     VerticalAlignment="Center"
                     AccessKey="C"
+                    AutomationProperties.Name="Clean images"
                     Click="CleanImages_Click"
                     IsEnabled="{Binding CanStartCleaning}"
                     Style="{StaticResource AccentButtonStyle}">
@@ -189,6 +190,7 @@
                             ToolTipService.ToolTip="{Binding CurrentPath}" />
                         <Button
                             HorizontalAlignment="Right"
+                            AutomationProperties.Name="Cancel image cleaning"
                             Command="{Binding CancelCleaningCommand}"
                             IsEnabled="{Binding IsCleaning}">
                             <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpacingSmall}">

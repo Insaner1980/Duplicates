@@ -3,8 +3,10 @@ using System.Xml;
 using System.Xml.Linq;
 using Duplicates;
 using Duplicates.Engine.Analysis;
+using Duplicates.Engine.Models;
 using Duplicates.Models;
 using Duplicates.Services;
+using Duplicates.ViewModels;
 using Duplicates.Views;
 using Duplicates.Views.Controls;
 
@@ -167,6 +169,30 @@ public sealed class NativeWinUiContractTests
     }
 
     [Fact]
+    public void DuplicateFilesDestination_ReopensCurrentExactResults()
+    {
+        MethodInfo? resolver = typeof(MainWindow).GetMethod(
+            "ResolveExactDestination",
+            BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(resolver);
+        var session = new ExactResultsSession(
+            new ScanResult
+            {
+                Groups = [],
+                TotalFilesScanned = 0,
+                TotalDuplicateFiles = 0,
+                TotalReclaimableBytes = 0,
+                Elapsed = TimeSpan.Zero,
+                SkippedPaths = [],
+            },
+            new AnalysisScope(),
+            DateTimeOffset.UtcNow);
+
+        Assert.Equal(typeof(ScanPage), resolver.Invoke(null, [null]));
+        Assert.Equal(typeof(ResultsPage), resolver.Invoke(null, [session]));
+    }
+
+    [Fact]
     public void ScanPage_UsesNativeControlsWithoutLegacyCards()
     {
         XDocument page = LoadXaml(@"Views\ScanPage.xaml");
@@ -183,6 +209,141 @@ public sealed class NativeWinUiContractTests
             element =>
                 (string?)element.Attribute("Style") ==
                 "{StaticResource CardBorderStyle}");
+    }
+
+    [Fact]
+    public void ScanPage_ProgressUsesSupportedGeneralLayoutPanel()
+    {
+        XDocument page = LoadXaml(@"Views\ScanPage.xaml");
+        XElement progress = Assert.Single(
+            page.Descendants(Presentation + "StackPanel"),
+            element => (string?)element.Attribute("AutomationProperties.LiveSetting") == "Polite");
+
+        Assert.Empty(progress.Descendants(Presentation + "WrapGrid"));
+        XElement metrics = Assert.Single(progress.Descendants(Presentation + "VariableSizedWrapGrid"));
+        Assert.Equal("Horizontal", (string?)metrics.Attribute("Orientation"));
+    }
+
+    [Fact]
+    public void ProductionXaml_UsesWrapGridOnlyInsideItemsPanelTemplates()
+    {
+        string[] invalidUses = AllProductionXaml()
+            .SelectMany(pair => pair.Document
+                .Descendants(Presentation + "WrapGrid")
+                .Where(element => !element.Ancestors(Presentation + "ItemsPanelTemplate").Any())
+                .Select(element => Location(pair.Path, element)))
+            .ToArray();
+
+        Assert.Empty(invalidUses);
+    }
+
+    [Fact]
+    public void RuntimeObservedCompositeButtons_ExposeExplicitAccessibleNames()
+    {
+        (string Path, string Name)[] primaryActions =
+        [
+            (@"Views\ScanPage.xaml", "Start scan"),
+            (@"Views\AnalysisPage.xaml", "Start analysis"),
+            (@"Views\ExifRemoverPage.xaml", "Clean images"),
+            (@"Views\VideoOptimizerPage.xaml", "Optimize videos"),
+        ];
+        foreach ((string path, string name) in primaryActions)
+        {
+            XDocument page = LoadXaml(path);
+            XElement button = page
+                .Descendants(Presentation + "Button")
+                .Single(element => element.Descendants(Presentation + "TextBlock").Any(text =>
+                    (string?)text.Attribute("Text") == name));
+            Assert.Equal(name, (string?)button.Attribute("AutomationProperties.Name"));
+        }
+
+        (string Path, string Command, string Name)[] cancelActions =
+        [
+            (@"Views\ScanPage.xaml", "{Binding CancelScanCommand}", "Cancel scan"),
+            (@"Views\AnalysisPage.xaml", "{Binding CancelAnalysisCommand}", "Cancel analysis"),
+            (@"Views\ExifRemoverPage.xaml", "{Binding CancelCleaningCommand}", "Cancel image cleaning"),
+            (@"Views\VideoOptimizerPage.xaml", "{Binding CancelOptimizationCommand}", "Cancel video optimization"),
+        ];
+        foreach ((string path, string command, string name) in cancelActions)
+        {
+            XDocument page = LoadXaml(path);
+            XElement button = page
+                .Descendants(Presentation + "Button")
+                .Single(element => (string?)element.Attribute("Command") == command);
+            Assert.Equal(name, (string?)button.Attribute("AutomationProperties.Name"));
+        }
+
+        XDocument scope = LoadXaml(@"Views\Controls\PathScopeEditor.xaml");
+        Dictionary<string, string> expectedNames = new(StringComparer.Ordinal)
+        {
+            ["AddIncludedFolder_Click"] = "Add folder",
+            ["AddIncludedFile_Click"] = "Add file",
+            ["AddExcludedFolder_Click"] = "Exclude folder",
+            ["AddExcludedFile_Click"] = "Exclude file",
+        };
+        foreach ((string click, string name) in expectedNames)
+        {
+            XElement button = scope
+                .Descendants(Presentation + "Button")
+                .Single(element => (string?)element.Attribute("Click") == click);
+            Assert.Equal(name, (string?)button.Attribute("AutomationProperties.Name"));
+        }
+    }
+
+    [Fact]
+    public void PathScopeEditor_DropRegionParticipatesInHitTesting()
+    {
+        XDocument editor = LoadXaml(@"Views\Controls\PathScopeEditor.xaml");
+        XElement dropRegion = editor
+            .Descendants(Presentation + "Grid")
+            .Single(element => (string?)element.Attribute(Xaml + "Name") == "IncludedPathsRegion");
+
+        Assert.Equal("True", (string?)dropRegion.Attribute("AllowDrop"));
+        Assert.Equal("Transparent", (string?)dropRegion.Attribute("Background"));
+        Assert.Equal("IncludedPathsRegion_DragOver", (string?)dropRegion.Attribute("DragOver"));
+        Assert.Equal("IncludedPathsRegion_Drop", (string?)dropRegion.Attribute("Drop"));
+    }
+
+    [Fact]
+    public void PathScopeEditor_DataTemplateActionsUseItemClickHandlers()
+    {
+        XDocument editor = LoadXaml(@"Views\Controls\PathScopeEditor.xaml");
+        XElement included = editor
+            .Descendants(Presentation + "DataTemplate")
+            .Single(element => (string?)element.Attribute(Xaml + "Key") == "PathItemTemplate");
+        XElement excluded = editor
+            .Descendants(Presentation + "DataTemplate")
+            .Single(element => (string?)element.Attribute(Xaml + "Key") == "ExcludedPathItemTemplate");
+
+        XElement removeIncluded = included
+            .Descendants(Presentation + "Button")
+            .Single(button => (string?)button.Attribute("AutomationProperties.Name") == "Remove path");
+        XElement removeExcluded = excluded
+            .Descendants(Presentation + "Button")
+            .Single(button => (string?)button.Attribute("AutomationProperties.Name") == "Remove exclusion");
+
+        Assert.Equal("RemoveIncludedPath_Click", (string?)removeIncluded.Attribute("Click"));
+        Assert.Equal("RemoveExcludedPath_Click", (string?)removeExcluded.Attribute("Click"));
+        Assert.All(
+            new[] { removeIncluded, removeExcluded },
+            action =>
+            {
+                Assert.Null(action.Attribute("Command"));
+                Assert.Null(action.Attribute("CommandParameter"));
+            });
+    }
+
+    [Fact]
+    public void PathScopeEditor_DoesNotExposeOrphanedPreferredFolderAction()
+    {
+        XDocument editor = LoadXaml(@"Views\Controls\PathScopeEditor.xaml");
+
+        Assert.DoesNotContain(
+            editor.Descendants(Presentation + "Button"),
+            button => (string?)button.Attribute("AutomationProperties.Name") == "Path actions");
+        Assert.DoesNotContain(
+            editor.Descendants(),
+            element => (string?)element.Attribute("Text") == "Prefer copies in this folder");
     }
 
     [Fact]
@@ -518,6 +679,19 @@ public sealed class NativeWinUiContractTests
             button => (string?)button.Attribute("Content") == "Clear cache");
         Assert.Null(clear.Attribute("Style"));
         Assert.Equal("Clear media fingerprint cache", (string?)clear.Attribute("AutomationProperties.Name"));
+        XElement operationStatus = Assert.Single(
+            page.Descendants(Presentation + "InfoBar"),
+            infoBar => (string?)infoBar.Attribute("AutomationProperties.Name") == "Settings operation status");
+        Assert.Equal("Polite", (string?)operationStatus.Attribute("AutomationProperties.LiveSetting"));
+        XElement cacheStatus = Assert.Single(
+            page.Descendants(Presentation + "TextBlock"),
+            text => (string?)text.Attribute("Text") == "{Binding CacheStatusText}");
+        Assert.Equal("{Binding CacheStatusText}", (string?)cacheStatus.Attribute("AutomationProperties.Name"));
+        Assert.Equal("Polite", (string?)cacheStatus.Attribute("AutomationProperties.LiveSetting"));
+        XElement cachePath = Assert.Single(
+            page.Descendants(Presentation + "TextBlock"),
+            text => (string?)text.Attribute("Text") == "{Binding CachePath}");
+        Assert.Equal("{Binding CachePath}", (string?)cachePath.Attribute("AutomationProperties.Name"));
         Assert.Equal("SettingsPage_Loaded", (string?)page.Root?.Attribute("Loaded"));
     }
 
@@ -539,6 +713,21 @@ public sealed class NativeWinUiContractTests
         Assert.DoesNotContain(
             page.Descendants(Presentation + "Border"),
             element => element.Attribute("Tapped") is not null);
+    }
+
+    [Fact]
+    public void ResultsPage_ExposesOrdinaryNewScanForEveryResultState()
+    {
+        XDocument page = LoadXaml(@"Views\ResultsPage.xaml");
+        XElement newScan = page
+            .Descendants(Presentation + "Button")
+            .Single(button => (string?)button.Attribute("Click") == "NewScan_Click");
+
+        Assert.Equal("New scan", (string?)newScan.Attribute("Content"));
+        Assert.Null(newScan.Attribute("Style"));
+        Assert.DoesNotContain(
+            newScan.Ancestors(),
+            ancestor => ancestor.Attribute("Visibility") is not null);
     }
 
     [Fact]
@@ -628,6 +817,160 @@ public sealed class NativeWinUiContractTests
                         element.Attribute("Tapped") is not null,
                         Location(path, element));
                 }
+            }
+        }
+    }
+
+    [Fact]
+    public void ProductionXaml_UsesOnlyLockedPaletteColorsAndNativeTemplates()
+    {
+        foreach ((string path, XDocument document) in AllProductionXaml())
+        {
+            Assert.False(
+                document.Descendants().Any(element => element.Name.LocalName == "ControlTemplate"),
+                path);
+            Assert.False(
+                document.Descendants(Presentation + "Setter").Any(setter =>
+                    string.Equals((string?)setter.Attribute("Property"), "Template", StringComparison.Ordinal)),
+                path);
+
+            if (string.Equals(path, @"Themes\Colors.xaml", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            Assert.False(
+                document.DescendantNodes().OfType<XText>().Any(node =>
+                    node.Value.Contains('#', StringComparison.Ordinal)),
+                path);
+            Assert.False(
+                document.Descendants().Attributes().Any(attribute =>
+                    attribute.Value.Contains('#', StringComparison.Ordinal)),
+                path);
+        }
+    }
+
+    [Fact]
+    public void ProductionXaml_ForbidsTapHandlersOnAllLockedLayoutElements()
+    {
+        string[] layoutElements = ["Border", "Grid", "StackPanel", "Canvas", "RelativePanel"];
+        foreach ((string path, XDocument document) in AllProductionXaml())
+        {
+            foreach (XElement element in document.Descendants().Where(element =>
+                         layoutElements.Contains(element.Name.LocalName, StringComparer.Ordinal)))
+            {
+                Assert.Null(element.Attribute("Tapped"));
+                Assert.Null(element.Attribute("DoubleTapped"));
+                Assert.Null(element.Attribute("RightTapped"));
+            }
+        }
+    }
+
+    [Fact]
+    public void ProductionXaml_UsesAccentStyleOnlyForTheFourPrimaryRunCommands()
+    {
+        string[] expected = ["Start scan", "Start analysis", "Clean images", "Optimize videos"];
+        string[] actual = AllProductionXaml()
+            .SelectMany(static pair => pair.Document.Descendants(Presentation + "Button"))
+            .Where(button => (string?)button.Attribute("Style") == "{StaticResource AccentButtonStyle}")
+            .Select(ButtonVisibleText)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(expected.Order(StringComparer.Ordinal), actual);
+    }
+
+    [Theory]
+    [InlineData(@"Views\ScanPage.xaml")]
+    [InlineData(@"Views\AnalysisPage.xaml")]
+    [InlineData(@"Views\ExifRemoverPage.xaml")]
+    [InlineData(@"Views\VideoOptimizerPage.xaml")]
+    [InlineData(@"Views\SettingsPage.xaml")]
+    public void EverySetupPage_DisablesHorizontalScrolling(string relativePath)
+    {
+        XDocument page = LoadXaml(relativePath);
+        XElement scrollViewer = Assert.Single(page.Descendants(Presentation + "ScrollViewer"));
+
+        Assert.Equal("Disabled", (string?)scrollViewer.Attribute("HorizontalScrollMode"));
+        Assert.Equal("Disabled", (string?)scrollViewer.Attribute("HorizontalScrollBarVisibility"));
+    }
+
+    [Theory]
+    [InlineData(@"Views\ResultsPage.xaml")]
+    [InlineData(@"Views\AnalysisResultsPage.xaml")]
+    public void ResultLists_RemainNativeVirtualizingListViewsOutsideOuterScrollers(string relativePath)
+    {
+        XDocument page = LoadXaml(relativePath);
+        XElement[] lists = page.Descendants(Presentation + "ListView").ToArray();
+
+        Assert.NotEmpty(lists);
+        Assert.All(lists, list => Assert.DoesNotContain(
+            list.Ancestors(),
+            ancestor => ancestor.Name == Presentation + "ScrollViewer"));
+    }
+
+    [Fact]
+    public void RunAndResultPages_ExposePoliteLiveStatusAndBoundedPreviews()
+    {
+        string[] runAndResultPages =
+        [
+            @"Views\ScanPage.xaml",
+            @"Views\AnalysisPage.xaml",
+            @"Views\ResultsPage.xaml",
+            @"Views\AnalysisResultsPage.xaml",
+            @"Views\ExifRemoverPage.xaml",
+            @"Views\VideoOptimizerPage.xaml",
+        ];
+        foreach (string path in runAndResultPages)
+        {
+            XDocument page = LoadXaml(path);
+            Assert.Contains(
+                page.Descendants(),
+                element => (string?)element.Attribute("AutomationProperties.LiveSetting") == "Polite");
+        }
+
+        foreach (string path in new[] { @"Views\ResultsPage.xaml", @"Views\AnalysisResultsPage.xaml" })
+        {
+            XDocument page = LoadXaml(path);
+            foreach (XElement image in page.Descendants(Presentation + "Image"))
+            {
+                Assert.True(
+                    int.TryParse((string?)image.Attribute("MaxWidth"), out int width) && width <= 512,
+                    Location(path, image));
+                Assert.True(
+                    int.TryParse((string?)image.Attribute("MaxHeight"), out int height) && height <= 512,
+                    Location(path, image));
+            }
+        }
+    }
+
+    [Fact]
+    public void IconOnlyActionControls_HaveAccessibleNamesAndTooltips()
+    {
+        string[] actionControls = ["Button", "AppBarButton", "ToggleButton", "HyperlinkButton"];
+        foreach ((string path, XDocument document) in AllProductionXaml())
+        {
+            foreach (XElement control in document.Descendants().Where(element =>
+                         actionControls.Contains(element.Name.LocalName, StringComparer.Ordinal)))
+            {
+                bool hasIcon = control.Descendants().Any(element =>
+                    element.Name.LocalName is "SymbolIcon" or "FontIcon") ||
+                    control.Attribute("Icon") is not null;
+                bool hasVisibleText = !string.IsNullOrWhiteSpace((string?)control.Attribute("Content")) ||
+                    !string.IsNullOrWhiteSpace((string?)control.Attribute("Label")) ||
+                    control.Descendants(Presentation + "TextBlock").Any(text =>
+                        !string.IsNullOrWhiteSpace((string?)text.Attribute("Text")));
+                if (!hasIcon || hasVisibleText)
+                {
+                    continue;
+                }
+
+                Assert.False(
+                    string.IsNullOrWhiteSpace((string?)control.Attribute("AutomationProperties.Name")),
+                    Location(path, control));
+                Assert.False(
+                    string.IsNullOrWhiteSpace((string?)control.Attribute("ToolTipService.ToolTip")),
+                    Location(path, control));
             }
         }
     }
@@ -805,14 +1148,13 @@ public sealed class NativeWinUiContractTests
             .Descendants(Presentation + "Button")
             .Single(element =>
                 (string?)element.Attribute("AutomationProperties.Name") == "Remove path");
-        Assert.Equal("{Binding}", (string?)removeButton.Attribute("CommandParameter"));
+        Assert.Equal("RemoveIncludedPath_Click", (string?)removeButton.Attribute("Click"));
+        Assert.Null(removeButton.Attribute("Command"));
+        Assert.Null(removeButton.Attribute("CommandParameter"));
         Assert.Equal(
             "{Binding FullPath}",
             (string?)template.Descendants(Presentation + "Grid").First()
                 .Attribute("ToolTipService.ToolTip"));
-        Assert.Contains(
-            template.Descendants(Presentation + "MenuFlyoutItem"),
-            item => (string?)item.Attribute("Text") == "Prefer copies in this folder");
     }
 
     [Fact]
@@ -891,12 +1233,17 @@ public sealed class NativeWinUiContractTests
         XDocument page = LoadXaml(@"Views\ResultsPage.xaml");
         XElement deleteSelection = page
             .Descendants(Presentation + "CheckBox")
-            .Single(element => (string?)element.Attribute("IsChecked") == "{Binding IsSelected, Mode=TwoWay}");
+            .Single(element => (string?)element.Attribute("AutomationProperties.Name") == "Select file for deletion");
         XElement survivorSelection = page
             .Descendants(Presentation + "RadioButton")
             .Single(element => (string?)element.Attribute("IsChecked") == "{Binding IsLinkSurvivor, Mode=TwoWay}");
 
         Assert.Equal("Select file for deletion", (string?)deleteSelection.Attribute("AutomationProperties.Name"));
+        Assert.Equal("{Binding IsSelected, Mode=TwoWay}", (string?)deleteSelection.Attribute("IsChecked"));
+        Assert.Equal("{Binding CanToggleDeletionSelection}", (string?)deleteSelection.Attribute("IsEnabled"));
+        Assert.Null(deleteSelection.Attribute("Click"));
+        Assert.Null(deleteSelection.Attribute("Checked"));
+        Assert.Null(deleteSelection.Attribute("Unchecked"));
         Assert.Equal("Use as link survivor", (string?)survivorSelection.Attribute("AutomationProperties.Name"));
         Assert.Equal("{Binding CanBeLinkSurvivor}", (string?)survivorSelection.Attribute("IsEnabled"));
     }
@@ -916,7 +1263,7 @@ public sealed class NativeWinUiContractTests
             .Single(element => (string?)element.Attribute("Label") == "Clear selection");
         XElement deleteSelection = page
             .Descendants(Presentation + "CheckBox")
-            .Single(element => (string?)element.Attribute("IsChecked") == "{Binding IsSelected, Mode=TwoWay}");
+            .Single(element => (string?)element.Attribute("AutomationProperties.Name") == "Select file for deletion");
         XElement survivorSelection = page
             .Descendants(Presentation + "RadioButton")
             .Single(element => (string?)element.Attribute("IsChecked") == "{Binding IsLinkSurvivor, Mode=TwoWay}");
@@ -927,7 +1274,7 @@ public sealed class NativeWinUiContractTests
 
         Assert.Equal("{Binding CanMutateSelection}", (string?)selectionRule.Attribute("IsEnabled"));
         Assert.Equal("{Binding CanMutateSelection}", (string?)clearSelection.Attribute("IsEnabled"));
-        Assert.Equal("{Binding CanMutateSelection}", (string?)deleteSelection.Attribute("IsEnabled"));
+        Assert.Equal("{Binding CanToggleDeletionSelection}", (string?)deleteSelection.Attribute("IsEnabled"));
         Assert.Equal("{Binding CanBeLinkSurvivor}", (string?)survivorSelection.Attribute("IsEnabled"));
         Assert.NotEmpty(deleteFileCommands);
         Assert.All(
@@ -1246,6 +1593,24 @@ public sealed class NativeWinUiContractTests
             .Single(button => (string?)button.Attribute("Click") == clickHandler)
             .Attribute("AccessKey")?.Value;
 
+    private static string ButtonVisibleText(XElement button) =>
+        (string?)button.Attribute("Content") ??
+        button.Descendants(Presentation + "TextBlock")
+            .Select(text => (string?)text.Attribute("Text"))
+            .FirstOrDefault(static text => !string.IsNullOrWhiteSpace(text)) ??
+        string.Empty;
+
+    private static FileEntry NewFileEntry(string fullPath, long sizeBytes) => new()
+    {
+        FullPath = fullPath,
+        FileName = Path.GetFileName(fullPath),
+        DirectoryPath = Path.GetDirectoryName(fullPath)!,
+        Extension = Path.GetExtension(fullPath),
+        SizeBytes = sizeBytes,
+        CreatedUtc = DateTime.UtcNow.AddDays(-1),
+        ModifiedUtc = DateTime.UtcNow,
+    };
+
     private static string[] NavigationTags(XDocument main) => main
         .Descendants(Presentation + "NavigationViewItem")
         .Select(item => (string?)item.Attribute("Tag"))
@@ -1257,10 +1622,14 @@ public sealed class NativeWinUiContractTests
     {
         string root = Path.Combine(AppContext.BaseDirectory, "UiSource");
         return Directory.EnumerateFiles(root, "*.xaml", SearchOption.AllDirectories)
+            .Select(path => (FullPath: path, RelativePath: Path.GetRelativePath(root, path)))
+            .Where(path =>
+                !path.RelativePath.StartsWith($"bin{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase) &&
+                !path.RelativePath.StartsWith($"obj{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
             .Select(path =>
                 (
-                    Path.GetRelativePath(root, path),
-                    XDocument.Load(path, LoadOptions.SetLineInfo)));
+                    path.RelativePath,
+                    XDocument.Load(path.FullPath, LoadOptions.SetLineInfo)));
     }
 
     private static string Location(string path, XElement element)

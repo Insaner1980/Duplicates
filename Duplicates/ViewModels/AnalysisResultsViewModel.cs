@@ -232,6 +232,24 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
 
     public bool CanMutateSelection => !IsActionRunning && _operationCoordinator.ActiveOperation is null;
 
+    internal bool TryResetSession(AnalysisSession expectedSession)
+    {
+        ArgumentNullException.ThrowIfNull(expectedSession);
+        if (!ReferenceEquals(_sessionStore.CurrentSession, expectedSession))
+        {
+            return false;
+        }
+
+        SearchText = string.Empty;
+        SelectedSortIndex = 0;
+        SelectedResult = null;
+        ResetSimilarityPreview();
+        IsPreviewPaneOpen = false;
+        ActionStatusMessage = string.Empty;
+        _sessionStore.Clear();
+        return true;
+    }
+
     public IReadOnlyList<PathFindingViewModel> SelectedFindings =>
         _allFindings.Where(static item => item.IsSelected).ToArray();
 
@@ -291,12 +309,6 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         }
 
         ToolKind tool = _sessionStore.CurrentSession?.Tool ?? ToolKind.EmptyFolders;
-        SearchText = string.Empty;
-        SelectedSortIndex = 0;
-        SelectedResult = null;
-        ResetSimilarityPreview();
-        IsPreviewPaneOpen = false;
-        _sessionStore.Clear();
         NewAnalysisRequested?.Invoke(this, tool);
     }
 
@@ -431,6 +443,15 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
             throw new InvalidOperationException("Select at least one result first.");
         }
 
+        if (!ReferenceEquals(_sessionStore.CurrentSession, initiatingSession))
+        {
+            return ApplyDeleteSummary(
+                new DeleteSummary(0, 0, []),
+                selection,
+                initiatingSession,
+                wasCancelled: false);
+        }
+
         IsActionRunning = true;
         ActionStatusMessage = "Deleting selected items...";
         try
@@ -489,6 +510,15 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         if (selection.SelectedCount == 0)
         {
             throw new InvalidOperationException("Select at least one result first.");
+        }
+
+        if (!ReferenceEquals(_sessionStore.CurrentSession, initiatingSession))
+        {
+            return ApplyMoveSummary(
+                new FileOperationSummary([], 0),
+                selection.Failures,
+                initiatingSession,
+                wasCancelled: false);
         }
 
         IsActionRunning = true;
@@ -879,10 +909,11 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
     public Task ExportAsync(
         ResultExportFormat format,
         string destinationPath,
-        CancellationToken cancellationToken) => RunCoordinatedActionAsync(
+        CancellationToken cancellationToken,
+        bool overwriteExisting = false) => RunCoordinatedActionAsync(
             async token =>
             {
-                await ExportCoreAsync(format, destinationPath, token);
+                await ExportCoreAsync(format, destinationPath, token, overwriteExisting);
                 return true;
             },
             cancellationToken);
@@ -890,7 +921,8 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
     private Task ExportCoreAsync(
         ResultExportFormat format,
         string destinationPath,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool overwriteExisting)
     {
         IResultExportService exporter = _resultExportService ??
             throw new InvalidOperationException("Result export is not configured.");
@@ -935,7 +967,12 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
             BuildScopeSummary(session.Scope),
             [.. findingItems, .. similarityItems],
             skippedPaths);
-        return exporter.ExportAsync(snapshot, format, destinationPath, cancellationToken);
+        return exporter.ExportAsync(
+            snapshot,
+            format,
+            destinationPath,
+            cancellationToken,
+            overwriteExisting);
     }
 
     private async Task<T> RunCoordinatedActionAsync<T>(
@@ -990,6 +1027,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
     {
         _allFindings.Clear();
         _allGroups.Clear();
+        ActionStatusMessage = string.Empty;
         SelectedResult = null;
         ResetSimilarityPreview();
         IsPreviewPaneOpen = false;
@@ -1176,7 +1214,8 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
             .Where(static result => result.Succeeded)
             .Select(static result => result.SourcePath)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        if (ReferenceEquals(_sessionStore.CurrentSession, initiatingSession))
+        bool isCurrentSession = ReferenceEquals(_sessionStore.CurrentSession, initiatingSession);
+        if (isCurrentSession)
         {
             if (similaritySnapshot is null)
             {
@@ -1189,11 +1228,14 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         }
         int succeeded = results.Count(static result => result.Succeeded);
         int failed = results.Length - succeeded;
-        ActionStatusMessage = wasCancelled
-            ? $"Move cancelled after {succeeded:N0} {(succeeded == 1 ? "item" : "items")} moved."
-            : failed == 0
-                ? succeeded == 1 ? "1 item moved." : $"{succeeded:N0} items moved."
-                : $"{succeeded:N0} items moved, {failed:N0} could not be moved.";
+        if (isCurrentSession)
+        {
+            ActionStatusMessage = wasCancelled
+                ? $"Move cancelled after {succeeded:N0} {(succeeded == 1 ? "item" : "items")} moved."
+                : failed == 0
+                    ? succeeded == 1 ? "1 item moved." : $"{succeeded:N0} items moved."
+                    : $"{succeeded:N0} items moved, {failed:N0} could not be moved.";
+        }
         return new FileOperationSummary(results, serviceSummary.SucceededBytes);
     }
 
@@ -1210,7 +1252,8 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
                 string.Equals(failure.Path, target.FullPath, StringComparison.OrdinalIgnoreCase)))
             .Select(static target => target.FullPath);
         HashSet<string> successfulPathSet = successfulPaths.ToHashSet(StringComparer.OrdinalIgnoreCase);
-        if (ReferenceEquals(_sessionStore.CurrentSession, initiatingSession))
+        bool isCurrentSession = ReferenceEquals(_sessionStore.CurrentSession, initiatingSession);
+        if (isCurrentSession)
         {
             if (similaritySnapshot is null)
             {
@@ -1221,14 +1264,17 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
                 RebuildSimilarityGroups(successfulPathSet, similaritySnapshot);
             }
         }
-        ActionStatusMessage = wasCancelled
-            ? $"Delete cancelled after {serviceSummary.DeletedCount:N0} " +
-                (serviceSummary.DeletedCount == 1 ? "item deleted." : "items deleted.")
-            : failures.Length == 0
-                ? serviceSummary.DeletedCount == 1
-                    ? "1 item deleted."
-                    : $"{serviceSummary.DeletedCount:N0} items deleted."
-                : $"{serviceSummary.DeletedCount:N0} items deleted, {failures.Length:N0} could not be deleted.";
+        if (isCurrentSession)
+        {
+            ActionStatusMessage = wasCancelled
+                ? $"Delete cancelled after {serviceSummary.DeletedCount:N0} " +
+                    (serviceSummary.DeletedCount == 1 ? "item deleted." : "items deleted.")
+                : failures.Length == 0
+                    ? serviceSummary.DeletedCount == 1
+                        ? "1 item deleted."
+                        : $"{serviceSummary.DeletedCount:N0} items deleted."
+                    : $"{serviceSummary.DeletedCount:N0} items deleted, {failures.Length:N0} could not be deleted.";
+        }
         return new DeleteSummary(
             serviceSummary.DeletedCount,
             serviceSummary.DeletedBytes,

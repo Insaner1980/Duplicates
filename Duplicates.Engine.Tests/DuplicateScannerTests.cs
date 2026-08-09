@@ -2,6 +2,7 @@ using Duplicates.Engine;
 using Duplicates.Engine.FileEnumeration;
 using Duplicates.Engine.Hashing;
 using Duplicates.Engine.Models;
+using System.Buffers;
 using System.Runtime.InteropServices;
 
 namespace Duplicates.Engine.Tests;
@@ -159,6 +160,30 @@ public sealed class DuplicateScannerTests : IDisposable
         Assert.Equal(2, result.Groups.Count);
         Assert.Contains(result.Groups, group => group.Files.Any(file => file.FullPath == firstA) && group.Files.Any(file => file.FullPath == firstB));
         Assert.Contains(result.Groups, group => group.Files.Any(file => file.FullPath == secondA) && group.Files.Any(file => file.FullPath == secondB));
+    }
+
+    [Fact]
+    public async Task ScanAsync_ByteVerificationRentsOneBufferPairPerHashGroup()
+    {
+        const int fileCount = 64;
+        for (int index = 0; index < fileCount; index++)
+        {
+            WriteFile($"identical-{index:D2}.bin", "same verifier bytes");
+        }
+
+        var verificationPool = new CountingArrayPool();
+        var scanner = new DuplicateScanner(new FileWalker(), new FileHasher(), verificationPool);
+
+        ScanResult result = await scanner.ScanAsync(
+            NewOptions() with { VerifyByteByByte = true },
+            progress: null,
+            CancellationToken.None);
+
+        DuplicateGroup group = Assert.Single(result.Groups);
+        Assert.Equal(fileCount, group.Files.Count);
+        Assert.Equal(fileCount - 1, result.TotalDuplicateFiles);
+        Assert.Equal(2, verificationPool.RentCount);
+        Assert.Equal(2, verificationPool.ReturnCount);
     }
 
     [Fact]
@@ -452,6 +477,24 @@ public sealed class DuplicateScannerTests : IDisposable
         {
             bytesRead?.Invoke(Math.Min(expectedSizeBytes, maxBytesToRead));
             return Task.FromResult(42UL);
+        }
+    }
+
+    private sealed class CountingArrayPool : ArrayPool<byte>
+    {
+        public int RentCount { get; private set; }
+
+        public int ReturnCount { get; private set; }
+
+        public override byte[] Rent(int minimumLength)
+        {
+            RentCount++;
+            return new byte[minimumLength];
+        }
+
+        public override void Return(byte[] array, bool clearArray = false)
+        {
+            ReturnCount++;
         }
     }
 

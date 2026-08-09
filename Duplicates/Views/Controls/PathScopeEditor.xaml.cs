@@ -26,6 +26,22 @@ public sealed partial class PathScopeEditor : UserControl
 
     private async void AddExcludedFile_Click(object sender, RoutedEventArgs e) => await AddFilesAsync(excluded: true);
 
+    private void RemoveIncludedPath_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { DataContext: ScopePathViewModel path })
+        {
+            Scope?.RemoveIncludedPath(path);
+        }
+    }
+
+    private void RemoveExcludedPath_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { DataContext: ScopePathViewModel path })
+        {
+            Scope?.RemoveExcludedPath(path);
+        }
+    }
+
     private async Task AddFolderAsync(bool excluded)
     {
         if (App.Current.MainWindow is null || Scope is null)

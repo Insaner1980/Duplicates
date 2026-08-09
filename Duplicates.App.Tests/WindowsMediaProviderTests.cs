@@ -20,6 +20,8 @@ namespace Duplicates.App.Tests;
 
 public sealed class WindowsMediaProviderTests : IDisposable
 {
+    private static readonly TimeSpan FileSystemActionTimeout = TimeSpan.FromSeconds(15);
+
     private readonly string _root = Path.Combine(
         Path.GetTempPath(), "Duplicates.App.Tests", Guid.NewGuid().ToString("N"));
 
@@ -32,7 +34,10 @@ public sealed class WindowsMediaProviderTests : IDisposable
     {
         if (Directory.Exists(_root))
         {
-            Directory.Delete(_root, recursive: true);
+            RunBoundedFileSystemAction(
+                "Delete Windows media test root",
+                _root,
+                () => Directory.Delete(_root, recursive: true));
         }
     }
 
@@ -858,10 +863,21 @@ public sealed class WindowsMediaProviderTests : IDisposable
             profile.Video.Width = width;
             profile.Video.Height = height;
             profile.Video.Bitrate = bitrate;
-            TranscodeFailureReason result = await composition.RenderToFileAsync(
-                output,
-                MediaTrimmingPreference.Precise,
-                profile);
+            IAsyncOperationWithProgress<TranscodeFailureReason, double> renderOperation =
+                composition.RenderToFileAsync(
+                    output,
+                    MediaTrimmingPreference.Precise,
+                    profile);
+            TranscodeFailureReason result;
+            try
+            {
+                result = await renderOperation.AsTask();
+            }
+            finally
+            {
+                renderOperation.Close();
+            }
+
             Assert.True(result == TranscodeFailureReason.None, $"Video render failed: {result}.");
             return output;
         }
@@ -885,11 +901,22 @@ public sealed class WindowsMediaProviderTests : IDisposable
         profile.Video.Height = height;
         profile.Video.Bitrate = bitrate;
         var transcoder = new MediaTranscoder { AlwaysReencode = true };
-        PrepareTranscodeResult preparation = await transcoder.PrepareFileTranscodeAsync(source, output, profile);
+        PrepareTranscodeResult preparation = await WinRtAsync.AwaitAndCloseAsync(
+            transcoder.PrepareFileTranscodeAsync(source, output, profile),
+            CancellationToken.None);
         Assert.True(
             preparation.CanTranscode,
             $"Video transcode preparation failed: {preparation.FailureReason}.");
-        await preparation.TranscodeAsync();
+        IAsyncActionWithProgress<double> operation = preparation.TranscodeAsync();
+        try
+        {
+            await operation.AsTask();
+        }
+        finally
+        {
+            operation.Close();
+        }
+
         return output;
     }
 
@@ -923,8 +950,35 @@ public sealed class WindowsMediaProviderTests : IDisposable
     private static void MoveAwayAndBack(string path)
     {
         string movedPath = path + ".moved";
-        File.Move(path, movedPath);
-        File.Move(movedPath, path);
+        RunBoundedFileSystemAction(
+            "Move Windows media fixture away",
+            $"{path} -> {movedPath}",
+            () => File.Move(path, movedPath));
+        RunBoundedFileSystemAction(
+            "Move Windows media fixture back",
+            $"{movedPath} -> {path}",
+            () => File.Move(movedPath, path));
+    }
+
+    private static void RunBoundedFileSystemAction(string action, string path, Action operation)
+    {
+        try
+        {
+            Task.Run(operation)
+                .WaitAsync(FileSystemActionTimeout)
+                .GetAwaiter()
+                .GetResult();
+        }
+        catch (TimeoutException ex)
+        {
+            throw new TimeoutException(
+                $"{action} timed out after {FileSystemActionTimeout.TotalSeconds:0} seconds for '{path}'.",
+                ex);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException($"{action} failed for '{path}'.", ex);
+        }
     }
 
     private static ImageSample Image(byte value) =>

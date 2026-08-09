@@ -139,7 +139,11 @@ public sealed partial class ResultsPage : Page
             : ResultExportFormat.Csv;
         try
         {
-            await ViewModel.ExportAsync(format, result.Path, CancellationToken.None);
+            await ViewModel.ExportAsync(
+                format,
+                result.Path,
+                CancellationToken.None,
+                overwriteExisting: true);
             ViewModel.DeleteStatusMessage = "Results exported.";
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException)
@@ -324,11 +328,14 @@ public sealed partial class ResultsPage : Page
         }
     }
 
-    private void NewScan_Click(object sender, RoutedEventArgs e)
+    private async void NewScan_Click(object sender, RoutedEventArgs e)
     {
         if (ViewModel.CanStartNewScan)
         {
-            App.Current.MainWindow?.ShowScanPage();
+            if (App.Current.MainWindow is MainWindow window)
+            {
+                await window.RequestNewScanAsync();
+            }
         }
     }
 

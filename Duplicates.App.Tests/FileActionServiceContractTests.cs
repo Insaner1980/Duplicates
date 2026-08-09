@@ -751,6 +751,39 @@ public sealed class FileActionServiceContractTests
         Assert.Equal([destination], Directory.GetFiles(fixture.RootPath));
     }
 
+    [Fact]
+    public async Task ExportAsync_PickerAuthorizedDestinationReplacesReservedFileAtomically()
+    {
+        using var fixture = new TemporaryDirectory();
+        string destination = fixture.WriteFile("picked-results.json", []);
+        var service = new ResultExportService();
+        var snapshot = new ResultExportSnapshot(
+            ToolKind.EmptyFiles,
+            new DateTimeOffset(2026, 8, 9, 1, 0, 0, TimeSpan.Zero),
+            "Picked scope",
+            [NewExportItem(@"C:\scan\empty.txt", "picked")],
+            []);
+        MethodInfo? pickerExport = typeof(ResultExportService).GetMethod(
+            nameof(ResultExportService.ExportAsync),
+            [
+                typeof(ResultExportSnapshot),
+                typeof(ResultExportFormat),
+                typeof(string),
+                typeof(CancellationToken),
+                typeof(bool),
+            ]);
+
+        Assert.NotNull(pickerExport);
+        await Assert.IsAssignableFrom<Task>(pickerExport.Invoke(
+            service,
+            [snapshot, ResultExportFormat.Json, destination, CancellationToken.None, true]));
+
+        Assert.NotEmpty(await File.ReadAllBytesAsync(destination));
+        using JsonDocument document = JsonDocument.Parse(await File.ReadAllTextAsync(destination));
+        Assert.Equal("EmptyFiles", document.RootElement.GetProperty("metadata").GetProperty("tool").GetString());
+        Assert.Equal([destination], Directory.GetFiles(fixture.RootPath));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

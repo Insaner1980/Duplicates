@@ -128,6 +128,7 @@
                     HorizontalAlignment="Right"
                     VerticalAlignment="Center"
                     AccessKey="O"
+                    AutomationProperties.Name="Optimize videos"
                     Command="{Binding OptimizeVideosCommand}"
                     Style="{StaticResource AccentButtonStyle}">
                     <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpacingSmall}">
@@ -213,6 +214,7 @@
                             ToolTipService.ToolTip="{Binding CurrentPath}" />
                         <Button
                             HorizontalAlignment="Right"
+                            AutomationProperties.Name="Cancel video optimization"
                             Command="{Binding CancelOptimizationCommand}"
                             IsEnabled="{Binding IsOptimizing}">
                             <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpacingSmall}">

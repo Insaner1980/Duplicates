@@ -66,6 +66,47 @@ internal sealed class MainWindowOperationGuard : IDisposable
         }
     }
 
+    public async Task<bool> ConfirmResetAsync(
+        Func<Task<bool>> showConfirmationAsync,
+        Func<bool> tryResetCapturedSession)
+    {
+        ArgumentNullException.ThrowIfNull(showConfirmationAsync);
+        ArgumentNullException.ThrowIfNull(tryResetCapturedSession);
+        long generation;
+        lock (_gate)
+        {
+            if (_coordinator.ActiveOperation is not null || _dialogOpen)
+            {
+                return false;
+            }
+
+            _dialogOpen = true;
+            generation = _operationGeneration;
+        }
+
+        try
+        {
+            if (!await showConfirmationAsync().ConfigureAwait(true))
+            {
+                return false;
+            }
+
+            lock (_gate)
+            {
+                return _coordinator.ActiveOperation is null &&
+                    generation == _operationGeneration &&
+                    tryResetCapturedSession();
+            }
+        }
+        finally
+        {
+            lock (_gate)
+            {
+                _dialogOpen = false;
+            }
+        }
+    }
+
     public async Task<bool> ConfirmCloseAsync(Func<Task<bool>> showConfirmationAsync)
     {
         ArgumentNullException.ThrowIfNull(showConfirmationAsync);

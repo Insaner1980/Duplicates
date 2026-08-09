@@ -34,5 +34,6 @@ public interface IResultExportService
         ResultExportSnapshot snapshot,
         ResultExportFormat format,
         string destinationPath,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken,
+        bool overwriteExisting = false);
 }

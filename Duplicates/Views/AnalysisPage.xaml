@@ -58,6 +58,7 @@
                     HorizontalAlignment="Right"
                     VerticalAlignment="Center"
                     AccessKey="S"
+                    AutomationProperties.Name="Start analysis"
                     Command="{Binding StartAnalysisCommand}"
                     Style="{StaticResource AccentButtonStyle}"
                     Visibility="{Binding SetupVisibility}">
@@ -167,7 +168,7 @@
                             Maximum="100"
                             IsIndeterminate="{Binding IsProgressIndeterminate}"
                             Value="{Binding ProgressValue}" />
-                        <WrapGrid Orientation="Horizontal">
+                        <VariableSizedWrapGrid Orientation="Horizontal">
                             <StackPanel Margin="0,0,24,12">
                                 <TextBlock Style="{ThemeResource CaptionTextBlockStyle}" Text="Discovered" />
                                 <TextBlock Text="{Binding ItemsDiscoveredText}" />
@@ -180,9 +181,12 @@
                                 <TextBlock Style="{ThemeResource CaptionTextBlockStyle}" Text="Data" />
                                 <TextBlock Text="{Binding BytesProcessedText}" />
                             </StackPanel>
-                        </WrapGrid>
+                        </VariableSizedWrapGrid>
                         <TextBlock Style="{StaticResource PathTextBlockStyle}" Text="{Binding CurrentPath}" />
-                        <Button HorizontalAlignment="Right" Command="{Binding CancelAnalysisCommand}">
+                        <Button
+                            HorizontalAlignment="Right"
+                            AutomationProperties.Name="Cancel analysis"
+                            Command="{Binding CancelAnalysisCommand}">
                             <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpacingSmall}">
                                 <SymbolIcon Symbol="Cancel" />
                                 <TextBlock Text="Cancel" />
