@@ -269,7 +269,7 @@ public sealed class DuplicateScannerTests : IDisposable
 
         var reports = new List<ScanProgress>();
         var scanner = new DuplicateScanner();
-        var progress = new Progress<ScanProgress>(report => reports.Add(report));
+        var progress = new InlineProgress<ScanProgress>(report => reports.Add(report));
 
         await scanner.ScanAsync(NewOptions(), progress, CancellationToken.None);
 
@@ -283,6 +283,11 @@ public sealed class DuplicateScannerTests : IDisposable
         {
             Folders = [_root],
         };
+    }
+
+    private sealed class InlineProgress<T>(Action<T> handler) : IProgress<T>
+    {
+        public void Report(T value) => handler(value);
     }
 
     private string WriteFile(string relativePath, string contents)

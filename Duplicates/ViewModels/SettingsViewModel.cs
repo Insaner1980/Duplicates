@@ -166,6 +166,6 @@ public sealed partial class SettingsViewModel : ObservableObject
     private static string BuildAboutText()
     {
         string version = typeof(SettingsViewModel).Assembly.GetName().Version?.ToString() ?? "unknown";
-        return $"Duplicates {version} by Finnvek - .NET 10 - Windows App SDK 1.8";
+        return $"Duplicates {version} by Finnvek - .NET 10 - Windows App SDK 2.3";
     }
 }

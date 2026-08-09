@@ -56,4 +56,12 @@ public sealed class SettingsViewModelTests
 
         Assert.Contains(version, viewModel.AboutText);
     }
+
+    [Fact]
+    public void AboutTextIncludesCurrentWindowsAppSdkVersion()
+    {
+        var viewModel = new SettingsViewModel(new FakeSettingsService());
+
+        Assert.Contains("Windows App SDK 2.3", viewModel.AboutText);
+    }
 }

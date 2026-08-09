@@ -15,10 +15,10 @@
 - TFM appille: `net10.0-windows10.0.22621.0`
 - Minimi Windows: `10.0.22000.0`
 - RuntimeIdentifier: `win-x64`
-- Windows App SDK: `Microsoft.WindowsAppSDK` `1.8.260529003`
+- Windows App SDK: `Microsoft.WindowsAppSDK` `2.3.1`
 - MVVM Toolkit: `CommunityToolkit.Mvvm` `8.4.2`
 - Settings controls: `CommunityToolkit.WinUI.Controls.SettingsControls` `8.2.251219`
-- Hashing: `System.IO.Hashing` `10.0.9`
+- Hashing: `System.IO.Hashing` `10.0.10`
 - Pakettiversiot ovat keskitettyna `Directory.Packages.props`-tiedostossa. Ala lisaa versioita suoraan yksittaisiin `.csproj`-tiedostoihin.
 
 ## Arkkitehtuurirajat
@@ -56,4 +56,4 @@
 - Wrapperit delegoivat yhteiseen `C:\Dev\Windows-check`-runkoon ja lukevat projektikohtaiset polut `tools/windows-check.config.psd1`-tiedostosta.
 - Windows-check-runko on vain WinUI/.NET-projekteille; ala kayta Android-checkin Gradle-, ktlint-, detekt-, Compose- tai MobSF-polkuja tassa projektissa.
 - Wrapperiraportit kirjoitetaan `reports/`-kansioon, joka pysyy gitignoressa.
-- Packaged Debug -launch edellyttaa Windows App Runtime 1.8 -paketteja nykyiselle kayttajalle. Asennusapu on `tools\Install-WindowsAppRuntime1.8.ps1`.
+- Packaged Debug -launch edellyttaa Windows App Runtime 2.3 -paketteja nykyiselle kayttajalle. Asennusapu on `tools\Install-WindowsAppRuntime2.3.ps1`.

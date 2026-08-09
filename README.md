@@ -5,7 +5,7 @@ Duplicates is a native Windows 11 WinUI 3 desktop app for finding byte-identical
 ## Stack
 
 - .NET SDK 10.0.301
-- Windows App SDK 1.8.260529003
+- Windows App SDK 2.3.1
 - WinUI 3, packaged MSIX by default
 - `Duplicates.Engine` is a UI-free `net10.0` library
 - `Duplicates` is the WinUI app
@@ -40,10 +40,10 @@ Import-Certificate -FilePath .\certs\Duplicates.cer -CertStoreLocation Cert:\Cur
 
 Then build/package from Visual Studio or MSBuild's MSIX targets.
 
-Packaged and framework-dependent debug launches also require Windows App Runtime 1.8 for the current user. Install it from the official 1.8.9 redistributable:
+Packaged and framework-dependent debug launches also require Windows App Runtime 2.3 for the current user. Install it with the official 2.3.1 x64 installer:
 
 ```powershell
-.\tools\Install-WindowsAppRuntime1.8.ps1
+.\tools\Install-WindowsAppRuntime2.3.ps1
 ```
 
 If certificate friction is not worth it for personal use, publish an unpackaged x64 folder. Framework-dependent unpackaged output still needs the Windows App Runtime above:
