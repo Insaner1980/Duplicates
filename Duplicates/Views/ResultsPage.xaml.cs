@@ -1,4 +1,5 @@
 using Duplicates.Models;
+using Duplicates.Services;
 using Duplicates.ViewModels;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -11,6 +12,7 @@ namespace Duplicates.Views;
 public sealed partial class ResultsPage : Page
 {
     private bool _isDeleteDialogOpen;
+    private bool _isLinkDialogOpen;
 
     public ResultsPage()
     {
@@ -23,7 +25,7 @@ public sealed partial class ResultsPage : Page
 
     private async void KeepPreferredFolder_Click(object sender, RoutedEventArgs e)
     {
-        if (App.Current.MainWindow is null)
+        if (App.Current.MainWindow is null || !ViewModel.CanMutateSelection)
         {
             return;
         }
@@ -36,7 +38,7 @@ public sealed partial class ResultsPage : Page
         };
 
         PickFolderResult? result = await picker.PickSingleFolderAsync();
-        if (result is not null)
+        if (result is not null && ViewModel.CanMutateSelection)
         {
             ViewModel.AutoSelectKeepPreferredFolder(result.Path);
         }
@@ -62,7 +64,8 @@ public sealed partial class ResultsPage : Page
 
     private async void DeleteFile_Click(object sender, RoutedEventArgs e)
     {
-        if ((sender as FrameworkElement)?.DataContext is not DuplicateFileViewModel file || ViewModel.IsDeleting)
+        if ((sender as FrameworkElement)?.DataContext is not DuplicateFileViewModel file ||
+            !ViewModel.CanMutateSelection)
         {
             return;
         }
@@ -73,6 +76,202 @@ public sealed partial class ResultsPage : Page
         }
 
         await ViewModel.DeleteFileAsync(file, CancellationToken.None);
+    }
+
+    private async void MoveSelected_Click(object sender, RoutedEventArgs e)
+    {
+        if (App.Current.MainWindow is null || !ViewModel.CanMove)
+        {
+            return;
+        }
+
+        var picker = new FolderPicker(App.Current.MainWindow.AppWindow.Id)
+        {
+            SuggestedStartLocation = PickerLocationId.DocumentsLibrary,
+            CommitButtonText = "Choose destination",
+            ViewMode = PickerViewMode.List,
+        };
+        PickFolderResult? pickedFolder = await picker.PickSingleFolderAsync();
+        if (pickedFolder is null)
+        {
+            return;
+        }
+
+        MoveCollisionBehavior? collisionBehavior = await ConfirmMoveAsync(pickedFolder.Path);
+        if (collisionBehavior is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await ViewModel.MoveSelectedAsync(pickedFolder.Path, collisionBehavior.Value, CancellationToken.None);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or OperationCanceledException)
+        {
+            ViewModel.DeleteStatusMessage = ex.Message;
+        }
+    }
+
+    private async void Export_Click(object sender, RoutedEventArgs e)
+    {
+        if (App.Current.MainWindow is null || !ViewModel.CanExport)
+        {
+            return;
+        }
+
+        var picker = new FileSavePicker(App.Current.MainWindow.AppWindow.Id)
+        {
+            SuggestedStartLocation = PickerLocationId.DocumentsLibrary,
+            SuggestedFileName = "duplicate-results",
+            CommitButtonText = "Export",
+        };
+        picker.FileTypeChoices.Add("CSV file", [".csv"]);
+        picker.FileTypeChoices.Add("JSON file", [".json"]);
+        PickFileResult? result = await picker.PickSaveFileAsync();
+        if (result is null)
+        {
+            return;
+        }
+
+        ResultExportFormat format = string.Equals(Path.GetExtension(result.Path), ".json", StringComparison.OrdinalIgnoreCase)
+            ? ResultExportFormat.Json
+            : ResultExportFormat.Csv;
+        try
+        {
+            await ViewModel.ExportAsync(
+                format,
+                result.Path,
+                CancellationToken.None,
+                overwriteExisting: true);
+            ViewModel.DeleteStatusMessage = "Results exported.";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException)
+        {
+            ViewModel.DeleteStatusMessage = ex.Message;
+        }
+    }
+
+    private void ReplaceWithHardLinks_Click(object sender, RoutedEventArgs e)
+    {
+        _ = ConfirmAndReplaceWithLinksAsync(LinkReplacementMode.HardLink);
+    }
+
+    private void ReplaceWithSymbolicLinks_Click(object sender, RoutedEventArgs e)
+    {
+        _ = ConfirmAndReplaceWithLinksAsync(LinkReplacementMode.SymbolicLink);
+    }
+
+    private async Task ConfirmAndReplaceWithLinksAsync(LinkReplacementMode mode)
+    {
+        if (App.Current.MainWindow is null || !ViewModel.CanReplaceWithLinks || _isLinkDialogOpen)
+        {
+            return;
+        }
+
+        ExactLinkReplacementSnapshot snapshot;
+        try
+        {
+            snapshot = ViewModel.CreateLinkReplacementSnapshot(mode);
+        }
+        catch (InvalidOperationException ex)
+        {
+            ViewModel.DeleteStatusMessage = ex.Message;
+            return;
+        }
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = mode == LinkReplacementMode.HardLink
+                ? "Replace duplicates with hard links?"
+                : "Replace duplicates with symbolic links?",
+            Content = new TextBlock
+            {
+                Text = snapshot.ConfirmationText,
+                TextWrapping = TextWrapping.Wrap,
+                IsTextSelectionEnabled = true,
+            },
+            PrimaryButtonText = "Replace",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+        };
+
+        _isLinkDialogOpen = true;
+        try
+        {
+            if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+            {
+                return;
+            }
+
+            if (!ViewModel.IsLinkReplacementSnapshotCurrent(snapshot))
+            {
+                ViewModel.DeleteStatusMessage = "The duplicate selection changed after confirmation.";
+                return;
+            }
+
+            await ViewModel.ReplaceWithLinksAsync(snapshot, CancellationToken.None);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or
+            ArgumentException or InvalidOperationException or OperationCanceledException)
+        {
+            ViewModel.DeleteStatusMessage = ex.Message;
+        }
+        finally
+        {
+            _isLinkDialogOpen = false;
+        }
+    }
+
+    private async Task<MoveCollisionBehavior?> ConfirmMoveAsync(string destinationPath)
+    {
+        var collisionBehavior = new ComboBox
+        {
+            Header = "If a name already exists",
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            SelectedIndex = 0,
+            Items =
+            {
+                new ComboBoxItem { Content = "Skip existing items" },
+                new ComboBoxItem { Content = "Keep both" },
+                new ComboBoxItem { Content = "Cancel the move" },
+            },
+        };
+        var content = new StackPanel
+        {
+            Spacing = 12,
+            Children =
+            {
+                new TextBlock
+                {
+                    Text = $"Move {ViewModel.SelectedFileCount:N0} selected files to {destinationPath}?",
+                    TextWrapping = TextWrapping.Wrap,
+                },
+                collisionBehavior,
+            },
+        };
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = "Move selected files?",
+            Content = content,
+            PrimaryButtonText = "Move",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+        };
+
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+        {
+            return null;
+        }
+
+        return collisionBehavior.SelectedIndex switch
+        {
+            1 => MoveCollisionBehavior.KeepBoth,
+            2 => MoveCollisionBehavior.Cancel,
+            _ => MoveCollisionBehavior.Skip,
+        };
     }
 
     private async Task<bool> ConfirmDeleteAsync(
@@ -129,9 +328,15 @@ public sealed partial class ResultsPage : Page
         }
     }
 
-    private void NewScan_Click(object sender, RoutedEventArgs e)
+    private async void NewScan_Click(object sender, RoutedEventArgs e)
     {
-        App.Current.MainWindow?.ShowScanPage();
+        if (ViewModel.CanStartNewScan)
+        {
+            if (App.Current.MainWindow is MainWindow window)
+            {
+                await window.RequestNewScanAsync();
+            }
+        }
     }
 
     private void OpenFile_Click(object sender, RoutedEventArgs e)

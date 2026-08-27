@@ -3,7 +3,8 @@
     x:Class="Duplicates.Views.ScanPage"
     x:Name="PageRoot"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:Duplicates.Views.Controls">
     <Grid Background="{ThemeResource BgBaseBrush}">
         <VisualStateManager.VisualStateGroups>
             <VisualStateGroup x:Name="WindowWidthStates">
@@ -13,7 +14,6 @@
                     </VisualState.StateTriggers>
                     <VisualState.Setters>
                         <Setter Target="HeaderActionRail.(Grid.Row)" Value="1" />
-                        <Setter Target="FoldersActionRail.(Grid.Row)" Value="1" />
                     </VisualState.Setters>
                 </VisualState>
                 <VisualState x:Name="Medium">
@@ -72,6 +72,7 @@
                     HorizontalAlignment="Right"
                     VerticalAlignment="Center"
                     AccessKey="S"
+                    AutomationProperties.Name="Start scan"
                     Command="{Binding StartScanCommand}"
                     Style="{StaticResource AccentButtonStyle}"
                     Visibility="{Binding SetupVisibility}">
@@ -102,127 +103,11 @@
                     <StackPanel
                         Visibility="{Binding SetupVisibility}"
                         Spacing="{StaticResource SpacingExtraLarge}">
-                        <Grid
-                            x:Name="FoldersRegion"
-                            AllowDrop="True"
-                            DragOver="FoldersRegion_DragOver"
-                            Drop="FoldersRegion_Drop">
-                            <StackPanel Spacing="{StaticResource SpacingLarge}">
-                                <Grid ColumnSpacing="{StaticResource SpacingMedium}">
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                    </Grid.RowDefinitions>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="Auto" />
-                                    </Grid.ColumnDefinitions>
-                                    <StackPanel Spacing="4">
-                                        <TextBlock
-                                            AutomationProperties.HeadingLevel="Level2"
-                                            Style="{StaticResource SectionHeaderTextBlockStyle}"
-                                            Text="Folders" />
-                                        <TextBlock
-                                            Style="{StaticResource MutedTextBlockStyle}"
-                                            Text="Drop folders here or choose one or more locations to scan." />
-                                    </StackPanel>
-                                    <Grid
-                                        x:Name="FoldersActionRail"
-                                        Grid.ColumnSpan="2"
-                                        MaxWidth="{StaticResource ScanWorkAreaMaxWidth}"
-                                        HorizontalAlignment="Stretch">
-                                        <Button
-                                            HorizontalAlignment="Right"
-                                            VerticalAlignment="Center"
-                                            AccessKey="A"
-                                            Style="{StaticResource AccentButtonStyle}"
-                                            Click="AddFolder_Click">
-                                            <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpacingSmall}">
-                                                <SymbolIcon Symbol="Add" />
-                                                <TextBlock Text="Add folder" />
-                                            </StackPanel>
-                                        </Button>
-                                    </Grid>
-                                </Grid>
-
-                                <ListView
-                                    x:Name="FoldersList"
-                                    MaxHeight="{StaticResource FolderListMaxHeight}"
-                                    MaxWidth="{StaticResource ScanWorkAreaMaxWidth}"
-                                    HorizontalAlignment="Stretch"
-                                    AutomationProperties.Name="Folders to scan"
-                                    ItemsSource="{Binding Folders}"
-                                    SelectionMode="None">
-                                    <ListView.ItemContainerStyle>
-                                        <Style TargetType="ListViewItem">
-                                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-                                        </Style>
-                                    </ListView.ItemContainerStyle>
-                                    <ListView.ItemTemplate>
-                                        <DataTemplate>
-                                            <Grid
-                                                Padding="8,6"
-                                                ColumnSpacing="{StaticResource SpacingMedium}"
-                                                ToolTipService.ToolTip="{Binding FullPath}">
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="Auto" />
-                                                    <ColumnDefinition Width="*" />
-                                                    <ColumnDefinition Width="Auto" />
-                                                </Grid.ColumnDefinitions>
-                                                <FontIcon
-                                                    VerticalAlignment="Center"
-                                                    FontSize="20"
-                                                    Foreground="{ThemeResource TextPrimaryBrush}"
-                                                    Glyph="&#xE8B7;" />
-                                                <StackPanel
-                                                    Grid.Column="1"
-                                                    VerticalAlignment="Center"
-                                                    Spacing="2">
-                                                    <TextBlock
-                                                        Style="{ThemeResource BodyStrongTextBlockStyle}"
-                                                        Foreground="{ThemeResource TextPrimaryBrush}"
-                                                        Text="{Binding DisplayName}" />
-                                                    <TextBlock
-                                                        Style="{StaticResource PathTextBlockStyle}"
-                                                        Text="{Binding ParentPath}" />
-                                                </StackPanel>
-                                                <Button
-                                                    Grid.Column="2"
-                                                    VerticalAlignment="Center"
-                                                    AutomationProperties.Name="Remove folder"
-                                                    Command="{Binding ViewModel.RemoveFolderCommand, ElementName=PageRoot}"
-                                                    CommandParameter="{Binding}"
-                                                    ToolTipService.ToolTip="Remove folder">
-                                                    <SymbolIcon Symbol="Cancel" />
-                                                </Button>
-                                            </Grid>
-                                        </DataTemplate>
-                                    </ListView.ItemTemplate>
-                                </ListView>
-
-                                <StackPanel
-                                    x:Name="EmptyFoldersState"
-                                    MaxWidth="{StaticResource ScanWorkAreaMaxWidth}"
-                                    HorizontalAlignment="Stretch"
-                                    Spacing="{StaticResource SpacingSmall}"
-                                    Visibility="{Binding EmptyFoldersVisibility}">
-                                    <FontIcon
-                                        HorizontalAlignment="Center"
-                                        FontSize="28"
-                                        Foreground="{ThemeResource TextPrimaryBrush}"
-                                        Glyph="&#xE8B7;" />
-                                    <TextBlock
-                                        HorizontalAlignment="Center"
-                                        Style="{ThemeResource BodyStrongTextBlockStyle}"
-                                        Foreground="{ThemeResource TextPrimaryBrush}"
-                                        Text="No folders added" />
-                                    <TextBlock
-                                        HorizontalAlignment="Center"
-                                        Style="{StaticResource MutedTextBlockStyle}"
-                                        Text="Drop a folder anywhere in this section to begin." />
-                                </StackPanel>
-                            </StackPanel>
-                        </Grid>
+                        <controls:PathScopeEditor
+                            x:Name="PathScopeEditor"
+                            MaxWidth="{StaticResource ScanWorkAreaMaxWidth}"
+                            HorizontalAlignment="Stretch"
+                            DataContext="{Binding PathScope}" />
 
                         <Expander
                             x:Name="ScanOptions"
@@ -247,7 +132,7 @@
                                     <StackPanel Spacing="{StaticResource SpacingMedium}">
                                         <CheckBox
                                             Content="Include subfolders"
-                                            IsChecked="{Binding IncludeSubfolders, Mode=TwoWay}" />
+                                            IsChecked="{Binding PathScope.IncludeSubfolders, Mode=TwoWay}" />
                                         <ComboBox
                                             Header="File types"
                                             HorizontalAlignment="Stretch"
@@ -256,7 +141,7 @@
                                             <ComboBoxItem Content="Categories" />
                                             <ComboBoxItem Content="Custom extensions" />
                                         </ComboBox>
-                                        <WrapGrid
+                                        <VariableSizedWrapGrid
                                             Orientation="Horizontal"
                                             MaximumRowsOrColumns="3"
                                             Visibility="{Binding CategoryFiltersVisibility}">
@@ -266,7 +151,7 @@
                                             <CheckBox Content="Documents" IsChecked="{Binding DocumentsSelected, Mode=TwoWay}" />
                                             <CheckBox Content="Archives" IsChecked="{Binding ArchivesSelected, Mode=TwoWay}" />
                                             <CheckBox Content="Code" IsChecked="{Binding CodeSelected, Mode=TwoWay}" />
-                                        </WrapGrid>
+                                        </VariableSizedWrapGrid>
                                         <TextBox
                                             Header="Custom extensions"
                                             PlaceholderText="psd, ai, sketch"
@@ -310,10 +195,10 @@
                                     <StackPanel Padding="0,8,0,0" Spacing="{StaticResource SpacingSmall}">
                                         <CheckBox
                                             Content="Ignore hidden files"
-                                            IsChecked="{Binding IgnoreHiddenFiles, Mode=TwoWay}" />
+                                            IsChecked="{Binding PathScope.IgnoreHiddenFiles, Mode=TwoWay}" />
                                         <CheckBox
                                             Content="Ignore system files"
-                                            IsChecked="{Binding IgnoreSystemFiles, Mode=TwoWay}" />
+                                            IsChecked="{Binding PathScope.IgnoreSystemFiles, Mode=TwoWay}" />
                                         <CheckBox
                                             Content="Verify byte-by-byte before reporting duplicates"
                                             IsChecked="{Binding VerifyByteByByte, Mode=TwoWay}" />
@@ -335,7 +220,7 @@
                             Maximum="100"
                             IsIndeterminate="{Binding IsProgressIndeterminate}"
                             Value="{Binding ProgressValue}" />
-                        <WrapGrid Orientation="Horizontal">
+                        <VariableSizedWrapGrid Orientation="Horizontal">
                             <StackPanel Margin="0,0,24,12">
                                 <TextBlock Style="{ThemeResource CaptionTextBlockStyle}" Text="Discovered" />
                                 <TextBlock Text="{Binding FilesDiscoveredText}" />
@@ -356,10 +241,11 @@
                                 <TextBlock Style="{ThemeResource CaptionTextBlockStyle}" Text="ETA" />
                                 <TextBlock Text="{Binding EtaText}" />
                             </StackPanel>
-                        </WrapGrid>
+                        </VariableSizedWrapGrid>
                         <TextBlock Style="{StaticResource PathTextBlockStyle}" Text="{Binding CurrentFilePath}" />
                         <Button
                             HorizontalAlignment="Right"
+                            AutomationProperties.Name="Cancel scan"
                             Command="{Binding CancelScanCommand}">
                             <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpacingSmall}">
                                 <SymbolIcon Symbol="Cancel" />

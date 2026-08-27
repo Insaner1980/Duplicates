@@ -6,6 +6,9 @@ namespace Duplicates.ViewModels;
 
 public sealed class DuplicateGroupViewModel : ObservableObject
 {
+    private DuplicateFileViewModel? _linkSurvivor;
+    private bool _canMutateSelection = true;
+
     public DuplicateGroupViewModel(DuplicateGroup group)
     {
         Source = group;
@@ -19,7 +22,9 @@ public sealed class DuplicateGroupViewModel : ObservableObject
 
     public string DisplayName => Files.FirstOrDefault()?.FileName ?? "Duplicate group";
 
-    public string WastedText => ByteFormatter.Format(Source.WastedBytes);
+    public long WastedBytes => Files.FirstOrDefault()?.SizeBytes * Math.Max(0, Files.Count - 1) ?? 0;
+
+    public string WastedText => ByteFormatter.Format(WastedBytes);
 
     public string FilesSummaryText => $"{Files.Count:N0} identical files, {WastedText} reclaimable";
 
@@ -29,9 +34,46 @@ public sealed class DuplicateGroupViewModel : ObservableObject
 
     public long SelectedBytes => Files.Where(static file => file.IsSelected).Sum(static file => file.SizeBytes);
 
+    public DuplicateFileViewModel? LinkSurvivor => _linkSurvivor;
+
+    public bool HasLinkSurvivor => LinkSurvivor is not null;
+
+    internal bool CanMutateSelection => _canMutateSelection;
+
     public bool CanSelectForDeletion(DuplicateFileViewModel candidate)
     {
         return Files.Count(file => !file.IsSelected && file != candidate) >= 1;
+    }
+
+    public bool CanSetLinkSurvivor(DuplicateFileViewModel candidate) =>
+        CanMutateSelection && Files.Contains(candidate) && !candidate.IsSelected;
+
+    public void SetLinkSurvivor(DuplicateFileViewModel survivor)
+    {
+        if (!CanSetLinkSurvivor(survivor) || ReferenceEquals(_linkSurvivor, survivor))
+        {
+            return;
+        }
+
+        _linkSurvivor?.SetLinkSurvivorCore(false);
+        _linkSurvivor = survivor;
+        survivor.SetLinkSurvivorCore(true);
+        OnPropertyChanged(nameof(LinkSurvivor));
+        OnPropertyChanged(nameof(HasLinkSurvivor));
+    }
+
+    public void ClearLinkSurvivor(DuplicateFileViewModel? survivor = null)
+    {
+        if (_linkSurvivor is null || (survivor is not null && !ReferenceEquals(_linkSurvivor, survivor)))
+        {
+            return;
+        }
+
+        DuplicateFileViewModel previous = _linkSurvivor;
+        _linkSurvivor = null;
+        previous.SetLinkSurvivorCore(false);
+        OnPropertyChanged(nameof(LinkSurvivor));
+        OnPropertyChanged(nameof(HasLinkSurvivor));
     }
 
     public void ApplyKeepNewest()
@@ -75,12 +117,17 @@ public sealed class DuplicateGroupViewModel : ObservableObject
         {
             if (deletedPaths.Contains(Files[index].FullPath))
             {
+                if (ReferenceEquals(_linkSurvivor, Files[index]))
+                {
+                    ClearLinkSurvivor(Files[index]);
+                }
+
                 Files.RemoveAt(index);
             }
         }
 
         NotifySelectionChanged();
-        OnPropertyChanged(nameof(FilesSummaryText));
+        NotifyCurrentSummaryChanged();
     }
 
     public bool RemoveFile(DuplicateFileViewModel file)
@@ -88,8 +135,13 @@ public sealed class DuplicateGroupViewModel : ObservableObject
         bool removed = Files.Remove(file);
         if (removed)
         {
+            if (ReferenceEquals(_linkSurvivor, file))
+            {
+                ClearLinkSurvivor(file);
+            }
+
             NotifySelectionChanged();
-            OnPropertyChanged(nameof(FilesSummaryText));
+            NotifyCurrentSummaryChanged();
         }
 
         return removed;
@@ -97,12 +149,39 @@ public sealed class DuplicateGroupViewModel : ObservableObject
 
     internal void NotifySelectionChanged()
     {
+        if (_linkSurvivor?.IsSelected == true)
+        {
+            ClearLinkSurvivor(_linkSurvivor);
+        }
+
         OnPropertyChanged(nameof(SelectedCount));
         OnPropertyChanged(nameof(SelectedBytes));
         OnPropertyChanged(nameof(SelectedSummaryText));
         foreach (DuplicateFileViewModel file in Files)
         {
             file.NotifyKeptChanged();
+        }
+    }
+
+    internal void NotifyCurrentSummaryChanged()
+    {
+        OnPropertyChanged(nameof(DisplayName));
+        OnPropertyChanged(nameof(WastedBytes));
+        OnPropertyChanged(nameof(WastedText));
+        OnPropertyChanged(nameof(FilesSummaryText));
+    }
+
+    internal void SetCanMutateSelection(bool value)
+    {
+        if (_canMutateSelection == value)
+        {
+            return;
+        }
+
+        _canMutateSelection = value;
+        foreach (DuplicateFileViewModel file in Files)
+        {
+            file.NotifyMutationAvailabilityChanged();
         }
     }
 

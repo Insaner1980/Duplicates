@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using Duplicates.Engine.FileEnumeration;
@@ -8,8 +9,10 @@ namespace Duplicates.Engine;
 
 public sealed class DuplicateScanner
 {
+    private const int VerificationBufferSize = 1024 * 1024;
     private readonly FileWalker _fileWalker;
     private readonly IFileHasher _fileHasher;
+    private readonly ArrayPool<byte> _verificationPool;
 
     public DuplicateScanner()
         : this(new FileWalker(), new FileHasher())
@@ -17,9 +20,18 @@ public sealed class DuplicateScanner
     }
 
     internal DuplicateScanner(FileWalker fileWalker, IFileHasher fileHasher)
+        : this(fileWalker, fileHasher, ArrayPool<byte>.Shared)
+    {
+    }
+
+    internal DuplicateScanner(
+        FileWalker fileWalker,
+        IFileHasher fileHasher,
+        ArrayPool<byte> verificationPool)
     {
         _fileWalker = fileWalker;
         _fileHasher = fileHasher;
+        _verificationPool = verificationPool;
     }
 
     public async Task<ScanResult> ScanAsync(
@@ -239,67 +251,83 @@ public sealed class DuplicateScanner
             .ToList();
     }
 
-    private static async Task<IReadOnlyList<IReadOnlyList<FileEntry>>> VerifyGroupsAsync(
+    private async Task<IReadOnlyList<IReadOnlyList<FileEntry>>> VerifyGroupsAsync(
         IReadOnlyList<FileEntry> files,
         ConcurrentBag<SkippedPath> skippedPaths,
         CancellationToken cancellationToken)
     {
-        var remaining = new List<FileEntry>(files);
-        var verifiedGroups = new List<IReadOnlyList<FileEntry>>();
-
-        while (remaining.Count > 0)
+        byte[] leftBuffer = _verificationPool.Rent(VerificationBufferSize);
+        byte[] rightBuffer = _verificationPool.Rent(VerificationBufferSize);
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            FileEntry reference = remaining[0];
-            remaining.RemoveAt(0);
+            var remaining = new List<FileEntry>(files);
+            var verifiedGroups = new List<IReadOnlyList<FileEntry>>();
 
-            var group = new List<FileEntry> { reference };
-            for (int index = remaining.Count - 1; index >= 0; index--)
+            while (remaining.Count > 0)
             {
-                FileEntry candidate = remaining[index];
-                try
+                cancellationToken.ThrowIfCancellationRequested();
+                FileEntry reference = remaining[0];
+                remaining.RemoveAt(0);
+
+                var group = new List<FileEntry> { reference };
+                for (int index = remaining.Count - 1; index >= 0; index--)
                 {
-                    if (await FilesAreEqualAsync(reference, candidate, cancellationToken).ConfigureAwait(false))
+                    FileEntry candidate = remaining[index];
+                    try
                     {
-                        group.Add(candidate);
+                        if (await FilesAreEqualAsync(
+                            reference,
+                            candidate,
+                            leftBuffer,
+                            rightBuffer,
+                            cancellationToken).ConfigureAwait(false))
+                        {
+                            group.Add(candidate);
+                            remaining.RemoveAt(index);
+                        }
+                    }
+                    catch (Exception ex) when (IsSkippable(ex))
+                    {
+                        skippedPaths.Add(new SkippedPath { Path = candidate.FullPath, Reason = ex.Message });
                         remaining.RemoveAt(index);
                     }
                 }
-                catch (Exception ex) when (IsSkippable(ex))
+
+                if (group.Count > 1)
                 {
-                    skippedPaths.Add(new SkippedPath { Path = candidate.FullPath, Reason = ex.Message });
-                    remaining.RemoveAt(index);
+                    verifiedGroups.Add(group);
                 }
             }
 
-            if (group.Count > 1)
-            {
-                verifiedGroups.Add(group);
-            }
+            return verifiedGroups;
         }
-
-        return verifiedGroups;
+        finally
+        {
+            _verificationPool.Return(leftBuffer);
+            _verificationPool.Return(rightBuffer);
+        }
     }
 
-    private static async Task<bool> FilesAreEqualAsync(FileEntry left, FileEntry right, CancellationToken cancellationToken)
+    private static async Task<bool> FilesAreEqualAsync(
+        FileEntry left,
+        FileEntry right,
+        byte[] leftBuffer,
+        byte[] rightBuffer,
+        CancellationToken cancellationToken)
     {
-        const int bufferSize = 1024 * 1024;
-        byte[] leftBuffer = new byte[bufferSize];
-        byte[] rightBuffer = new byte[bufferSize];
-
         using var leftStream = new FileStream(
             left.FullPath,
             FileMode.Open,
             FileAccess.Read,
             FileShare.ReadWrite | FileShare.Delete,
-            bufferSize,
+            VerificationBufferSize,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
         using var rightStream = new FileStream(
             right.FullPath,
             FileMode.Open,
             FileAccess.Read,
             FileShare.ReadWrite | FileShare.Delete,
-            bufferSize,
+            VerificationBufferSize,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
 
         if (leftStream.Length != left.SizeBytes || rightStream.Length != right.SizeBytes || leftStream.Length != rightStream.Length)
@@ -310,8 +338,12 @@ public sealed class DuplicateScanner
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            int leftRead = await leftStream.ReadAsync(leftBuffer, cancellationToken).ConfigureAwait(false);
-            int rightRead = await rightStream.ReadAsync(rightBuffer, cancellationToken).ConfigureAwait(false);
+            int leftRead = await leftStream.ReadAsync(
+                leftBuffer.AsMemory(0, VerificationBufferSize),
+                cancellationToken).ConfigureAwait(false);
+            int rightRead = await rightStream.ReadAsync(
+                rightBuffer.AsMemory(0, VerificationBufferSize),
+                cancellationToken).ConfigureAwait(false);
 
             if (leftRead != rightRead)
             {

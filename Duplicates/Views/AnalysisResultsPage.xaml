@@ -1,0 +1,339 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="Duplicates.Views.AnalysisResultsPage"
+    x:Name="PageRoot"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:Duplicates.Views"
+    xmlns:viewModels="using:Duplicates.ViewModels">
+    <Page.Resources>
+        <DataTemplate x:Key="PathFindingTemplate" x:DataType="viewModels:PathFindingViewModel">
+            <Grid
+                Padding="8"
+                ColumnSpacing="12"
+                ToolTipService.ToolTip="{Binding FullPath}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <CheckBox
+                    VerticalAlignment="Center"
+                    AutomationProperties.Name="Select finding for action"
+                    IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                    IsEnabled="{Binding DataContext.CanMutateSelection, ElementName=PageRoot}" />
+                <StackPanel Grid.Column="1" Spacing="4">
+                    <TextBlock FontWeight="SemiBold" Text="{Binding DisplayName}" />
+                    <TextBlock
+                        Style="{StaticResource MutedTextBlockStyle}"
+                        Text="{Binding SummaryText}"
+                        TextWrapping="Wrap" />
+                    <TextBlock
+                        MaxLines="2"
+                        Style="{StaticResource PathTextBlockStyle}"
+                        Text="{Binding FullPath}"
+                        TextWrapping="Wrap" />
+                </StackPanel>
+            </Grid>
+        </DataTemplate>
+
+        <DataTemplate x:Key="SimilarityGroupTemplate" x:DataType="viewModels:SimilarityGroupViewModel">
+            <StackPanel
+                Padding="8"
+                ToolTipService.ToolTip="{Binding FullPath}"
+                Spacing="8">
+                <TextBlock FontWeight="SemiBold" Text="{Binding DisplayName}" />
+                <TextBlock
+                    Style="{StaticResource MutedTextBlockStyle}"
+                    Text="{Binding SummaryText}"
+                    TextWrapping="Wrap" />
+                <TextBlock
+                    MaxLines="2"
+                    Style="{StaticResource PathTextBlockStyle}"
+                    Text="{Binding FullPath}"
+                    TextWrapping="Wrap" />
+                <ItemsControl ItemsSource="{Binding Items}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="viewModels:SimilarityItemViewModel">
+                            <Grid Padding="0,4" ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <CheckBox
+                                    VerticalAlignment="Center"
+                                    AutomationProperties.Name="Select similar item for action"
+                                    IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                    IsEnabled="{Binding DataContext.CanMutateSelection, ElementName=PageRoot}" />
+                                <StackPanel Grid.Column="1" Spacing="2">
+                                    <HyperlinkButton
+                                        Padding="0"
+                                        HorizontalAlignment="Left"
+                                        Command="{Binding DataContext.SelectSimilarityPreviewItemCommand, ElementName=PageRoot}"
+                                        CommandParameter="{Binding}"
+                                        Content="{Binding DisplayName}" />
+                                    <TextBlock
+                                        MaxLines="2"
+                                        Style="{StaticResource PathTextBlockStyle}"
+                                        Text="{Binding FullPath}"
+                                        ToolTipService.ToolTip="{Binding FullPath}"
+                                        TextWrapping="Wrap" />
+                                    <TextBlock
+                                        Style="{StaticResource MutedTextBlockStyle}"
+                                        Text="{Binding MediaDetailsText}" />
+                                    <TextBlock
+                                        Style="{StaticResource MutedTextBlockStyle}"
+                                        Text="{Binding SummaryText}" />
+                                </StackPanel>
+                            </Grid>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </StackPanel>
+        </DataTemplate>
+
+        <local:AnalysisResultTemplateSelector
+            x:Key="AnalysisResultTemplateSelector"
+            PathFindingTemplate="{StaticResource PathFindingTemplate}"
+            SimilarityGroupTemplate="{StaticResource SimilarityGroupTemplate}" />
+    </Page.Resources>
+    <Page.KeyboardAccelerators>
+        <KeyboardAccelerator Key="F" Modifiers="Control" Invoked="FocusSearch_Invoked" />
+    </Page.KeyboardAccelerators>
+
+    <Grid Padding="24" Background="{ThemeResource BgBaseBrush}">
+        <VisualStateManager.VisualStateGroups>
+            <VisualStateGroup x:Name="WindowWidthStates">
+                <VisualState x:Name="Small">
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="0" />
+                    </VisualState.StateTriggers>
+                    <VisualState.Setters>
+                        <Setter Target="AnalysisSplitView.DisplayMode" Value="Overlay" />
+                        <Setter Target="AnalysisSplitView.OpenPaneLength" Value="320" />
+                    </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="Large">
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="1008" />
+                    </VisualState.StateTriggers>
+                    <VisualState.Setters>
+                        <Setter Target="AnalysisSplitView.DisplayMode" Value="Inline" />
+                        <Setter Target="AnalysisSplitView.OpenPaneLength" Value="360" />
+                    </VisualState.Setters>
+                </VisualState>
+            </VisualStateGroup>
+        </VisualStateManager.VisualStateGroups>
+
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <StackPanel Spacing="6">
+            <TextBlock
+                AutomationProperties.HeadingLevel="Level1"
+                Foreground="{ThemeResource TextPrimaryBrush}"
+                Style="{ThemeResource TitleTextBlockStyle}"
+                Text="Analysis results" />
+            <TextBlock Style="{StaticResource MutedTextBlockStyle}" Text="{Binding SummaryText}" />
+            <TextBlock
+                AutomationProperties.LiveSetting="Polite"
+                Style="{StaticResource MutedTextBlockStyle}"
+                Text="{Binding ActionStatusMessage}" />
+        </StackPanel>
+
+        <CommandBar Grid.Row="1" DefaultLabelPosition="Right">
+            <AppBarButton
+                AccessKey="N"
+                AutomationProperties.Name="New analysis"
+                Command="{Binding NewAnalysisCommand}"
+                Icon="Refresh"
+                IsEnabled="{Binding CanStartNewAnalysis}"
+                Label="New analysis" />
+            <AppBarButton
+                AccessKey="C"
+                AutomationProperties.Name="Clear action selection"
+                Command="{Binding ClearSelectionCommand}"
+                Icon="ClearSelection"
+                IsEnabled="{Binding CanMutateSelection}"
+                Label="Clear selection" />
+            <AppBarButton
+                AccessKey="P"
+                AutomationProperties.Name="Toggle preview"
+                Command="{Binding TogglePreviewPaneCommand}"
+                Icon="View"
+                Label="Preview" />
+            <AppBarButton
+                AccessKey="R"
+                AutomationProperties.Name="Rename selected analysis result"
+                Icon="Edit"
+                IsEnabled="{Binding CanRenameSelection}"
+                Label="Rename selected"
+                Click="RenameSelected_Click" />
+            <AppBarButton
+                AccessKey="D"
+                AutomationProperties.Name="Delete selected analysis results"
+                Foreground="{ThemeResource DangerBrush}"
+                Icon="Delete"
+                IsEnabled="{Binding CanActOnSelection}"
+                Label="Delete selected"
+                Click="DeleteSelected_Click" />
+            <AppBarButton
+                AccessKey="M"
+                AutomationProperties.Name="Move selected analysis results"
+                Icon="Folder"
+                IsEnabled="{Binding CanActOnSelection}"
+                Label="Move selected"
+                Click="MoveSelected_Click" />
+            <AppBarButton
+                AccessKey="E"
+                AutomationProperties.Name="Export analysis results"
+                Icon="Save"
+                IsEnabled="{Binding CanExport}"
+                Label="Export"
+                Click="Export_Click" />
+            <CommandBar.Content>
+                <Grid ColumnSpacing="12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="240" />
+                        <ColumnDefinition Width="180" />
+                    </Grid.ColumnDefinitions>
+                    <AutoSuggestBox
+                        x:Name="SearchBox"
+                        AutomationProperties.Name="Search analysis results"
+                        PlaceholderText="Search results"
+                        QueryIcon="Find"
+                        Text="{Binding SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                    <ComboBox
+                        Grid.Column="1"
+                        AutomationProperties.Name="Sort analysis results"
+                        SelectedIndex="{Binding SelectedSortIndex, Mode=TwoWay}">
+                        <ComboBoxItem Content="Path" />
+                        <ComboBoxItem Content="Size" />
+                        <ComboBoxItem Content="Modified" />
+                    </ComboBox>
+                </Grid>
+            </CommandBar.Content>
+        </CommandBar>
+
+        <Grid Grid.Row="2">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+            <InfoBar
+                AutomationProperties.LiveSetting="Polite"
+                IsOpen="{Binding HasSkippedPaths}"
+                Message="{Binding SkippedPathsDetailsText}"
+                Severity="Warning"
+                Title="{Binding SkippedPathsSummaryText}" />
+            <StackPanel
+                Grid.Row="1"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                Visibility="{Binding BeforeFirstAnalysisVisibility}"
+                Spacing="8">
+                <SymbolIcon Symbol="Find" />
+                <TextBlock Style="{StaticResource SectionHeaderTextBlockStyle}" Text="Run an analysis to see results" />
+            </StackPanel>
+            <StackPanel
+                Grid.Row="1"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                Visibility="{Binding NoFindingsVisibility}"
+                Spacing="8">
+                <SymbolIcon Symbol="Accept" />
+                <TextBlock Style="{StaticResource SectionHeaderTextBlockStyle}" Text="No findings" />
+                <TextBlock Style="{StaticResource MutedTextBlockStyle}" Text="Nothing in this scope needs attention." />
+            </StackPanel>
+
+            <SplitView
+                x:Name="AnalysisSplitView"
+                Grid.Row="1"
+                DisplayMode="Inline"
+                IsPaneOpen="{Binding IsPreviewPaneOpen, Mode=TwoWay}"
+                OpenPaneLength="360"
+                PanePlacement="Right"
+                Visibility="{Binding ResultsVisibility}">
+                <SplitView.Pane>
+                    <StackPanel Padding="20,0,0,0" Spacing="12">
+                        <Image
+                            x:Name="SimilarityPreviewImage"
+                            MaxWidth="512"
+                            MaxHeight="512"
+                            HorizontalAlignment="Left"
+                            Stretch="Uniform"
+                            Visibility="{Binding SimilarityPreviewVisibility}" />
+                        <TextBlock
+                            AutomationProperties.LiveSetting="Polite"
+                            Style="{StaticResource MutedTextBlockStyle}"
+                            Text="{Binding SimilarityPreviewStatusText}"
+                            Visibility="{Binding SimilarityPreviewStatusVisibility}" />
+                        <TextBlock
+                            AutomationProperties.HeadingLevel="Level2"
+                            Style="{StaticResource SectionHeaderTextBlockStyle}"
+                            Text="{Binding PreviewTitle}" />
+                        <TextBlock
+                            IsTextSelectionEnabled="True"
+                            Text="{Binding PreviewPath}"
+                            TextTrimming="None"
+                            TextWrapping="Wrap" />
+                        <TextBlock Text="{Binding PreviewSummary}" TextWrapping="Wrap" />
+                        <TextBlock
+                            IsTextSelectionEnabled="True"
+                            Style="{StaticResource MutedTextBlockStyle}"
+                            Text="{Binding PreviewMetadata}"
+                            TextWrapping="Wrap" />
+                    </StackPanel>
+                </SplitView.Pane>
+                <ListView
+                    x:Name="AnalysisResultsList"
+                    ItemTemplateSelector="{StaticResource AnalysisResultTemplateSelector}"
+                    ItemsSource="{Binding ResultItems}"
+                    ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                    ScrollViewer.HorizontalScrollMode="Disabled"
+                    SelectedItem="{Binding SelectedResult, Mode=TwoWay}"
+                    SelectionMode="Single" />
+            </SplitView>
+        </Grid>
+
+        <ContentDialog
+            x:Name="RenameDialog"
+            CloseButtonText="Cancel"
+            DefaultButton="Close"
+            IsPrimaryButtonEnabled="False"
+            PrimaryButtonText="Rename"
+            Title="Rename file">
+            <StackPanel Spacing="12">
+                <TextBlock FontWeight="SemiBold" Text="Current file" />
+                <TextBlock
+                    x:Name="RenameCurrentPathTextBlock"
+                    AutomationProperties.Name="Current full path"
+                    IsTextSelectionEnabled="True"
+                    TextWrapping="Wrap" />
+                <TextBlock FontWeight="SemiBold" Text="Reasons" />
+                <TextBlock
+                    x:Name="RenameReasonsTextBlock"
+                    AutomationProperties.Name="Reasons"
+                    TextWrapping="Wrap" />
+                <TextBox
+                    x:Name="RenameNameTextBox"
+                    AutomationProperties.Name="New file name"
+                    Header="New file name"
+                    TextChanged="RenameNameTextBox_TextChanged" />
+                <TextBlock FontWeight="SemiBold" Text="Destination" />
+                <TextBlock
+                    x:Name="RenameDestinationTextBlock"
+                    AutomationProperties.Name="Destination preview"
+                    IsTextSelectionEnabled="True"
+                    TextWrapping="Wrap" />
+                <TextBlock
+                    x:Name="RenameValidationTextBlock"
+                    AutomationProperties.LiveSetting="Polite"
+                    AutomationProperties.Name="Rename validity"
+                    TextWrapping="Wrap" />
+            </StackPanel>
+        </ContentDialog>
+    </Grid>
+</Page>

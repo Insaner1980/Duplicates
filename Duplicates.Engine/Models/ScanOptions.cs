@@ -6,6 +6,10 @@ public sealed record ScanOptions
 
     public IReadOnlyList<string> Folders { get; init; } = [];
 
+    public IReadOnlyList<string> Files { get; init; } = [];
+
+    public IReadOnlyList<string> ExcludedPaths { get; init; } = [];
+
     public bool IncludeSubfolders { get; init; } = true;
 
     public long MinSizeBytes { get; init; } = 1;

@@ -1,0 +1,197 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<UserControl
+    x:Class="Duplicates.Views.Controls.PathScopeEditor"
+    x:Name="Root"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <UserControl.Resources>
+        <DataTemplate x:Key="PathItemTemplate">
+            <Grid
+                Padding="8,6"
+                ColumnSpacing="{StaticResource SpacingMedium}"
+                ToolTipService.ToolTip="{Binding FullPath}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <FontIcon
+                    VerticalAlignment="Center"
+                    FontSize="20"
+                    Foreground="{ThemeResource TextPrimaryBrush}"
+                    Glyph="&#xE8B7;" />
+                <StackPanel Grid.Column="1" Spacing="2">
+                    <TextBlock
+                        Style="{ThemeResource BodyStrongTextBlockStyle}"
+                        Foreground="{ThemeResource TextPrimaryBrush}"
+                        Text="{Binding DisplayName}" />
+                    <TextBlock Style="{StaticResource PathTextBlockStyle}" Text="{Binding ParentPath}" />
+                </StackPanel>
+                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4">
+                    <Button
+                        AutomationProperties.Name="Remove path"
+                        Click="RemoveIncludedPath_Click"
+                        ToolTipService.ToolTip="Remove path">
+                        <SymbolIcon Symbol="Cancel" />
+                    </Button>
+                </StackPanel>
+            </Grid>
+        </DataTemplate>
+
+        <DataTemplate x:Key="ExcludedPathItemTemplate">
+            <Grid
+                Padding="8,6"
+                ColumnSpacing="{StaticResource SpacingMedium}"
+                ToolTipService.ToolTip="{Binding FullPath}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <FontIcon
+                    VerticalAlignment="Center"
+                    FontSize="20"
+                    Foreground="{ThemeResource TextPrimaryBrush}"
+                    Glyph="&#xE711;" />
+                <StackPanel Grid.Column="1" Spacing="2">
+                    <TextBlock
+                        Style="{ThemeResource BodyStrongTextBlockStyle}"
+                        Foreground="{ThemeResource TextPrimaryBrush}"
+                        Text="{Binding DisplayName}" />
+                    <TextBlock Style="{StaticResource PathTextBlockStyle}" Text="{Binding ParentPath}" />
+                </StackPanel>
+                <Button
+                    Grid.Column="2"
+                    VerticalAlignment="Center"
+                    AutomationProperties.Name="Remove exclusion"
+                    Click="RemoveExcludedPath_Click"
+                    ToolTipService.ToolTip="Remove exclusion">
+                    <SymbolIcon Symbol="Cancel" />
+                </Button>
+            </Grid>
+        </DataTemplate>
+    </UserControl.Resources>
+
+    <Grid
+        x:Name="IncludedPathsRegion"
+        AllowDrop="True"
+        Background="Transparent"
+        DragOver="IncludedPathsRegion_DragOver"
+        Drop="IncludedPathsRegion_Drop">
+        <StackPanel Spacing="{StaticResource SpacingLarge}">
+            <Grid ColumnSpacing="{StaticResource SpacingMedium}">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Spacing="4">
+                    <TextBlock
+                        AutomationProperties.HeadingLevel="Level2"
+                        Style="{StaticResource SectionHeaderTextBlockStyle}"
+                        Text="Included paths" />
+                    <TextBlock
+                        Style="{StaticResource MutedTextBlockStyle}"
+                        Text="Drop folders or matching files here, or choose paths to scan." />
+                </StackPanel>
+                <StackPanel
+                    Grid.Column="1"
+                    Orientation="Horizontal"
+                    Spacing="{StaticResource SpacingSmall}">
+                    <Button
+                        AccessKey="F"
+                        AutomationProperties.Name="Add folder"
+                        Click="AddIncludedFolder_Click"
+                        ToolTipService.ToolTip="Add a folder to scan">
+                        <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpacingSmall}">
+                            <SymbolIcon Symbol="Folder" />
+                            <TextBlock Text="Add folder" />
+                        </StackPanel>
+                    </Button>
+                    <Button
+                        AccessKey="I"
+                        AutomationProperties.Name="Add file"
+                        Click="AddIncludedFile_Click"
+                        ToolTipService.ToolTip="Add individual files to scan">
+                        <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpacingSmall}">
+                            <SymbolIcon Symbol="Add" />
+                            <TextBlock Text="Add file" />
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+            </Grid>
+
+            <ListView
+                x:Name="IncludedPathsList"
+                MaxHeight="{StaticResource FolderListMaxHeight}"
+                AutomationProperties.Name="Included paths"
+                ItemTemplate="{StaticResource PathItemTemplate}"
+                ItemsSource="{Binding IncludedPaths}"
+                SelectionMode="None">
+                <ListView.ItemContainerStyle>
+                    <Style TargetType="ListViewItem">
+                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                    </Style>
+                </ListView.ItemContainerStyle>
+            </ListView>
+
+            <StackPanel
+                HorizontalAlignment="Center"
+                Spacing="{StaticResource SpacingSmall}"
+                Visibility="{Binding EmptyIncludedPathsVisibility}">
+                <FontIcon
+                    HorizontalAlignment="Center"
+                    FontSize="28"
+                    Foreground="{ThemeResource TextPrimaryBrush}"
+                    Glyph="&#xE8B7;" />
+                <TextBlock
+                    HorizontalAlignment="Center"
+                    Style="{ThemeResource BodyStrongTextBlockStyle}"
+                    Foreground="{ThemeResource TextPrimaryBrush}"
+                    Text="Add a folder or file to begin" />
+            </StackPanel>
+
+            <Expander Header="Excluded paths" IsExpanded="False">
+                <StackPanel Padding="0,12,0,0" Spacing="{StaticResource SpacingMedium}">
+                    <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpacingSmall}">
+                        <Button
+                            AccessKey="X"
+                            AutomationProperties.Name="Exclude folder"
+                            Click="AddExcludedFolder_Click"
+                            ToolTipService.ToolTip="Exclude a folder and its contents">
+                            <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpacingSmall}">
+                                <SymbolIcon Symbol="Remove" />
+                                <TextBlock Text="Exclude folder" />
+                            </StackPanel>
+                        </Button>
+                        <Button
+                            AccessKey="E"
+                            AutomationProperties.Name="Exclude file"
+                            Click="AddExcludedFile_Click"
+                            ToolTipService.ToolTip="Exclude individual files">
+                            <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpacingSmall}">
+                                <SymbolIcon Symbol="Remove" />
+                                <TextBlock Text="Exclude file" />
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
+                    <ListView
+                        MaxHeight="{StaticResource FolderListMaxHeight}"
+                        AutomationProperties.Name="Excluded paths"
+                        ItemTemplate="{StaticResource ExcludedPathItemTemplate}"
+                        ItemsSource="{Binding ExcludedPaths}"
+                        SelectionMode="None">
+                        <ListView.ItemContainerStyle>
+                            <Style TargetType="ListViewItem">
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                            </Style>
+                        </ListView.ItemContainerStyle>
+                    </ListView>
+                </StackPanel>
+            </Expander>
+        </StackPanel>
+    </Grid>
+</UserControl>

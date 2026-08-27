@@ -2,6 +2,7 @@ using Duplicates.Engine;
 using Duplicates.Engine.FileEnumeration;
 using Duplicates.Engine.Hashing;
 using Duplicates.Engine.Models;
+using System.Buffers;
 using System.Runtime.InteropServices;
 
 namespace Duplicates.Engine.Tests;
@@ -162,6 +163,30 @@ public sealed class DuplicateScannerTests : IDisposable
     }
 
     [Fact]
+    public async Task ScanAsync_ByteVerificationRentsOneBufferPairPerHashGroup()
+    {
+        const int fileCount = 64;
+        for (int index = 0; index < fileCount; index++)
+        {
+            WriteFile($"identical-{index:D2}.bin", "same verifier bytes");
+        }
+
+        var verificationPool = new CountingArrayPool();
+        var scanner = new DuplicateScanner(new FileWalker(), new FileHasher(), verificationPool);
+
+        ScanResult result = await scanner.ScanAsync(
+            NewOptions() with { VerifyByteByByte = true },
+            progress: null,
+            CancellationToken.None);
+
+        DuplicateGroup group = Assert.Single(result.Groups);
+        Assert.Equal(fileCount, group.Files.Count);
+        Assert.Equal(fileCount - 1, result.TotalDuplicateFiles);
+        Assert.Equal(2, verificationPool.RentCount);
+        Assert.Equal(2, verificationPool.ReturnCount);
+    }
+
+    [Fact]
     public async Task ScanAsync_DefaultOptions_ExcludeZeroByteFiles()
     {
         WriteFile("empty-a.txt", []);
@@ -245,6 +270,139 @@ public sealed class DuplicateScannerTests : IDisposable
     }
 
     [Fact]
+    public async Task ScanAsync_ExplicitIncludedFiles_AreCompared()
+    {
+        string first = WriteFile("explicit/first.bin", "same explicit bytes");
+        string second = WriteFile("explicit/second.bin", "same explicit bytes");
+
+        var scanner = new DuplicateScanner();
+        ScanResult result = await scanner.ScanAsync(
+            NewOptions() with { Folders = [], Files = [first, second] },
+            progress: null,
+            CancellationToken.None);
+
+        DuplicateGroup group = Assert.Single(result.Groups);
+        Assert.Equal(2, result.TotalFilesScanned);
+        Assert.Contains(group.Files, file => file.FullPath == first);
+        Assert.Contains(group.Files, file => file.FullPath == second);
+    }
+
+    [Fact]
+    public async Task ScanAsync_ExplicitFileAlreadyReachedByFolder_IsCountedOnce()
+    {
+        string first = WriteFile("folder/first.bin", "same bytes");
+        string second = WriteFile("folder/second.bin", "same bytes");
+
+        var scanner = new DuplicateScanner();
+        ScanResult result = await scanner.ScanAsync(
+            NewOptions() with { Files = [first] },
+            progress: null,
+            CancellationToken.None);
+
+        DuplicateGroup group = Assert.Single(result.Groups);
+        Assert.Equal(2, result.TotalFilesScanned);
+        Assert.Equal(2, group.Files.Count);
+        Assert.Contains(group.Files, file => file.FullPath == first);
+        Assert.Contains(group.Files, file => file.FullPath == second);
+    }
+
+    [Fact]
+    public async Task ScanAsync_MissingExplicitFile_IsIgnoredSafely()
+    {
+        string missing = Path.Combine(_root, "missing.bin");
+        var scanner = new DuplicateScanner();
+
+        ScanResult result = await scanner.ScanAsync(
+            NewOptions() with { Folders = [], Files = [missing] },
+            progress: null,
+            CancellationToken.None);
+
+        Assert.Empty(result.Groups);
+        Assert.Equal(0, result.TotalFilesScanned);
+        Assert.Empty(result.SkippedPaths);
+    }
+
+    [Fact]
+    public async Task ScanAsync_ExplicitFiles_RespectAttributeSizeTypeAndExclusionFilters()
+    {
+        string allowedFirst = WriteFile("allowed/first.txt", "same bytes");
+        string allowedSecond = WriteFile("allowed/second.txt", "same bytes");
+        string tooSmall = WriteFile("filtered/small.txt", "x");
+        string tooLarge = WriteFile("filtered/large.txt", new string('L', 11));
+        string wrongType = WriteFile("filtered/type.bin", new string('B', 10));
+        string hidden = WriteFile("filtered/hidden.txt", new string('H', 10));
+        string system = WriteFile("filtered/system.txt", new string('S', 10));
+        string excluded = WriteFile("filtered/excluded.txt", new string('E', 10));
+        File.SetAttributes(hidden, File.GetAttributes(hidden) | FileAttributes.Hidden);
+        File.SetAttributes(system, File.GetAttributes(system) | FileAttributes.System);
+
+        var scanner = new DuplicateScanner();
+        ScanResult result = await scanner.ScanAsync(
+            NewOptions() with
+            {
+                Folders = [],
+                Files = [allowedFirst, allowedSecond, tooSmall, tooLarge, wrongType, hidden, system, excluded],
+                ExcludedPaths = [excluded],
+                MinSizeBytes = 10,
+                MaxSizeBytes = 10,
+                TypeFilter = FileTypeFilter.ForCustomExtensions(["txt"]),
+            },
+            progress: null,
+            CancellationToken.None);
+
+        DuplicateGroup group = Assert.Single(result.Groups);
+        Assert.Equal(2, result.TotalFilesScanned);
+        Assert.Contains(group.Files, file => file.FullPath == allowedFirst);
+        Assert.Contains(group.Files, file => file.FullPath == allowedSecond);
+    }
+
+    [Fact]
+    public async Task ScanAsync_ExcludedDirectory_RemovesAllDescendants()
+    {
+        string includedFirst = WriteFile("included/first.bin", "same bytes");
+        string includedSecond = WriteFile("included/second.bin", "same bytes");
+        string excludedFirst = WriteFile("excluded/first.bin", "same bytes");
+        string excludedSecond = WriteFile("excluded/nested/second.bin", "same bytes");
+        string prefixSiblingFirst = WriteFile("excluded-more/first.bin", "different matching bytes");
+        string prefixSiblingSecond = WriteFile("excluded-more/second.bin", "different matching bytes");
+        string excludedDirectory = Path.Combine(_root, "excluded");
+
+        var scanner = new DuplicateScanner();
+        ScanResult result = await scanner.ScanAsync(
+            NewOptions() with { ExcludedPaths = [excludedDirectory] },
+            progress: null,
+            CancellationToken.None);
+
+        Assert.Equal(2, result.Groups.Count);
+        Assert.Equal(4, result.TotalFilesScanned);
+        Assert.Contains(result.Groups, group =>
+            group.Files.Any(file => file.FullPath == includedFirst) &&
+            group.Files.Any(file => file.FullPath == includedSecond));
+        Assert.Contains(result.Groups, group =>
+            group.Files.Any(file => file.FullPath == prefixSiblingFirst) &&
+            group.Files.Any(file => file.FullPath == prefixSiblingSecond));
+        Assert.DoesNotContain(result.Groups.SelectMany(group => group.Files), file => file.FullPath == excludedFirst);
+        Assert.DoesNotContain(result.Groups.SelectMany(group => group.Files), file => file.FullPath == excludedSecond);
+    }
+
+    [Fact]
+    public async Task ScanAsync_ExcludedFile_DoesNotRemoveItsSibling()
+    {
+        string excluded = WriteFile("one.bin", "same bytes");
+        string sibling = WriteFile("two.bin", "same bytes");
+
+        var scanner = new DuplicateScanner();
+        ScanResult result = await scanner.ScanAsync(
+            NewOptions() with { ExcludedPaths = [excluded] },
+            progress: null,
+            CancellationToken.None);
+
+        Assert.Empty(result.Groups);
+        Assert.Equal(1, result.TotalFilesScanned);
+        Assert.DoesNotContain(result.SkippedPaths, path => path.Path == sibling);
+    }
+
+    [Fact]
     public async Task ScanAsync_AlreadyCancelled_ThrowsOperationCanceledException()
     {
         WriteFile("one.bin", 80_000, 1);
@@ -324,6 +482,24 @@ public sealed class DuplicateScannerTests : IDisposable
         {
             bytesRead?.Invoke(Math.Min(expectedSizeBytes, maxBytesToRead));
             return Task.FromResult(42UL);
+        }
+    }
+
+    private sealed class CountingArrayPool : ArrayPool<byte>
+    {
+        public int RentCount { get; private set; }
+
+        public int ReturnCount { get; private set; }
+
+        public override byte[] Rent(int minimumLength)
+        {
+            RentCount++;
+            return new byte[minimumLength];
+        }
+
+        public override void Return(byte[] array, bool clearArray = false)
+        {
+            ReturnCount++;
         }
     }
 

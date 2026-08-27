@@ -1,9 +1,8 @@
-using System.Collections.ObjectModel;
-using System.Collections.Specialized;
 using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Duplicates.Engine;
+using Duplicates.Engine.Analysis;
 using Duplicates.Engine.Models;
 using Duplicates.Models;
 using Duplicates.Services;
@@ -16,25 +15,39 @@ public sealed partial class ScanViewModel : ObservableObject
     private readonly DuplicateScanner _scanner;
     private readonly ISettingsService _settingsService;
     private readonly ResultsStore _resultsStore;
+    private readonly PathScopeViewModel _pathScope;
+    private readonly IAppOperationCoordinator _operationCoordinator;
+    private AppSettings? _pendingSettings;
     private CancellationTokenSource? _scanCancellation;
     private DateTimeOffset _scanStartedAt;
 
-    public ScanViewModel(DuplicateScanner scanner, ISettingsService settingsService, ResultsStore resultsStore)
+    public ScanViewModel(
+        DuplicateScanner scanner,
+        ISettingsService settingsService,
+        ResultsStore resultsStore,
+        PathScopeViewModel pathScope,
+        IAppOperationCoordinator? operationCoordinator = null)
     {
         _scanner = scanner;
         _settingsService = settingsService;
         _resultsStore = resultsStore;
-        Folders.CollectionChanged += FoldersChanged;
+        _pathScope = pathScope;
+        _operationCoordinator = operationCoordinator ?? new AppOperationCoordinator();
+        _pathScope.PropertyChanged += PathScopeChanged;
         _settingsService.SettingsChanged += SettingsChanged;
+        _operationCoordinator.ActiveOperationChanged += OperationChanged;
         ResetFromSettings();
     }
 
     public event EventHandler<ScanResult>? ScanCompleted;
 
-    public ObservableCollection<ScanFolderViewModel> Folders { get; } = [];
+    public PathScopeViewModel PathScope => _pathScope;
 
-    [ObservableProperty]
-    public partial bool IncludeSubfolders { get; set; } = true;
+    public bool IncludeSubfolders
+    {
+        get => PathScope.IncludeSubfolders;
+        set => PathScope.IncludeSubfolders = value;
+    }
 
     [ObservableProperty]
     public partial double MinSizeValue { get; set; } = 1d;
@@ -68,11 +81,17 @@ public sealed partial class ScanViewModel : ObservableObject
     [ObservableProperty]
     public partial bool CodeSelected { get; set; }
 
-    [ObservableProperty]
-    public partial bool IgnoreHiddenFiles { get; set; } = true;
+    public bool IgnoreHiddenFiles
+    {
+        get => PathScope.IgnoreHiddenFiles;
+        set => PathScope.IgnoreHiddenFiles = value;
+    }
 
-    [ObservableProperty]
-    public partial bool IgnoreSystemFiles { get; set; } = true;
+    public bool IgnoreSystemFiles
+    {
+        get => PathScope.IgnoreSystemFiles;
+        set => PathScope.IgnoreSystemFiles = value;
+    }
 
     [ObservableProperty]
     public partial bool VerifyByteByByte { get; set; } = true;
@@ -117,63 +136,55 @@ public sealed partial class ScanViewModel : ObservableObject
 
     public Visibility ProgressVisibility => IsScanning ? Visibility.Visible : Visibility.Collapsed;
 
-    public bool HasFolders => Folders.Count > 0;
-
-    public Visibility EmptyFoldersVisibility => HasFolders ? Visibility.Collapsed : Visibility.Visible;
-
     public Visibility CategoryFiltersVisibility => SelectedFileFilterIndex == 1 ? Visibility.Visible : Visibility.Collapsed;
 
     public Visibility CustomExtensionsVisibility => SelectedFileFilterIndex == 2 ? Visibility.Visible : Visibility.Collapsed;
 
     public bool IsStatusOpen => !string.IsNullOrWhiteSpace(StatusMessage);
 
-    public void ResetFromSettings()
+    public void ResetFromSettings() => ApplySettings(_settingsService.Current);
+
+    private void ApplySettings(AppSettings settings)
     {
-        AppSettings settings = _settingsService.Current;
         MinSizeValue = ByteSizeInput.FromBytes(settings.DefaultMinSizeBytes);
-        IgnoreHiddenFiles = settings.IgnoreHiddenFiles;
-        IgnoreSystemFiles = settings.IgnoreSystemFiles;
+        PathScope.IncludeSubfolders = settings.DefaultIncludeSubfolders;
+        PathScope.IgnoreHiddenFiles = settings.IgnoreHiddenFiles;
+        PathScope.IgnoreSystemFiles = settings.IgnoreSystemFiles;
         VerifyByteByByte = settings.VerifyByteByByte;
-    }
-
-    public void AddFolder(string folder)
-    {
-        if (string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder))
-        {
-            return;
-        }
-
-        var item = new ScanFolderViewModel(folder);
-        if (Folders.Any(existing =>
-            string.Equals(existing.FullPath, item.FullPath, StringComparison.OrdinalIgnoreCase)))
-        {
-            return;
-        }
-
-        Folders.Add(item);
-    }
-
-    [RelayCommand]
-    private void RemoveFolder(ScanFolderViewModel folder)
-    {
-        Folders.Remove(folder);
     }
 
     [RelayCommand(CanExecute = nameof(CanStartScan))]
     private async Task StartScanAsync()
     {
+        var cancellation = new CancellationTokenSource();
+        if (!_operationCoordinator.TryAcquire(
+                new AppOperationDescriptor(AppOperationKind.ExactScan),
+                cancellation.Cancel,
+                out IAppOperationLease? lease))
+        {
+            cancellation.Dispose();
+            StatusMessage = "Another operation is already running.";
+            return;
+        }
+
         IsScanning = true;
         StatusMessage = string.Empty;
-        _scanStartedAt = DateTimeOffset.Now;
-        _scanCancellation = new CancellationTokenSource();
+        _scanStartedAt = DateTimeOffset.UtcNow;
+        _scanCancellation = cancellation;
+        ScanResult? completedResult = null;
+        AnalysisScope? completedScope = null;
+        DateTimeOffset completedAt = default;
 
         try
         {
             ScanOptions options = BuildScanOptions();
             var progress = new Progress<ScanProgress>(UpdateProgress);
-            ScanResult result = await _scanner.ScanAsync(options, progress, _scanCancellation.Token);
-            _resultsStore.SetResult(result);
-            ScanCompleted?.Invoke(this, result);
+            ScanResult result = await Task.Run(
+                () => _scanner.ScanAsync(options, progress, _scanCancellation.Token),
+                _scanCancellation.Token);
+            completedResult = result;
+            completedScope = BuildResultScope(options);
+            completedAt = DateTimeOffset.UtcNow;
         }
         catch (OperationCanceledException)
         {
@@ -189,6 +200,13 @@ public sealed partial class ScanViewModel : ObservableObject
             _scanCancellation = null;
             IsScanning = false;
             StartScanCommand.NotifyCanExecuteChanged();
+            lease!.Dispose();
+        }
+
+        if (completedResult is not null)
+        {
+            _resultsStore.SetResult(completedResult, completedScope!, completedAt);
+            ScanCompleted?.Invoke(this, completedResult);
         }
     }
 
@@ -219,7 +237,9 @@ public sealed partial class ScanViewModel : ObservableObject
 
     private bool CanStartScan()
     {
-        return !IsScanning && Folders.Count > 0;
+        return !IsScanning &&
+            _operationCoordinator.ActiveOperation is null &&
+            PathScope.HasIncludedPaths;
     }
 
     private ScanOptions BuildScanOptions()
@@ -234,13 +254,21 @@ public sealed partial class ScanViewModel : ObservableObject
 
         return new ScanOptions
         {
-            Folders = Folders.Select(static folder => folder.FullPath).ToArray(),
-            IncludeSubfolders = IncludeSubfolders,
+            Folders = PathScope.IncludedPaths
+                .Where(static path => path.Kind == ScopePathKind.Folder)
+                .Select(static path => path.FullPath)
+                .ToArray(),
+            Files = PathScope.IncludedPaths
+                .Where(static path => path.Kind == ScopePathKind.File)
+                .Select(static path => path.FullPath)
+                .ToArray(),
+            ExcludedPaths = PathScope.ExcludedPaths.Select(static path => path.FullPath).ToArray(),
+            IncludeSubfolders = PathScope.IncludeSubfolders,
             MinSizeBytes = minSize,
             MaxSizeBytes = maxSize,
             TypeFilter = BuildFileTypeFilter(),
-            IgnoreHiddenFiles = IgnoreHiddenFiles,
-            IgnoreSystemFiles = IgnoreSystemFiles,
+            IgnoreHiddenFiles = PathScope.IgnoreHiddenFiles,
+            IgnoreSystemFiles = PathScope.IgnoreSystemFiles,
             VerifyByteByByte = VerifyByteByByte,
             MaxHashingConcurrency = _settingsService.Current.MaxHashingConcurrency,
         };
@@ -255,6 +283,16 @@ public sealed partial class ScanViewModel : ObservableObject
             _ => FileTypeFilter.All,
         };
     }
+
+    private static AnalysisScope BuildResultScope(ScanOptions options) => new()
+    {
+        IncludedFolders = options.Folders.ToArray(),
+        IncludedFiles = options.Files.ToArray(),
+        ExcludedPaths = options.ExcludedPaths.ToArray(),
+        IncludeSubfolders = options.IncludeSubfolders,
+        IgnoreHiddenFiles = options.IgnoreHiddenFiles,
+        IgnoreSystemFiles = options.IgnoreSystemFiles,
+    };
 
     private IEnumerable<FileTypeCategory> GetSelectedCategories()
     {
@@ -306,7 +344,7 @@ public sealed partial class ScanViewModel : ObservableObject
         FilesProcessedText = progress.FilesProcessed.ToString("N0", CultureInfo.InvariantCulture);
         BytesProcessedText = ByteFormatter.Format(progress.BytesProcessed);
         CurrentFilePath = progress.CurrentFilePath ?? string.Empty;
-        TimeSpan elapsed = DateTimeOffset.Now - _scanStartedAt;
+        TimeSpan elapsed = DateTimeOffset.UtcNow - _scanStartedAt;
         ElapsedText = elapsed.TotalSeconds < 1 ? "<1s" : $"{Math.Floor(elapsed.TotalSeconds):N0}s";
 
         IsProgressIndeterminate = progress.TotalBytesToProcess <= 0 || progress.Phase is ScanPhase.Enumerating or ScanPhase.GroupingBySize;
@@ -331,20 +369,46 @@ public sealed partial class ScanViewModel : ObservableObject
     partial void OnIsScanningChanged(bool value)
     {
         StartScanCommand.NotifyCanExecuteChanged();
+        TryApplyPendingSettings();
     }
 
-    private void FoldersChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    private void OperationChanged(object? sender, EventArgs e)
     {
-        OnPropertyChanged(nameof(HasFolders));
-        OnPropertyChanged(nameof(EmptyFoldersVisibility));
+        TryApplyPendingSettings();
         StartScanCommand.NotifyCanExecuteChanged();
+    }
+
+    private void PathScopeChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(PathScopeViewModel.IncludeSubfolders) or
+            nameof(PathScopeViewModel.IgnoreHiddenFiles) or
+            nameof(PathScopeViewModel.IgnoreSystemFiles))
+        {
+            OnPropertyChanged(e.PropertyName);
+        }
+
+        if (e.PropertyName == nameof(PathScopeViewModel.HasIncludedPaths))
+        {
+            StartScanCommand.NotifyCanExecuteChanged();
+        }
     }
 
     private void SettingsChanged(object? sender, AppSettings settings)
     {
-        if (!IsScanning)
+        _pendingSettings = settings;
+        TryApplyPendingSettings();
+    }
+
+    private void TryApplyPendingSettings()
+    {
+        if (_pendingSettings is not AppSettings settings ||
+            IsScanning ||
+            _operationCoordinator.ActiveOperation is not null)
         {
-            ResetFromSettings();
+            return;
         }
+
+        _pendingSettings = null;
+        ApplySettings(settings);
     }
 }

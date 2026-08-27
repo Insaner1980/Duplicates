@@ -38,21 +38,84 @@
             AutomationProperties.Name="Main navigation"
             SelectionChanged="RootNavigationView_SelectionChanged">
             <NavigationView.MenuItems>
+                <NavigationViewItemHeader Content="Find duplicates" />
                 <NavigationViewItem
                     x:Name="ScanNavigationItem"
-                    Content="Scan"
-                    Tag="Scan">
+                    Content="Duplicate files"
+                    Tag="DuplicateFiles">
                     <NavigationViewItem.Icon>
-                        <SymbolIcon Symbol="Find" />
+                        <FontIcon Glyph="&#xE8C8;" />
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
                 <NavigationViewItem
-                    x:Name="ResultsNavigationItem"
-                    Content="Results"
-                    IsEnabled="False"
-                    Tag="Results">
+                    Content="Similar images"
+                    Tag="SimilarImages">
                     <NavigationViewItem.Icon>
-                        <SymbolIcon Symbol="List" />
+                        <FontIcon Glyph="&#xEB9F;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="Similar videos" Tag="SimilarVideos">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE714;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="Music duplicates" Tag="MusicDuplicates">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE8D6;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+
+                <NavigationViewItemHeader Content="Clean storage" />
+                <NavigationViewItem Content="Empty folders" Tag="EmptyFolders">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE8B7;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="Big files" Tag="BigFiles">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE8A5;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="Empty files" Tag="EmptyFiles">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE8A5;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="Temporary files" Tag="TemporaryFiles">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE823;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+
+                <NavigationViewItemHeader Content="Inspect and repair" />
+                <NavigationViewItem Content="Invalid links" Tag="InvalidLinks">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE71B;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="Broken files" Tag="BrokenFiles">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE7BA;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="Bad extensions" Tag="BadExtensions">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE8C1;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="Bad names" Tag="BadNames">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE8AC;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="EXIF remover" Tag="ExifRemover">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE722;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="Video optimizer" Tag="VideoOptimizer">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE74D;" />
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
             </NavigationView.MenuItems>

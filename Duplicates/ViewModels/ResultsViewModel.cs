@@ -1,6 +1,8 @@
 using System.Collections.ObjectModel;
+using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Duplicates.Engine.Analysis;
 using Duplicates.Engine.Models;
 using Duplicates.Models;
 using Duplicates.Services;
@@ -15,16 +17,30 @@ public sealed partial class ResultsViewModel : ObservableObject
     private readonly ResultsStore _resultsStore;
     private readonly IFileActionService _fileActionService;
     private readonly ISettingsService _settingsService;
+    private readonly IResultExportService _resultExportService;
+    private readonly IFileLinkService _fileLinkService;
+    private readonly IAppOperationCoordinator _operationCoordinator;
     private readonly List<DuplicateGroupViewModel> _allGroups = [];
     private IReadOnlyDictionary<string, bool>? _selectionSnapshot;
     private bool _isApplyingSelectionRule;
+    private CancellationTokenSource? _actionCancellation;
 
-    public ResultsViewModel(ResultsStore resultsStore, IFileActionService fileActionService, ISettingsService settingsService)
+    public ResultsViewModel(
+        ResultsStore resultsStore,
+        IFileActionService fileActionService,
+        ISettingsService settingsService,
+        IResultExportService resultExportService,
+        IFileLinkService? fileLinkService = null,
+        IAppOperationCoordinator? operationCoordinator = null)
     {
         _resultsStore = resultsStore;
         _fileActionService = fileActionService;
         _settingsService = settingsService;
+        _resultExportService = resultExportService;
+        _fileLinkService = fileLinkService ?? new FileLinkService();
+        _operationCoordinator = operationCoordinator ?? new AppOperationCoordinator();
         _resultsStore.ResultChanged += ResultsChanged;
+        _operationCoordinator.ActiveOperationChanged += OperationChanged;
     }
 
     public ObservableCollection<DuplicateGroupViewModel> Groups { get; } = [];
@@ -98,7 +114,7 @@ public sealed partial class ResultsViewModel : ObservableObject
 
     public int TotalDuplicateFiles => _allGroups.Sum(static group => Math.Max(0, group.Files.Count - 1));
 
-    public long TotalReclaimableBytes => _allGroups.Sum(static group => group.Source.SizeBytes * Math.Max(0, group.Files.Count - 1));
+    public long TotalReclaimableBytes => _allGroups.Sum(static group => group.WastedBytes);
 
     public string SummaryText => $"{GroupCount:N0} groups, {TotalDuplicateFiles:N0} duplicate files, {ByteFormatter.Format(TotalReclaimableBytes)} reclaimable total";
 
@@ -110,7 +126,47 @@ public sealed partial class ResultsViewModel : ObservableObject
 
     public string DeleteButtonText => $"Delete {SelectedFileCount:N0} files ({ByteFormatter.Format(SelectedBytes)})";
 
-    public bool CanDelete => !IsDeleting && SelectedFileCount > 0 && _allGroups.All(static group => group.SelectedCount < group.Files.Count);
+    public bool CanDelete =>
+        !IsDeleting &&
+        _operationCoordinator.ActiveOperation is null &&
+        SelectedFileCount > 0 &&
+        _allGroups.All(static group => group.SelectedCount < group.Files.Count);
+
+    public bool CanMove => CanDelete;
+
+    public bool CanReplaceWithLinks =>
+        !IsDeleting &&
+        _operationCoordinator.ActiveOperation is null &&
+        SelectedFileCount > 0 &&
+        _allGroups
+            .Where(static group => group.SelectedCount > 0)
+            .All(static group =>
+                group.LinkSurvivor is { IsSelected: false } survivor &&
+                group.Files.Contains(survivor));
+
+    public bool CanExport => !IsDeleting && _operationCoordinator.ActiveOperation is null;
+
+    public bool CanStartNewScan => _operationCoordinator.ActiveOperation is null;
+
+    public bool CanMutateSelection => !IsDeleting && _operationCoordinator.ActiveOperation is null;
+
+    internal bool TryResetSession(ExactResultsSession expectedSession)
+    {
+        ArgumentNullException.ThrowIfNull(expectedSession);
+        if (!ReferenceEquals(_resultsStore.CurrentSession, expectedSession))
+        {
+            return false;
+        }
+
+        SearchText = string.Empty;
+        SelectedSortIndex = 0;
+        SelectedFile = null;
+        IsPreviewPaneOpen = false;
+        DeleteStatusMessage = string.Empty;
+        DeleteFailureDetailsText = string.Empty;
+        _resultsStore.Clear();
+        return true;
+    }
 
     public bool IsDeleteStatusOpen => !string.IsNullOrWhiteSpace(DeleteStatusMessage);
 
@@ -120,7 +176,9 @@ public sealed partial class ResultsViewModel : ObservableObject
 
     public IReadOnlyList<DuplicateFileViewModel> SelectedFiles => _allGroups.SelectMany(static group => group.Files).Where(static file => file.IsSelected).ToArray();
 
-    public bool CanUndoSelection => _selectionSnapshot is not null;
+    public bool CanUndoSelection => _selectionSnapshot is not null && CanMutateSelection;
+
+    internal Action? BeforeLinkDispatch { get; set; }
 
     public Visibility PreviewVisibility => SelectedFile is null ? Visibility.Collapsed : Visibility.Visible;
 
@@ -142,19 +200,19 @@ public sealed partial class ResultsViewModel : ObservableObject
 
     public Visibility PreviewMetadataVisibility => PreviewImage is null ? Visibility.Visible : Visibility.Collapsed;
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanMutateSelection))]
     private void AutoSelectKeepNewest()
     {
         ApplySelectionRule("Keep newest", static group => group.ApplyKeepNewest());
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanMutateSelection))]
     private void AutoSelectKeepOldest()
     {
         ApplySelectionRule("Keep oldest", static group => group.ApplyKeepOldest());
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanMutateSelection))]
     private void AutoSelectKeepShortestPath()
     {
         ApplySelectionRule("Keep shortest path", static group => group.ApplyKeepShortestPath());
@@ -162,10 +220,15 @@ public sealed partial class ResultsViewModel : ObservableObject
 
     public void AutoSelectKeepPreferredFolder(string preferredFolder)
     {
+        if (!CanMutateSelection)
+        {
+            return;
+        }
+
         ApplySelectionRule("Keep preferred folder", group => group.ApplyKeepPreferredFolder(preferredFolder));
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanMutateSelection))]
     private void ClearSelection()
     {
         ApplySelectionRule("Manual selection", static group => group.ClearSelection());
@@ -180,14 +243,22 @@ public sealed partial class ResultsViewModel : ObservableObject
         }
 
         IReadOnlyDictionary<string, bool> snapshot = _selectionSnapshot;
-        foreach (DuplicateFileViewModel file in _allGroups.SelectMany(static group => group.Files))
+        _isApplyingSelectionRule = true;
+        try
         {
-            file.SetSelectedFromRule(snapshot.TryGetValue(file.FullPath, out bool wasSelected) && wasSelected);
-        }
+            foreach (DuplicateFileViewModel file in _allGroups.SelectMany(static group => group.Files))
+            {
+                file.SetSelectedFromRule(snapshot.TryGetValue(file.FullPath, out bool wasSelected) && wasSelected);
+            }
 
-        foreach (DuplicateGroupViewModel group in _allGroups)
+            foreach (DuplicateGroupViewModel group in _allGroups)
+            {
+                group.NotifySelectionChanged();
+            }
+        }
+        finally
         {
-            group.NotifySelectionChanged();
+            _isApplyingSelectionRule = false;
         }
 
         _selectionSnapshot = null;
@@ -197,7 +268,7 @@ public sealed partial class ResultsViewModel : ObservableObject
         RefreshSelectionTotals();
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanMutateSelection))]
     private void ExcludeFile(DuplicateFileViewModel file)
     {
         DuplicateGroupViewModel? group = _allGroups.FirstOrDefault(group => group.Files.Contains(file));
@@ -248,62 +319,391 @@ public sealed partial class ResultsViewModel : ObservableObject
         return await DeleteFilesAsync([file], cancellationToken);
     }
 
-    private async Task<DeleteSummary> DeleteFilesAsync(
-        IReadOnlyList<DuplicateFileViewModel> files,
+    public ExactLinkReplacementSnapshot CreateLinkReplacementSnapshot(LinkReplacementMode mode)
+    {
+        ExactResultsSession session = _resultsStore.CurrentSession ??
+            throw new InvalidOperationException("Run a scan before replacing duplicates with links.");
+        if (!Enum.IsDefined(mode))
+        {
+            throw new ArgumentOutOfRangeException(nameof(mode));
+        }
+
+        DuplicateGroupViewModel[] actedGroups = _allGroups
+            .Where(static group => group.SelectedCount > 0)
+            .ToArray();
+        if (actedGroups.Length == 0)
+        {
+            throw new InvalidOperationException("Select at least one duplicate to replace with a link.");
+        }
+
+        var requests = new LinkReplacementGroup[actedGroups.Length];
+        var states = new ExactLinkReplacementGroupState[actedGroups.Length];
+        int totalCount = 0;
+        for (int index = 0; index < actedGroups.Length; index++)
+        {
+            DuplicateGroupViewModel group = actedGroups[index];
+            DuplicateFileViewModel survivor = group.LinkSurvivor is { IsSelected: false } candidate &&
+                group.Files.Contains(candidate)
+                    ? candidate
+                    : throw new InvalidOperationException(
+                        "Every selected duplicate group requires one explicit nonselected link survivor.");
+            DuplicateFileViewModel[] duplicates = group.Files
+                .Where(static file => file.IsSelected)
+                .ToArray();
+            if (duplicates.Length == 0 || duplicates.Contains(survivor))
+            {
+                throw new InvalidOperationException(
+                    "Every selected duplicate group requires one explicit nonselected link survivor.");
+            }
+
+            states[index] = new ExactLinkReplacementGroupState(group, survivor, duplicates);
+            requests[index] = new LinkReplacementGroup(
+                MapLinkFile(survivor),
+                Array.AsReadOnly(duplicates.Select(MapLinkFile).ToArray()));
+            totalCount += duplicates.Length;
+        }
+
+        string modeText = mode == LinkReplacementMode.HardLink ? "hard links" : "symbolic links";
+        string survivors = string.Join(
+            Environment.NewLine,
+            requests.Select(group => $"{group.Survivor.FullPath} — {group.Duplicates.Count:N0} selected"));
+        string developerMode = mode == LinkReplacementMode.SymbolicLink
+            ? $"{Environment.NewLine}{Environment.NewLine}Symbolic links require Windows Developer Mode or existing link privilege. Duplicates never requests elevation."
+            : string.Empty;
+        string confirmation =
+            $"Replace {totalCount:N0} selected {(totalCount == 1 ? "file" : "files")} with {modeText}?" +
+            $"{Environment.NewLine}{Environment.NewLine}Survivors:{Environment.NewLine}{survivors}" +
+            $"{Environment.NewLine}{Environment.NewLine}Each duplicate is first moved to an owned rollback path. " +
+            "Only after the new link is verified is the rollback file sent to the Recycle Bin." +
+            developerMode;
+        return new ExactLinkReplacementSnapshot(session, mode, requests, states, confirmation);
+    }
+
+    public bool IsLinkReplacementSnapshotCurrent(ExactLinkReplacementSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        if (!ReferenceEquals(_resultsStore.CurrentSession, snapshot.Session))
+        {
+            return false;
+        }
+
+        foreach (ExactLinkReplacementGroupState state in snapshot.CanonicalStates)
+        {
+            if (!_allGroups.Contains(state.Group) ||
+                !state.Group.Files.Contains(state.Survivor) ||
+                !ReferenceEquals(state.Group.LinkSurvivor, state.Survivor) ||
+                state.Survivor.IsSelected ||
+                state.Duplicates.Length == 0 ||
+                state.Duplicates.Any(file =>
+                    !state.Group.Files.Contains(file) ||
+                    !file.IsSelected ||
+                    ReferenceEquals(file, state.Survivor)))
+            {
+                return false;
+            }
+        }
+
+        HashSet<string> expectedSelection = snapshot.CanonicalStates
+            .SelectMany(static state => state.Duplicates)
+            .Select(static file => file.FullPath)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        HashSet<string> currentSelection = SelectedFiles
+            .Select(static file => file.FullPath)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return expectedSelection.SetEquals(currentSelection);
+    }
+
+    public async Task<FileOperationSummary> ReplaceWithLinksAsync(
+        ExactLinkReplacementSnapshot snapshot,
         CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        if (!IsLinkReplacementSnapshotCurrent(snapshot))
+        {
+            throw new InvalidOperationException("The duplicate selection changed after confirmation.");
+        }
+
+        using CancellationTokenSource actionCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        if (!_operationCoordinator.TryAcquire(
+                new AppOperationDescriptor(AppOperationKind.ExactResultsAction),
+                actionCancellation.Cancel,
+                out IAppOperationLease? lease))
+        {
+            throw new InvalidOperationException("Another file operation is already running.");
+        }
+
+        _actionCancellation = actionCancellation;
         IsDeleting = true;
-        DeleteStatusMessage = files.Count == 1 ? "Deleting file..." : "Deleting selected files...";
+        DeleteStatusMessage = snapshot.Mode == LinkReplacementMode.HardLink
+            ? "Replacing selected duplicates with hard links..."
+            : "Replacing selected duplicates with symbolic links...";
         DeleteFailureDetailsText = string.Empty;
+        int totalCount = snapshot.Groups.Sum(static group => group.Duplicates.Count);
+        DeleteProgressText = $"0 of {totalCount:N0} files processed";
+        DeleteProgressValue = 0;
         try
         {
-            DeleteProgressText = $"0 of {files.Count:N0} files processed";
-            DeleteProgressValue = 0;
-            DeleteSummary summary = await _fileActionService.DeleteAsync(
-                files,
-                new InlineProgress<DeleteProgress>(UpdateDeleteProgress),
-                cancellationToken);
-            var deletedPaths = files
-                .Where(file => !summary.Failures.Any(failure => string.Equals(failure.Path, file.FullPath, StringComparison.OrdinalIgnoreCase)))
-                .Select(static file => file.FullPath)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-            if (SelectedFile is not null && deletedPaths.Contains(SelectedFile.FullPath))
+            if (!IsLinkReplacementSnapshotCurrent(snapshot))
             {
-                SelectedFile = null;
+                throw new InvalidOperationException("The duplicate selection changed after confirmation.");
             }
 
-            for (int index = _allGroups.Count - 1; index >= 0; index--)
+            BeforeLinkDispatch?.Invoke();
+            if (!IsLinkReplacementSnapshotCurrent(snapshot))
             {
-                _allGroups[index].RemoveDeleted(deletedPaths);
-                if (_allGroups[index].Files.Count < 2)
-                {
-                    _allGroups.RemoveAt(index);
-                }
+                throw new InvalidOperationException("The duplicate results changed before link replacement began.");
             }
 
-            DeleteStatusMessage = summary.Failures.Count == 0
-                ? summary.DeletedCount == 1 ? "1 file deleted." : $"{summary.DeletedCount:N0} files deleted."
-                : $"{summary.DeletedCount:N0} files deleted, {summary.Failures.Count:N0} could not be deleted.";
-            DeleteFailureDetailsText = BuildFailureDetailsText(summary.Failures);
-            ApplySearchAndSort();
-            RefreshAllComputedProperties();
+            FileOperationSummary summary;
+            try
+            {
+                summary = await _fileLinkService.ReplaceWithLinksAsync(
+                    snapshot.Groups,
+                    snapshot.Mode,
+                    new InlineProgress<FileOperationProgress>(UpdateFileOperationProgress),
+                    actionCancellation.Token);
+            }
+            catch (FileOperationCanceledException ex)
+            {
+                ApplyLinkSummary(snapshot, ex.Summary, wasCancelled: true);
+                throw;
+            }
+
+            ApplyLinkSummary(snapshot, summary, wasCancelled: false);
             return summary;
         }
         finally
         {
             IsDeleting = false;
+            _actionCancellation = null;
+            lease!.Dispose();
+        }
+    }
+
+    public async Task<FileOperationSummary> MoveSelectedAsync(
+        string destinationFolder,
+        MoveCollisionBehavior collisionBehavior,
+        CancellationToken cancellationToken)
+    {
+        ExactResultsSession session = _resultsStore.CurrentSession ??
+            throw new InvalidOperationException("Run a scan before moving duplicate files.");
+        IReadOnlyList<DuplicateFileViewModel> files = SelectedFiles;
+        EnsureSurvivorInvariant(files);
+        using CancellationTokenSource actionCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        if (!_operationCoordinator.TryAcquire(
+                new AppOperationDescriptor(AppOperationKind.ExactResultsAction),
+                actionCancellation.Cancel,
+                out IAppOperationLease? lease))
+        {
+            throw new InvalidOperationException("Another file operation is already running.");
+        }
+
+        _actionCancellation = actionCancellation;
+        IsDeleting = true;
+        DeleteStatusMessage = files.Count == 1 ? "Moving file..." : "Moving selected files...";
+        DeleteFailureDetailsText = string.Empty;
+        try
+        {
+            if (!IsCurrentAction(session, files))
+            {
+                throw new InvalidOperationException("The duplicate results changed before the move began.");
+            }
+
+            DeleteProgressText = $"0 of {files.Count:N0} files processed";
+            DeleteProgressValue = 0;
+            FileOperationSummary summary;
+            try
+            {
+                summary = await _fileActionService.MoveAsync(
+                    MapTargets(files),
+                    destinationFolder,
+                    collisionBehavior,
+                    new InlineProgress<FileOperationProgress>(UpdateFileOperationProgress),
+                    actionCancellation.Token);
+            }
+            catch (FileOperationCanceledException ex)
+            {
+                ApplyMoveSummary(session, ex.Summary, wasCancelled: true);
+                throw;
+            }
+
+            ApplyMoveSummary(session, summary, wasCancelled: false);
+            return summary;
+        }
+        finally
+        {
+            IsDeleting = false;
+            _actionCancellation = null;
+            lease!.Dispose();
+        }
+    }
+
+    private void ApplyMoveSummary(
+        ExactResultsSession session,
+        FileOperationSummary summary,
+        bool wasCancelled)
+    {
+        if (!ReferenceEquals(_resultsStore.CurrentSession, session))
+        {
+            return;
+        }
+
+        HashSet<string> movedPaths = summary.Results
+            .Where(static result => result.Succeeded)
+            .Select(static result => result.SourcePath)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        RemoveSuccessfulPaths(movedPaths);
+        FileActionFailure[] failures = summary.Results
+            .Where(static result => !result.Succeeded)
+            .Select(static result => result.Failure!)
+            .ToArray();
+        int movedCount = summary.Results.Count(static result => result.Succeeded);
+        DeleteStatusMessage = wasCancelled
+            ? $"Move cancelled after {movedCount:N0} {(movedCount == 1 ? "file" : "files")} moved."
+            : failures.Length == 0
+                ? movedCount == 1 ? "1 file moved." : $"{movedCount:N0} files moved."
+                : $"{movedCount:N0} files moved, {failures.Length:N0} could not be moved.";
+        DeleteFailureDetailsText = BuildFailureDetailsText(failures);
+        ApplySearchAndSort();
+        RefreshAllComputedProperties();
+    }
+
+    public async Task ExportAsync(
+        ResultExportFormat format,
+        string destinationPath,
+        CancellationToken cancellationToken,
+        bool overwriteExisting = false)
+    {
+        ExactResultsSession session = _resultsStore.CurrentSession ??
+            throw new InvalidOperationException("Run a scan before exporting results.");
+        ResultExportItem[] items = _allGroups.SelectMany(group => group.Files.Select(file => new ResultExportItem(
+            file.FullPath,
+            FileActionTargetKind.File,
+            "Byte-identical duplicate",
+            null,
+            group.Source.ContentHash.ToString("X16", CultureInfo.InvariantCulture),
+            null,
+            file.SizeBytes,
+            file.File.CreatedUtc,
+            file.File.ModifiedUtc,
+            new Dictionary<string, string>(StringComparer.Ordinal))))
+            .ToArray();
+        SkippedPath[] skippedPaths = session.Result.SkippedPaths.Select(static skipped => new SkippedPath
+        {
+            Path = skipped.Path,
+            Reason = skipped.Reason,
+        }).ToArray();
+        var snapshot = new ResultExportSnapshot(
+            ToolKind.DuplicateFiles,
+            session.CompletedAtUtc,
+            BuildScopeSummary(session.Scope),
+            items,
+            skippedPaths);
+        using CancellationTokenSource actionCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        if (!_operationCoordinator.TryAcquire(
+                new AppOperationDescriptor(AppOperationKind.ExactResultsAction),
+                actionCancellation.Cancel,
+                out IAppOperationLease? lease))
+        {
+            throw new InvalidOperationException("Another file operation is already running.");
+        }
+
+        _actionCancellation = actionCancellation;
+        IsDeleting = true;
+        try
+        {
+            await _resultExportService.ExportAsync(
+                snapshot,
+                format,
+                destinationPath,
+                actionCancellation.Token,
+                overwriteExisting);
+        }
+        finally
+        {
+            IsDeleting = false;
+            _actionCancellation = null;
+            lease!.Dispose();
+        }
+    }
+
+    private async Task<DeleteSummary> DeleteFilesAsync(
+        IReadOnlyList<DuplicateFileViewModel> files,
+        CancellationToken cancellationToken)
+    {
+        ExactResultsSession session = _resultsStore.CurrentSession ??
+            throw new InvalidOperationException("Run a scan before deleting duplicate files.");
+        EnsureSurvivorInvariant(files);
+        using CancellationTokenSource actionCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        if (!_operationCoordinator.TryAcquire(
+                new AppOperationDescriptor(AppOperationKind.ExactResultsAction),
+                actionCancellation.Cancel,
+                out IAppOperationLease? lease))
+        {
+            throw new InvalidOperationException("Another file operation is already running.");
+        }
+
+        _actionCancellation = actionCancellation;
+        IsDeleting = true;
+        DeleteStatusMessage = files.Count == 1 ? "Deleting file..." : "Deleting selected files...";
+        DeleteFailureDetailsText = string.Empty;
+        try
+        {
+            if (!IsCurrentAction(session, files))
+            {
+                throw new InvalidOperationException("The duplicate results changed before deletion began.");
+            }
+
+            DeleteProgressText = $"0 of {files.Count:N0} files processed";
+            DeleteProgressValue = 0;
+            DeleteSummary summary;
+            try
+            {
+                summary = await _fileActionService.DeleteAsync(
+                    MapTargets(files),
+                    new InlineProgress<DeleteProgress>(UpdateDeleteProgress),
+                    actionCancellation.Token);
+            }
+            catch (DeleteOperationCanceledException ex)
+            {
+                ApplyDeleteSummary(session, files, ex.Summary, wasCancelled: true);
+                throw;
+            }
+
+            ApplyDeleteSummary(session, files, summary, wasCancelled: false);
+            return summary;
+        }
+        finally
+        {
+            IsDeleting = false;
+            _actionCancellation = null;
+            lease!.Dispose();
         }
     }
 
     public void RefreshSelectionTotals()
     {
+        foreach (DuplicateGroupViewModel group in _allGroups)
+        {
+            group.SetCanMutateSelection(CanMutateSelection);
+        }
+
         OnPropertyChanged(nameof(SelectedFileCount));
         OnPropertyChanged(nameof(SelectedGroupCount));
         OnPropertyChanged(nameof(SelectedBytes));
         OnPropertyChanged(nameof(DeleteButtonText));
         OnPropertyChanged(nameof(CanDelete));
+        OnPropertyChanged(nameof(CanMove));
+        OnPropertyChanged(nameof(CanReplaceWithLinks));
+        OnPropertyChanged(nameof(CanExport));
+        OnPropertyChanged(nameof(CanStartNewScan));
+        OnPropertyChanged(nameof(CanMutateSelection));
         OnPropertyChanged(nameof(CanUndoSelection));
+        AutoSelectKeepNewestCommand.NotifyCanExecuteChanged();
+        AutoSelectKeepOldestCommand.NotifyCanExecuteChanged();
+        AutoSelectKeepShortestPathCommand.NotifyCanExecuteChanged();
+        ClearSelectionCommand.NotifyCanExecuteChanged();
+        ExcludeFileCommand.NotifyCanExecuteChanged();
         UndoSelectionCommand.NotifyCanExecuteChanged();
     }
 
@@ -355,6 +755,10 @@ public sealed partial class ResultsViewModel : ObservableObject
         Groups.Clear();
         _allGroups.Clear();
         _selectionSnapshot = null;
+        DeleteStatusMessage = string.Empty;
+        DeleteFailureDetailsText = string.Empty;
+        DeleteProgressText = string.Empty;
+        DeleteProgressValue = 0;
         SelectedFile = null;
         IsPreviewPaneOpen = false;
         ScanResult? result = _resultsStore.CurrentResult;
@@ -372,9 +776,15 @@ public sealed partial class ResultsViewModel : ObservableObject
             {
                 file.PropertyChanged += (_, args) =>
                 {
-                    if (args.PropertyName == nameof(DuplicateFileViewModel.IsSelected))
+                    if (args.PropertyName is nameof(DuplicateFileViewModel.IsSelected) or
+                        nameof(DuplicateFileViewModel.IsLinkSurvivor))
                     {
-                        if (!_isApplyingSelectionRule)
+                        if (_isApplyingSelectionRule)
+                        {
+                            return;
+                        }
+
+                        if (args.PropertyName == nameof(DuplicateFileViewModel.IsSelected))
                         {
                             SelectionRuleText = "Manual selection";
                         }
@@ -435,11 +845,136 @@ public sealed partial class ResultsViewModel : ObservableObject
             : Math.Clamp(progress.ProcessedCount * 100d / progress.TotalCount, 0, 100);
     }
 
+    private void ApplyDeleteSummary(
+        ExactResultsSession session,
+        IReadOnlyList<DuplicateFileViewModel> files,
+        DeleteSummary summary,
+        bool wasCancelled)
+    {
+        if (!ReferenceEquals(_resultsStore.CurrentSession, session))
+        {
+            return;
+        }
+
+        IEnumerable<string> deletedPaths = summary.DeletedPaths ?? files
+            .Where(file => !summary.Failures.Any(failure =>
+                string.Equals(failure.Path, file.FullPath, StringComparison.OrdinalIgnoreCase)))
+            .Select(static file => file.FullPath);
+        RemoveSuccessfulPaths(deletedPaths.ToHashSet(StringComparer.OrdinalIgnoreCase));
+        DeleteStatusMessage = wasCancelled
+            ? $"Delete cancelled after {summary.DeletedCount:N0} " +
+                (summary.DeletedCount == 1 ? "file deleted." : "files deleted.")
+            : summary.Failures.Count == 0
+                ? summary.DeletedCount == 1
+                    ? "1 file deleted."
+                    : $"{summary.DeletedCount:N0} files deleted."
+                : $"{summary.DeletedCount:N0} files deleted, {summary.Failures.Count:N0} could not be deleted.";
+        DeleteFailureDetailsText = BuildFailureDetailsText(summary.Failures);
+        ApplySearchAndSort();
+        RefreshAllComputedProperties();
+    }
+
+    private void ApplyLinkSummary(
+        ExactLinkReplacementSnapshot snapshot,
+        FileOperationSummary summary,
+        bool wasCancelled)
+    {
+        if (ReferenceEquals(_resultsStore.CurrentSession, snapshot.Session))
+        {
+            HashSet<string> replacedPaths = summary.Results
+                .Where(static result => result.Succeeded)
+                .Select(static result => result.SourcePath)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            RemoveSuccessfulPaths(replacedPaths);
+            ApplySearchAndSort();
+            RefreshAllComputedProperties();
+        }
+
+        FileActionFailure[] failures = summary.Results
+            .Where(static result => !result.Succeeded)
+            .Select(static result => result.Failure!)
+            .ToArray();
+        int succeeded = summary.Results.Count(static result => result.Succeeded);
+        DeleteStatusMessage = wasCancelled
+            ? $"Link replacement cancelled after {succeeded:N0} {(succeeded == 1 ? "file" : "files")} committed."
+            : failures.Length == 0
+                ? succeeded == 1 ? "1 duplicate replaced with a link." : $"{succeeded:N0} duplicates replaced with links."
+                : $"{succeeded:N0} duplicates replaced, {failures.Length:N0} could not be replaced.";
+        DeleteFailureDetailsText = BuildFailureDetailsText(failures);
+    }
+
+    private void UpdateFileOperationProgress(FileOperationProgress progress)
+    {
+        DeleteProgressText = $"{progress.ProcessedCount:N0} of {progress.TotalCount:N0} files processed";
+        DeleteProgressValue = progress.TotalCount <= 0
+            ? 0
+            : Math.Clamp(progress.ProcessedCount * 100d / progress.TotalCount, 0, 100);
+    }
+
+    private void EnsureSurvivorInvariant(IReadOnlyList<DuplicateFileViewModel> files)
+    {
+        if (files.Count == 0 || _allGroups.Any(group =>
+                group.Files.Count(file => files.Contains(file)) >= group.Files.Count))
+        {
+            throw new InvalidOperationException("At least one file must remain in every duplicate group.");
+        }
+    }
+
+    private bool IsCurrentAction(
+        ExactResultsSession session,
+        IReadOnlyList<DuplicateFileViewModel> files) =>
+        ReferenceEquals(_resultsStore.CurrentSession, session) &&
+        files.All(file => _allGroups.Any(group => group.Files.Contains(file)));
+
+    private static FileActionTarget[] MapTargets(IReadOnlyList<DuplicateFileViewModel> files) =>
+        files.Select(static file => new FileActionTarget(
+            file.FullPath,
+            file.SizeBytes,
+            FileActionTargetKind.File))
+            .ToArray();
+
+    private static LinkReplacementFile MapLinkFile(DuplicateFileViewModel file) => new(
+        file.FullPath,
+        file.SizeBytes,
+        file.File.ModifiedUtc);
+
+    private void RemoveSuccessfulPaths(IReadOnlySet<string> paths)
+    {
+        for (int index = _allGroups.Count - 1; index >= 0; index--)
+        {
+            _allGroups[index].RemoveDeleted(paths);
+            if (_allGroups[index].Files.Count < 2)
+            {
+                _allGroups.RemoveAt(index);
+            }
+        }
+
+        if (SelectedFile is not null &&
+            !_allGroups.Any(group => group.Files.Contains(SelectedFile)))
+        {
+            SelectedFile = null;
+        }
+    }
+
+    private static string BuildScopeSummary(AnalysisScope scope)
+    {
+        int folderCount = scope.IncludedFolders.Count;
+        int fileCount = scope.IncludedFiles.Count;
+        int excludedCount = scope.ExcludedPaths.Count;
+        return $"{folderCount:N0} {(folderCount == 1 ? "folder" : "folders")}, " +
+            $"{fileCount:N0} {(fileCount == 1 ? "file" : "files")}, " +
+            $"{excludedCount:N0} excluded; subfolders {(scope.IncludeSubfolders ? "included" : "excluded")}";
+    }
+
     private static string BuildFailureDetailsText(IReadOnlyList<FileActionFailure> failures)
     {
         return failures.Count == 0
             ? string.Empty
-            : string.Join(Environment.NewLine, failures.Select(static failure => $"{failure.Path}: {failure.Reason}"));
+            : string.Join(
+                Environment.NewLine,
+                failures.Select(static failure => failure.RecoveryPath is null
+                    ? $"{failure.Path}: {failure.Reason}"
+                    : $"{failure.Path}: {failure.Reason} Recovery path: {failure.RecoveryPath}"));
     }
 
     private string BuildPreviewGroupDetails()
@@ -448,7 +983,7 @@ public sealed partial class ResultsViewModel : ObservableObject
             ? null
             : _allGroups.FirstOrDefault(group => group.Files.Contains(SelectedFile));
 
-        return group is null ? string.Empty : $", Group reclaimable {ByteFormatter.Format(group.Source.WastedBytes)}";
+        return group is null ? string.Empty : $", Group reclaimable {group.WastedText}";
     }
 
     private static BitmapImage CreatePreviewImage(string path)
@@ -475,7 +1010,7 @@ public sealed partial class ResultsViewModel : ObservableObject
             2 => groups.OrderByDescending(static group => group.Files.Count),
             3 => groups.OrderBy(static group => group.Files[0].FileName, StringComparer.OrdinalIgnoreCase),
             4 => groups.OrderBy(static group => group.Files[0].Extension, StringComparer.OrdinalIgnoreCase),
-            _ => groups.OrderByDescending(static group => group.Source.WastedBytes),
+            _ => groups.OrderByDescending(static group => group.WastedBytes),
         };
 
         Groups.Clear();
@@ -490,6 +1025,11 @@ public sealed partial class ResultsViewModel : ObservableObject
     private static bool IsImageExtension(string extension)
     {
         return extension is ".jpg" or ".jpeg" or ".png" or ".gif" or ".bmp" or ".tiff" or ".tif" or ".webp" or ".heic" or ".heif" or ".raw" or ".cr2" or ".nef" or ".arw" or ".dng" or ".svg" or ".ico" or ".psd";
+    }
+
+    private void OperationChanged(object? sender, EventArgs e)
+    {
+        RefreshSelectionTotals();
     }
 
     private sealed class InlineProgress<T> : IProgress<T>

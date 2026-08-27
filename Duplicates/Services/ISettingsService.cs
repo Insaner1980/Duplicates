@@ -10,5 +10,7 @@ public interface ISettingsService
 
     Task LoadAsync();
 
-    Task SaveAsync(AppSettings settings);
+    Task SaveAsync(
+        AppSettings settings,
+        CancellationToken cancellationToken = default);
 }
