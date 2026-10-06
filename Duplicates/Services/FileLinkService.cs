@@ -268,7 +268,6 @@ public sealed class FileLinkService : IFileLinkService
                 survivor,
                 survivorRequest.FullPath,
                 mode);
-            createdLink = null;
             if (rollback.Succeeded)
             {
                 return Failure(duplicateRequest, reason);

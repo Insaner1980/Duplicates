@@ -116,7 +116,13 @@ public sealed partial class PathScopeViewModel : ObservableObject
 
         try
         {
-            item = new ScopePathViewModel(path, kind);
+            var candidate = new ScopePathViewModel(path, kind);
+            if (kind == ScopePathKind.Folder ? !Directory.Exists(candidate.FullPath) : !File.Exists(candidate.FullPath))
+            {
+                return false;
+            }
+
+            item = candidate;
             return true;
         }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)

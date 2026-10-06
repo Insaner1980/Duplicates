@@ -14,6 +14,17 @@ public sealed class ResultExportService : IResultExportService
         WriteIndented = true,
     };
 
+    private readonly Func<Guid> _createTemporaryId;
+
+    public ResultExportService() : this(Guid.NewGuid)
+    {
+    }
+
+    internal ResultExportService(Func<Guid> createTemporaryId)
+    {
+        _createTemporaryId = createTemporaryId;
+    }
+
     public async Task ExportAsync(
         ResultExportSnapshot snapshot,
         ResultExportFormat format,
@@ -31,7 +42,8 @@ public sealed class ResultExportService : IResultExportService
         string parent = Path.GetDirectoryName(destination)!;
         string temporaryPath = Path.Combine(
             parent,
-            $".{Path.GetFileName(destination)}.{Guid.NewGuid():N}.tmp");
+            $".{Path.GetFileName(destination)}.{_createTemporaryId():N}.tmp");
+        bool ownsTemporary = false;
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -43,6 +55,7 @@ public sealed class ResultExportService : IResultExportService
                 65_536,
                 FileOptions.Asynchronous | FileOptions.WriteThrough))
             {
+                ownsTemporary = true;
                 if (format == ResultExportFormat.Csv)
                 {
                     await WriteCsvAsync(copy, stream, cancellationToken);
@@ -61,7 +74,7 @@ public sealed class ResultExportService : IResultExportService
         }
         finally
         {
-            if (File.Exists(temporaryPath))
+            if (ownsTemporary && File.Exists(temporaryPath))
             {
                 File.Delete(temporaryPath);
             }

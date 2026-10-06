@@ -1,5 +1,7 @@
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Duplicates.Engine.Analysis;
@@ -93,6 +95,14 @@ public sealed partial class ResultsViewModel : ObservableObject
 
     public Visibility NoDuplicatesVisibility => _resultsStore.CurrentResult is not null && _allGroups.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
 
+    public string EmptyResultsTitle => _resultsStore.CurrentResult?.Groups.Count > 0
+        ? "No duplicate groups remain"
+        : "No duplicates found";
+
+    public string EmptyResultsDescription => _resultsStore.CurrentResult?.Groups.Count > 0
+        ? "All groups have been removed from these results."
+        : "No byte-identical duplicate groups were found in this scan.";
+
     public Visibility ResultsVisibility => Groups.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
 
     public Visibility SkippedFilesVisibility => _resultsStore.CurrentResult?.SkippedPaths.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -148,7 +158,7 @@ public sealed partial class ResultsViewModel : ObservableObject
 
     public bool CanStartNewScan => _operationCoordinator.ActiveOperation is null;
 
-    public bool CanMutateSelection => !IsDeleting && _operationCoordinator.ActiveOperation is null;
+    public bool CanMutateSelection => !_isApplyingSelectionRule && !IsDeleting && _operationCoordinator.ActiveOperation is null;
 
     internal bool TryResetSession(ExactResultsSession expectedSession)
     {
@@ -237,7 +247,7 @@ public sealed partial class ResultsViewModel : ObservableObject
     [RelayCommand(CanExecute = nameof(CanUndoSelection))]
     private void UndoSelection()
     {
-        if (_selectionSnapshot is null)
+        if (_selectionSnapshot is null || _isApplyingSelectionRule)
         {
             return;
         }
@@ -246,13 +256,31 @@ public sealed partial class ResultsViewModel : ObservableObject
         _isApplyingSelectionRule = true;
         try
         {
-            foreach (DuplicateFileViewModel file in _allGroups.SelectMany(static group => group.Files))
-            {
-                file.SetSelectedFromRule(snapshot.TryGetValue(file.FullPath, out bool wasSelected) && wasSelected);
-            }
-
             foreach (DuplicateGroupViewModel group in _allGroups)
             {
+                if (group.Files.All(file => snapshot.TryGetValue(file.FullPath, out bool selected) && selected))
+                {
+                    group.ApplyKeepNewest();
+                    continue;
+                }
+
+                group.IsChangingSelection = true;
+                try
+                {
+                    foreach (DuplicateFileViewModel file in group.Files)
+                    {
+                        file.SetSelectedFromRule(false);
+                    }
+
+                    foreach (DuplicateFileViewModel file in group.Files)
+                    {
+                        file.SetSelectedFromRule(snapshot.TryGetValue(file.FullPath, out bool wasSelected) && wasSelected);
+                    }
+                }
+                finally
+                {
+                    group.IsChangingSelection = false;
+                }
                 group.NotifySelectionChanged();
             }
         }
@@ -277,15 +305,21 @@ public sealed partial class ResultsViewModel : ObservableObject
             return;
         }
 
+        file.PropertyChanged -= FileSelectionChanged;
         group.RemoveFile(file);
-        if (SelectedFile == file)
-        {
-            SelectedFile = null;
-        }
-
         if (group.Files.Count < 2)
         {
+            foreach (DuplicateFileViewModel remaining in group.Files)
+            {
+                remaining.PropertyChanged -= FileSelectionChanged;
+            }
             _allGroups.Remove(group);
+        }
+
+        if (SelectedFile is not null &&
+            !_allGroups.Any(currentGroup => currentGroup.Files.Contains(SelectedFile)))
+        {
+            SelectedFile = null;
         }
 
         ApplySearchAndSort();
@@ -298,6 +332,44 @@ public sealed partial class ResultsViewModel : ObservableObject
         IsPreviewPaneOpen = !IsPreviewPaneOpen;
     }
 
+    internal void CopyPath(DuplicateFileViewModel file, Action<string> copyText)
+    {
+        try
+        {
+            copyText(file.FullPath);
+        }
+        catch (Exception ex) when (ex is COMException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            DeleteStatusMessage = $"Could not copy path: {ex.Message}";
+        }
+    }
+
+    public void OpenFile(DuplicateFileViewModel file)
+    {
+        try
+        {
+            _fileActionService.OpenFile(file.FullPath);
+        }
+        catch (Exception ex) when (ex is Win32Exception or IOException or UnauthorizedAccessException or
+            ArgumentException or InvalidOperationException)
+        {
+            DeleteStatusMessage = $"Could not open file: {ex.Message}";
+        }
+    }
+
+    public void RevealFile(DuplicateFileViewModel file)
+    {
+        try
+        {
+            _fileActionService.RevealInExplorer(file.FullPath);
+        }
+        catch (Exception ex) when (ex is Win32Exception or IOException or UnauthorizedAccessException or
+            ArgumentException or InvalidOperationException)
+        {
+            DeleteStatusMessage = $"Could not reveal file: {ex.Message}";
+        }
+    }
+
     public async Task<DeleteSummary> DeleteSelectedAsync(CancellationToken cancellationToken)
     {
         if (!CanDelete || _allGroups.Any(static group => group.SelectedCount >= group.Files.Count))
@@ -305,7 +377,7 @@ public sealed partial class ResultsViewModel : ObservableObject
             throw new InvalidOperationException("At least one file must remain in every duplicate group.");
         }
 
-        return await DeleteFilesAsync(SelectedFiles, cancellationToken);
+        return await DeleteConfirmedAsync(CreateDeleteSnapshot(), cancellationToken);
     }
 
     public async Task<DeleteSummary> DeleteFileAsync(DuplicateFileViewModel file, CancellationToken cancellationToken)
@@ -316,7 +388,35 @@ public sealed partial class ResultsViewModel : ObservableObject
             throw new InvalidOperationException("The file must belong to a duplicate group with another remaining copy.");
         }
 
-        return await DeleteFilesAsync([file], cancellationToken);
+        return await DeleteConfirmedAsync(CreateDeleteSnapshot(file), cancellationToken);
+    }
+
+    internal ExactDeleteSnapshot CreateDeleteSnapshot(DuplicateFileViewModel? file = null)
+    {
+        ExactResultsSession session = _resultsStore.CurrentSession ??
+            throw new InvalidOperationException("Run a scan before deleting duplicate files.");
+        DuplicateFileViewModel[] files = file is null ? SelectedFiles.ToArray() : [file];
+        if (file is null ? !CanDelete : IsDeleting || !_allGroups.Any(group => group.Files.Count > 1 && group.Files.Contains(file)))
+        {
+            throw new InvalidOperationException("The file selection is no longer available for deletion.");
+        }
+        EnsureSurvivorInvariant(files);
+        return new ExactDeleteSnapshot(session, Array.AsReadOnly(files), _settingsService.Current.DeletionMode, file is null);
+    }
+
+    internal bool IsDeleteSnapshotCurrent(ExactDeleteSnapshot snapshot) =>
+        !IsDeleting && _operationCoordinator.ActiveOperation is null &&
+        _settingsService.Current.DeletionMode == snapshot.Mode &&
+        IsCurrentAction(snapshot.Session, snapshot.Files) &&
+        (!snapshot.IsBatch || SelectedFiles.SequenceEqual(snapshot.Files));
+
+    internal async Task<DeleteSummary> DeleteConfirmedAsync(ExactDeleteSnapshot snapshot, CancellationToken cancellationToken)
+    {
+        if (!IsDeleteSnapshotCurrent(snapshot))
+        {
+            throw new InvalidOperationException("The duplicate selection or deletion mode changed after confirmation.");
+        }
+        return await DeleteFilesAsync(snapshot.Files, snapshot.Mode, cancellationToken);
     }
 
     public ExactLinkReplacementSnapshot CreateLinkReplacementSnapshot(LinkReplacementMode mode)
@@ -460,7 +560,7 @@ public sealed partial class ResultsViewModel : ObservableObject
                 summary = await _fileLinkService.ReplaceWithLinksAsync(
                     snapshot.Groups,
                     snapshot.Mode,
-                    new InlineProgress<FileOperationProgress>(UpdateFileOperationProgress),
+                    CreateActionProgress<FileOperationProgress>(snapshot.Session, actionCancellation, UpdateFileOperationProgress),
                     actionCancellation.Token);
             }
             catch (FileOperationCanceledException ex)
@@ -518,7 +618,7 @@ public sealed partial class ResultsViewModel : ObservableObject
                     MapTargets(files),
                     destinationFolder,
                     collisionBehavior,
-                    new InlineProgress<FileOperationProgress>(UpdateFileOperationProgress),
+                    CreateActionProgress<FileOperationProgress>(session, actionCancellation, UpdateFileOperationProgress),
                     actionCancellation.Token);
             }
             catch (FileOperationCanceledException ex)
@@ -629,6 +729,7 @@ public sealed partial class ResultsViewModel : ObservableObject
 
     private async Task<DeleteSummary> DeleteFilesAsync(
         IReadOnlyList<DuplicateFileViewModel> files,
+        DeletionMode deletionMode,
         CancellationToken cancellationToken)
     {
         ExactResultsSession session = _resultsStore.CurrentSession ??
@@ -661,12 +762,21 @@ public sealed partial class ResultsViewModel : ObservableObject
             {
                 summary = await _fileActionService.DeleteAsync(
                     MapTargets(files),
-                    new InlineProgress<DeleteProgress>(UpdateDeleteProgress),
-                    actionCancellation.Token);
+                    CreateActionProgress<DeleteProgress>(session, actionCancellation, UpdateDeleteProgress),
+                    actionCancellation.Token,
+                    deletionMode);
             }
             catch (DeleteOperationCanceledException ex)
             {
                 ApplyDeleteSummary(session, files, ex.Summary, wasCancelled: true);
+                throw;
+            }
+            catch (OperationCanceledException)
+            {
+                if (ReferenceEquals(_resultsStore.CurrentSession, session))
+                {
+                    DeleteStatusMessage = "Delete cancelled before any file was processed.";
+                }
                 throw;
             }
 
@@ -711,6 +821,8 @@ public sealed partial class ResultsViewModel : ObservableObject
     {
         OnPropertyChanged(nameof(BeforeFirstScanVisibility));
         OnPropertyChanged(nameof(NoDuplicatesVisibility));
+        OnPropertyChanged(nameof(EmptyResultsTitle));
+        OnPropertyChanged(nameof(EmptyResultsDescription));
         OnPropertyChanged(nameof(ResultsVisibility));
         OnPropertyChanged(nameof(SkippedFilesVisibility));
         OnPropertyChanged(nameof(SkippedFilesSummaryText));
@@ -752,6 +864,10 @@ public sealed partial class ResultsViewModel : ObservableObject
 
     private void ReloadFromCurrentResult()
     {
+        foreach (DuplicateFileViewModel file in _allGroups.SelectMany(static group => group.Files))
+        {
+            file.PropertyChanged -= FileSelectionChanged;
+        }
         Groups.Clear();
         _allGroups.Clear();
         _selectionSnapshot = null;
@@ -774,24 +890,7 @@ public sealed partial class ResultsViewModel : ObservableObject
             DuplicateGroupViewModel groupViewModel = new(group);
             foreach (DuplicateFileViewModel file in groupViewModel.Files)
             {
-                file.PropertyChanged += (_, args) =>
-                {
-                    if (args.PropertyName is nameof(DuplicateFileViewModel.IsSelected) or
-                        nameof(DuplicateFileViewModel.IsLinkSurvivor))
-                    {
-                        if (_isApplyingSelectionRule)
-                        {
-                            return;
-                        }
-
-                        if (args.PropertyName == nameof(DuplicateFileViewModel.IsSelected))
-                        {
-                            SelectionRuleText = "Manual selection";
-                        }
-
-                        RefreshSelectionTotals();
-                    }
-                };
+                file.PropertyChanged += FileSelectionChanged;
             }
 
             _allGroups.Add(groupViewModel);
@@ -803,9 +902,24 @@ public sealed partial class ResultsViewModel : ObservableObject
         }
         ApplySearchAndSort();
         StatusMessage = result.Groups.Count == 0
-            ? "Every file in the scanned folders is unique."
+            ? EmptyResultsDescription
             : $"{result.Groups.Count:N0} duplicate groups found.";
         RefreshAllComputedProperties();
+    }
+
+    private void FileSelectionChanged(object? sender, PropertyChangedEventArgs args)
+    {
+        if (_isApplyingSelectionRule ||
+            args.PropertyName is not (nameof(DuplicateFileViewModel.IsSelected) or nameof(DuplicateFileViewModel.IsLinkSurvivor)))
+        {
+            return;
+        }
+
+        if (args.PropertyName == nameof(DuplicateFileViewModel.IsSelected))
+        {
+            SelectionRuleText = "Manual selection";
+        }
+        RefreshSelectionTotals();
     }
 
     private void CaptureSelectionSnapshot()
@@ -819,6 +933,11 @@ public sealed partial class ResultsViewModel : ObservableObject
 
     private void ApplySelectionRule(string ruleText, Action<DuplicateGroupViewModel> applyRule)
     {
+        if (_isApplyingSelectionRule)
+        {
+            return;
+        }
+
         CaptureSelectionSnapshot();
         _isApplyingSelectionRule = true;
         try
@@ -926,12 +1045,28 @@ public sealed partial class ResultsViewModel : ObservableObject
         ReferenceEquals(_resultsStore.CurrentSession, session) &&
         files.All(file => _allGroups.Any(group => group.Files.Contains(file)));
 
-    private static FileActionTarget[] MapTargets(IReadOnlyList<DuplicateFileViewModel> files) =>
-        files.Select(static file => new FileActionTarget(
-            file.FullPath,
-            file.SizeBytes,
-            FileActionTargetKind.File))
-            .ToArray();
+    private FileActionTarget[] MapTargets(IReadOnlyList<DuplicateFileViewModel> files)
+    {
+        HashSet<DuplicateFileViewModel> requested = files.ToHashSet();
+        var targets = new List<FileActionTarget>(files.Count);
+        foreach (DuplicateGroupViewModel group in _allGroups)
+        {
+            DuplicateFileViewModel[] groupTargets = group.Files.Where(requested.Contains).ToArray();
+            if (groupTargets.Length == 0)
+            {
+                continue;
+            }
+            ExactFileConstraint[] survivors = group.Files.Where(file => !requested.Contains(file))
+                .Select(static file => new ExactFileConstraint(file.FullPath, file.SizeBytes, file.File.ModifiedUtc)).ToArray();
+            targets.AddRange(groupTargets.Select(file => new FileActionTarget(
+                file.FullPath,
+                file.SizeBytes,
+                FileActionTargetKind.File,
+                ExpectedModifiedUtc: file.File.ModifiedUtc,
+                ExpectedExactSurvivors: survivors)));
+        }
+        return targets.ToArray();
+    }
 
     private static LinkReplacementFile MapLinkFile(DuplicateFileViewModel file) => new(
         file.FullPath,
@@ -942,9 +1077,17 @@ public sealed partial class ResultsViewModel : ObservableObject
     {
         for (int index = _allGroups.Count - 1; index >= 0; index--)
         {
+            foreach (DuplicateFileViewModel file in _allGroups[index].Files.Where(file => paths.Contains(file.FullPath)))
+            {
+                file.PropertyChanged -= FileSelectionChanged;
+            }
             _allGroups[index].RemoveDeleted(paths);
             if (_allGroups[index].Files.Count < 2)
             {
+                foreach (DuplicateFileViewModel remaining in _allGroups[index].Files)
+                {
+                    remaining.PropertyChanged -= FileSelectionChanged;
+                }
                 _allGroups.RemoveAt(index);
             }
         }
@@ -1032,18 +1175,38 @@ public sealed partial class ResultsViewModel : ObservableObject
         RefreshSelectionTotals();
     }
 
-    private sealed class InlineProgress<T> : IProgress<T>
+    private IProgress<T> CreateActionProgress<T>(
+        ExactResultsSession session,
+        CancellationTokenSource cancellation,
+        Action<T> handler) => new ActionProgress<T>(value =>
+        {
+            if (ReferenceEquals(_resultsStore.CurrentSession, session) &&
+                ReferenceEquals(_actionCancellation, cancellation))
+            {
+                handler(value);
+            }
+        });
+
+    private sealed class ActionProgress<T> : IProgress<T>
     {
         private readonly Action<T> _handler;
+        private readonly SynchronizationContext? _context = SynchronizationContext.Current;
 
-        public InlineProgress(Action<T> handler)
+        public ActionProgress(Action<T> handler)
         {
             _handler = handler;
         }
 
         public void Report(T value)
         {
-            _handler(value);
+            if (_context is not null && !ReferenceEquals(SynchronizationContext.Current, _context))
+            {
+                _context.Post(_ => _handler(value), null);
+            }
+            else
+            {
+                _handler(value);
+            }
         }
     }
 }

@@ -10,6 +10,251 @@ namespace Duplicates.App.Tests;
 public sealed class ResultsViewModelTests
 {
     [Fact]
+    public async Task DeleteBeforeFirstCancellationPreservesRowsAndReportsCancellation()
+    {
+        var store = new ResultsStore();
+        var actions = new FakeFileActionService
+        {
+            DeleteHandler = (_, _) => Task.FromCanceled<DeleteSummary>(new CancellationToken(canceled: true)),
+        };
+        var viewModel = NewViewModel(store, actions);
+        store.SetResult(NewResult(NewGroup(1, "files", "keep.bin", "delete.bin")));
+        DuplicateFileViewModel[] rows = viewModel.Groups[0].Files.ToArray();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => viewModel.DeleteSelectedAsync(CancellationToken.None));
+
+        Assert.Equal(rows, viewModel.Groups[0].Files);
+        Assert.False(viewModel.IsDeleting);
+        Assert.Contains("cancelled", viewModel.DeleteStatusMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("before any file", viewModel.DeleteStatusMessage, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    public void CopyPathPreservesLiteralRowAndReportsNativeFailure(int error)
+    {
+        var store = new ResultsStore();
+        var viewModel = NewViewModel(store);
+        store.SetResult(NewResult(NewGroup(1, "files", new string('a', 160) + " ä 東京.txt", "other.txt")));
+        DuplicateFileViewModel[] rows = viewModel.Groups[0].Files.ToArray();
+        viewModel.SelectedFile = rows[1];
+        viewModel.DeleteStatusMessage = "Previous export completed.";
+        string? copiedPath = null;
+
+        Exception? failure = Record.Exception(() => viewModel.CopyPath(rows[0], path =>
+        {
+            copiedPath = path;
+            if (error == 1) throw new System.Runtime.InteropServices.COMException("Clipboard is busy", unchecked((int)0x800401D0));
+            if (error == 2) throw new UnauthorizedAccessException("Clipboard access denied");
+            if (error == 3) throw new InvalidOperationException("Clipboard unavailable");
+        }));
+
+        Assert.Null(failure);
+        Assert.Equal(rows[0].FullPath, copiedPath);
+        Assert.Equal(rows, viewModel.Groups[0].Files);
+        Assert.Same(rows[1], viewModel.SelectedFile);
+        Assert.False(viewModel.IsDeleting);
+        if (error != 0)
+        {
+            Assert.StartsWith("Could not copy path:", viewModel.DeleteStatusMessage, StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
+    [InlineData(false, 0)]
+    [InlineData(false, 2)]
+    [InlineData(false, 5)]
+    [InlineData(false, 1155)]
+    [InlineData(true, 0)]
+    [InlineData(true, 2)]
+    [InlineData(true, 5)]
+    [InlineData(true, 1155)]
+    public void ShellFailureIsVisibleAndPreservesCanonicalRowsAndSelection(bool reveal, int error)
+    {
+        var store = new ResultsStore();
+        var actions = new FakeFileActionService();
+        var viewModel = NewViewModel(store, actions);
+        store.SetResult(NewResult(NewGroup(1, "files", "ä & copy.txt", "other.txt")));
+        DuplicateFileViewModel[] rows = viewModel.Groups[0].Files.ToArray();
+        viewModel.SelectedFile = rows[0];
+        int selectedCount = viewModel.SelectedFileCount;
+        string? requestedPath = null;
+        Action<string> launch = path =>
+        {
+            requestedPath = path;
+            if (error != 0)
+            {
+                throw new System.ComponentModel.Win32Exception(error, "The shell could not open the requested path.");
+            }
+        };
+        actions.OnOpen = launch;
+        actions.OnReveal = launch;
+
+        Exception? failure = Record.Exception(() =>
+        {
+            if (reveal) viewModel.RevealFile(rows[0]);
+            else viewModel.OpenFile(rows[0]);
+        });
+
+        Assert.Null(failure);
+        Assert.Equal(rows[0].FullPath, requestedPath);
+        Assert.Equal(rows, viewModel.Groups[0].Files);
+        Assert.Same(rows[0], viewModel.SelectedFile);
+        Assert.Equal(selectedCount, viewModel.SelectedFileCount);
+        Assert.Equal(error != 0, viewModel.IsDeleteStatusOpen);
+        Assert.Equal(0, actions.DeleteCallCount);
+        Assert.Equal(0, actions.MoveCallCount);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ExactActionsCarryScanModifiedUtcToNativePreflight(bool move)
+    {
+        var store = new ResultsStore();
+        var actions = new FakeFileActionService();
+        var viewModel = NewViewModel(store, actions);
+        store.SetResult(NewResult(NewGroup(1, "files", "a.bin", "b.bin")));
+        DuplicateFileViewModel selected = viewModel.SelectedFiles[0];
+        IReadOnlyList<FileActionTarget>? targets = null;
+        actions.OnDelete = (files, _) => targets = files;
+        actions.OnMove = (files, _, _, _) => targets = files;
+
+        if (move)
+        {
+            await viewModel.MoveSelectedAsync(@"C:\destination", MoveCollisionBehavior.Skip, CancellationToken.None);
+        }
+        else
+        {
+            await viewModel.DeleteSelectedAsync(CancellationToken.None);
+        }
+
+        Assert.Equal(selected.File.ModifiedUtc, Assert.Single(targets!).ExpectedModifiedUtc);
+        ExactFileConstraint survivor = Assert.Single(targets![0].ExpectedExactSurvivors!);
+        Assert.EndsWith("b.bin", survivor.FullPath, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(DeletionMode.RecycleBin)]
+    [InlineData(DeletionMode.Permanent)]
+    public async Task ConfirmedDeleteRejectsAChangedModeAndDispatchesTheCapturedMode(DeletionMode mode)
+    {
+        var store = new ResultsStore();
+        var actions = new FakeFileActionService();
+        var settings = new FakeSettingsService();
+        settings.SetCurrent(new AppSettings { DeletionMode = mode });
+        var viewModel = new ResultsViewModel(store, actions, settings, new FakeResultExportService());
+        store.SetResult(NewResult(NewGroup(1, "files", "a.bin", "b.bin")));
+        ExactDeleteSnapshot snapshot = viewModel.CreateDeleteSnapshot();
+        settings.SetCurrent(new AppSettings { DeletionMode = mode == DeletionMode.RecycleBin ? DeletionMode.Permanent : DeletionMode.RecycleBin });
+
+        Assert.False(viewModel.IsDeleteSnapshotCurrent(snapshot));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => viewModel.DeleteConfirmedAsync(snapshot, CancellationToken.None));
+        Assert.Equal(0, actions.DeleteCallCount);
+
+        settings.SetCurrent(new AppSettings { DeletionMode = mode });
+        await viewModel.DeleteConfirmedAsync(snapshot, CancellationToken.None);
+        Assert.Equal(mode, actions.LastDeletionMode);
+    }
+
+    [Theory]
+    [InlineData(false, 0)]
+    [InlineData(false, 1)]
+    [InlineData(false, 2)]
+    [InlineData(true, 0)]
+    [InlineData(true, 2)]
+    public async Task ConfirmedDeleteRejectsReplacedSessionsAndChangedCanonicalRequests(bool singleFile, int mutation)
+    {
+        var store = new ResultsStore();
+        var actions = new FakeFileActionService();
+        var viewModel = NewViewModel(store, actions);
+        store.SetResult(NewResult(NewGroup(1, "files", "a.bin", "b.bin", "c.bin")));
+        DuplicateFileViewModel file = viewModel.Groups[0].Files[0];
+        ExactDeleteSnapshot snapshot = viewModel.CreateDeleteSnapshot(singleFile ? file : null);
+        switch (mutation)
+        {
+            case 0:
+                store.SetResult(NewResult(NewGroup(2, "replacement", "a.bin", "b.bin")));
+                break;
+            case 1:
+                viewModel.ClearSelectionCommand.Execute(null);
+                break;
+            case 2:
+                viewModel.ExcludeFileCommand.Execute(file);
+                break;
+        }
+
+        Assert.False(viewModel.IsDeleteSnapshotCurrent(snapshot));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => viewModel.DeleteConfirmedAsync(snapshot, CancellationToken.None));
+        Assert.Equal(0, actions.DeleteCallCount);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DeleteProgressUsesCapturedContextAndRejectsReplacedSession(bool replaceSession)
+    {
+        var store = new ResultsStore();
+        var actions = new FakeFileActionService();
+        var viewModel = NewViewModel(store, actions);
+        store.SetResult(NewResult(NewGroup(1, "one", "a.txt", "b.txt")));
+        IProgress<DeleteProgress>? progress = null;
+        actions.OnDelete = (_, value) => progress = value;
+        var completion = new TaskCompletionSource<DeleteSummary>();
+        actions.DeleteHandler = (_, _) => completion.Task;
+        var context = new QueuedContext();
+        SynchronizationContext? previous = SynchronizationContext.Current;
+        Task<DeleteSummary> operation;
+        SynchronizationContext.SetSynchronizationContext(context);
+        try
+        {
+            operation = viewModel.DeleteSelectedAsync(TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(previous);
+        }
+        string initial = viewModel.DeleteProgressText;
+        await Task.Run(() => progress!.Report(new DeleteProgress(1, 1, "a.txt", 100)), TestContext.Current.CancellationToken);
+        Assert.Equal(initial, viewModel.DeleteProgressText);
+        SynchronizationContext.SetSynchronizationContext(context);
+        try
+        {
+            if (replaceSession)
+            {
+                store.SetResult(NewResult(NewGroup(2, "two", "c.txt", "d.txt")));
+            }
+            context.Drain();
+            Assert.Equal(replaceSession ? string.Empty : "1 of 1 files processed", viewModel.DeleteProgressText);
+            completion.SetResult(new DeleteSummary(0, 0, [], []));
+            context.Drain();
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(previous);
+        }
+        await operation;
+    }
+
+    private sealed class QueuedContext : SynchronizationContext
+    {
+        private readonly System.Collections.Concurrent.ConcurrentQueue<(SendOrPostCallback Callback, object? State)> _queue = new();
+
+        public override void Post(SendOrPostCallback callback, object? state) => _queue.Enqueue((callback, state));
+
+        public void Drain()
+        {
+            while (_queue.TryDequeue(out var item))
+            {
+                item.Callback(item.State);
+            }
+        }
+    }
+
+    [Fact]
     public void NewResults_SelectAllButNewestAndUndoRestoresEmptySelection()
     {
         var store = new ResultsStore();
@@ -29,6 +274,44 @@ public sealed class ResultsViewModelTests
 
         Assert.Equal(0, viewModel.SelectedFileCount);
         Assert.All(group.Files, static file => Assert.False(file.IsSelected));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ReloadDetachesSelectionHandlersFromEveryOldRow(bool emptyReplacement)
+    {
+        var store = new ResultsStore();
+        var actions = new FakeFileActionService();
+        var viewModel = NewViewModel(store, actions);
+        var oldRows = new List<DuplicateFileViewModel>();
+        for (int index = 0; index < 3; index++)
+        {
+            store.SetResult(NewResult(NewGroup((ulong)index, "old", "a.bin", "b.bin", "c.bin")));
+            oldRows.Add(viewModel.Groups[0].Files[0]);
+            viewModel.ExcludeFileCommand.Execute(viewModel.Groups[0].Files[0]);
+            oldRows.Add(viewModel.Groups[0].Files[0]);
+        }
+        store.SetResult(emptyReplacement ? NewResult() : NewResult(NewGroup(4, "current", "c.bin", "d.bin")));
+        int selectionNotifications = 0;
+        viewModel.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(ResultsViewModel.SelectedFileCount))
+            {
+                selectionNotifications++;
+            }
+        };
+
+        foreach (DuplicateFileViewModel row in oldRows)
+        {
+            row.IsSelected = false;
+        }
+
+        Assert.Equal(0, selectionNotifications);
+        Assert.Equal("Keep newest", viewModel.SelectionRuleText);
+        Assert.Equal(emptyReplacement ? 0 : 1, viewModel.SelectedFileCount);
+        Assert.Equal(0, actions.DeleteCallCount);
+        Assert.Equal(0, actions.MoveCallCount);
     }
 
     [Fact]
@@ -97,6 +380,89 @@ public sealed class ResultsViewModelTests
 
         Assert.True(group.Files[0].IsSelected);
         Assert.False(group.Files[1].IsSelected);
+    }
+
+    [Fact]
+    public void ReentrantSelectionChangingCannotSelectEveryMember()
+    {
+        var group = new DuplicateGroupViewModel(NewGroup(1, "files", "first.bin", "second.bin"));
+        group.Files[0].PropertyChanging += (_, args) =>
+        {
+            if (args.PropertyName == nameof(DuplicateFileViewModel.IsSelected))
+            {
+                group.Files[1].IsSelected = true;
+            }
+        };
+
+        group.Files[0].IsSelected = true;
+
+        Assert.Equal(1, group.SelectedCount);
+        Assert.True(group.Files[0].IsSelected);
+        Assert.False(group.Files[1].IsSelected);
+    }
+
+    [Fact]
+    public void ReentrantBulkSelectionCannotSelectTheChosenSurvivor()
+    {
+        var group = new DuplicateGroupViewModel(NewGroup(1, "files", "old.bin", "middle.bin", "new.bin"));
+        group.ApplyKeepNewest();
+        DuplicateFileViewModel survivor = group.Files[2];
+        group.Files[0].PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(DuplicateFileViewModel.IsSelected) && group.Files[0].IsSelected)
+            {
+                survivor.IsSelected = true;
+            }
+        };
+
+        group.ApplyKeepNewest();
+
+        Assert.False(survivor.IsSelected);
+        Assert.Equal(2, group.SelectedCount);
+    }
+
+    [Fact]
+    public void UndoSelectionNeverTemporarilySelectsEveryMember()
+    {
+        var store = new ResultsStore();
+        var viewModel = NewViewModel(store);
+        store.SetResult(NewResult(NewGroup(1, "files", "old.bin", "middle.bin", "new.bin")));
+        DuplicateGroupViewModel group = viewModel.Groups[0];
+        viewModel.AutoSelectKeepOldestCommand.Execute(null);
+        int maximumSelected = 0;
+        foreach (DuplicateFileViewModel file in group.Files)
+        {
+            file.PropertyChanged += (_, args) =>
+            {
+                if (args.PropertyName == nameof(DuplicateFileViewModel.IsSelected))
+                {
+                    maximumSelected = Math.Max(maximumSelected, group.SelectedCount);
+                }
+            };
+        }
+
+        viewModel.UndoSelectionCommand.Execute(null);
+
+        Assert.True(maximumSelected < group.Files.Count);
+        Assert.False(group.Files[2].IsSelected);
+    }
+
+    [Fact]
+    public void UndoAfterExcludingSnapshotSurvivorKeepsOneCurrentMember()
+    {
+        var store = new ResultsStore();
+        var viewModel = NewViewModel(store);
+        store.SetResult(NewResult(NewGroup(1, "files", "old.bin", "middle.bin", "new.bin")));
+        DuplicateGroupViewModel group = viewModel.Groups[0];
+        viewModel.AutoSelectKeepOldestCommand.Execute(null);
+        viewModel.ExcludeFileCommand.Execute(group.Files[2]);
+
+        viewModel.UndoSelectionCommand.Execute(null);
+
+        Assert.Equal(1, group.SelectedCount);
+        Assert.False(group.Files[1].IsSelected);
+        Assert.True(viewModel.CanDelete);
+        Assert.False(viewModel.CanUndoSelection);
     }
 
     [Fact]
@@ -292,6 +658,7 @@ public sealed class ResultsViewModelTests
         var viewModel = NewViewModel(store, fileActions);
         store.SetResult(NewResult(NewGroup(1, "one", "older.txt", "newest.txt")));
         DuplicateFileViewModel target = viewModel.Groups[0].Files[1];
+        DuplicateFileViewModel survivor = viewModel.Groups[0].Files[0];
         IReadOnlyList<FileActionTarget>? requestedTargets = null;
         fileActions.NextSummary = new DeleteSummary(1, target.SizeBytes, []);
         fileActions.OnDelete = (targets, _) => requestedTargets = targets;
@@ -303,9 +670,15 @@ public sealed class ResultsViewModelTests
         Assert.NotNull(requestedTargets);
         Assert.Collection(
             requestedTargets,
-            requested => Assert.Equal(
-                new FileActionTarget(target.FullPath, target.SizeBytes, FileActionTargetKind.File),
-                requested));
+            requested =>
+            {
+                Assert.Equal(target.FullPath, requested.FullPath);
+                Assert.Equal(target.SizeBytes, requested.SizeBytes);
+                Assert.Equal(FileActionTargetKind.File, requested.Kind);
+                Assert.Equal(target.File.ModifiedUtc, requested.ExpectedModifiedUtc);
+                Assert.Equal(new ExactFileConstraint(survivor.FullPath, survivor.SizeBytes, survivor.File.ModifiedUtc),
+                    Assert.Single(requested.ExpectedExactSurvivors!));
+            });
         Assert.Empty(viewModel.Groups);
     }
 
@@ -376,6 +749,76 @@ public sealed class ResultsViewModelTests
         Assert.Equal(0, viewModel.SelectedFileCount);
     }
 
+    [Theory]
+    [InlineData(2, false)]
+    [InlineData(2, true)]
+    [InlineData(3, false)]
+    [InlineData(3, true)]
+    public void ExclusionWithSearchAndPreviewPreservesCurrentSurvivorWithoutFileActions(int memberCount, bool excludeKeeper)
+    {
+        var store = new ResultsStore();
+        var actions = new FakeFileActionService();
+        var viewModel = NewViewModel(store, actions);
+        store.SetResult(NewResult(NewGroup(1, "files", "old.bin", "middle.bin", memberCount == 3 ? "new.bin" : null)));
+        DuplicateGroupViewModel group = Assert.Single(viewModel.Groups);
+        DuplicateFileViewModel excluded = excludeKeeper ? group.Files[^1] : group.Files[0];
+        viewModel.SearchText = "files";
+        viewModel.SelectedFile = excluded;
+        bool everyMemberSelected = false;
+        group.Files.CollectionChanged += (_, _) =>
+        {
+            everyMemberSelected |= group.Files.Count > 0 && group.SelectedCount == group.Files.Count;
+        };
+
+        viewModel.ExcludeFileCommand.Execute(excluded);
+
+        Assert.False(everyMemberSelected);
+        Assert.Null(viewModel.SelectedFile);
+        Assert.DoesNotContain(group.Files, file => file.FullPath == excluded.FullPath);
+        Assert.Equal(memberCount == 3 ? 1 : 0, viewModel.GroupCount);
+        Assert.Equal(memberCount == 3 ? 1 : 0, viewModel.SelectedFileCount);
+        Assert.Equal(memberCount == 3 ? 100 : 0, viewModel.SelectedBytes);
+        if (memberCount == 3)
+        {
+            Assert.Same(group, Assert.Single(viewModel.Groups));
+            Assert.False(group.Files[^1].IsSelected);
+            Assert.True(viewModel.CanDelete);
+        }
+        else
+        {
+            Assert.Empty(viewModel.Groups);
+            Assert.False(viewModel.CanDelete);
+        }
+        Assert.Equal(0, actions.DeleteCallCount);
+        Assert.Equal(0, actions.MoveCallCount);
+        Assert.Equal(0, actions.RenameCallCount);
+    }
+
+    [Theory]
+    [InlineData(2, false)]
+    [InlineData(2, true)]
+    [InlineData(3, false)]
+    [InlineData(3, true)]
+    public void ExclusionKeepsPreviewOnlyWhileItsUntouchedRowRemainsCanonical(int memberCount, bool excludeKeeper)
+    {
+        var store = new ResultsStore();
+        var actions = new FakeFileActionService();
+        var viewModel = NewViewModel(store, actions);
+        store.SetResult(NewResult(NewGroup(1, "files", "old.bin", "middle.bin", memberCount == 3 ? "new.bin" : null)));
+        DuplicateGroupViewModel group = Assert.Single(viewModel.Groups);
+        DuplicateFileViewModel excluded = excludeKeeper ? group.Files[^1] : group.Files[0];
+        DuplicateFileViewModel previewed = group.Files.First(file => file != excluded);
+        viewModel.SelectedFile = previewed;
+        viewModel.SearchText = "no matching group";
+
+        viewModel.ExcludeFileCommand.Execute(excluded);
+
+        Assert.Equal(memberCount == 3 ? previewed : null, viewModel.SelectedFile);
+        Assert.Equal(memberCount == 3 ? 1 : 0, viewModel.GroupCount);
+        Assert.Equal(0, actions.DeleteCallCount);
+        Assert.Equal(0, actions.MoveCallCount);
+    }
+
     [Fact]
     public async Task DeleteSelectedAsync_ReportsProgressAndFailureDetails()
     {
@@ -406,6 +849,24 @@ public sealed class ResultsViewModelTests
         Assert.Equal(100, viewModel.DeleteProgressValue);
         Assert.Contains(failed.FullPath, viewModel.DeleteFailureDetailsText);
         Assert.Contains("Access denied", viewModel.DeleteFailureDetailsText);
+    }
+
+    [Fact]
+    public void EmptyResultTextDistinguishesAnEmptyScanFromExcludedDuplicateGroups()
+    {
+        var store = new ResultsStore();
+        var viewModel = NewViewModel(store);
+        store.SetResult(NewResult());
+        Assert.Equal("No duplicates found", viewModel.EmptyResultsTitle);
+        Assert.Equal("No byte-identical duplicate groups were found in this scan.", viewModel.EmptyResultsDescription);
+
+        store.SetResult(NewResult(NewGroup(1, "files", "a.bin", "b.bin")));
+        viewModel.ExcludeFileCommand.Execute(viewModel.Groups[0].Files[0]);
+
+        Assert.Equal(Visibility.Visible, viewModel.NoDuplicatesVisibility);
+        Assert.Equal("No duplicate groups remain", viewModel.EmptyResultsTitle);
+        Assert.Equal("All groups have been removed from these results.", viewModel.EmptyResultsDescription);
+        Assert.True(viewModel.CanStartNewScan);
     }
 
     [Fact]
@@ -507,6 +968,7 @@ public sealed class ResultsViewModelTests
         store.SetResult(NewResult(NewGroup(1, "one", "keep.txt", "move.txt")));
         viewModel.ClearSelectionCommand.Execute(null);
         DuplicateFileViewModel selected = viewModel.Groups[0].Files[1];
+        DuplicateFileViewModel survivor = viewModel.Groups[0].Files[0];
         selected.IsSelected = true;
         IReadOnlyList<FileActionTarget>? requestedTargets = null;
         fileActions.OnMove = (targets, destination, behavior, _) =>
@@ -525,9 +987,13 @@ public sealed class ResultsViewModelTests
             CancellationToken.None);
 
         Assert.Same(fileActions.NextMoveSummary, summary);
-        Assert.Equal(
-            [new FileActionTarget(selected.FullPath, selected.SizeBytes, FileActionTargetKind.File)],
-            requestedTargets);
+        FileActionTarget requested = Assert.Single(requestedTargets!);
+        Assert.Equal(selected.FullPath, requested.FullPath);
+        Assert.Equal(selected.SizeBytes, requested.SizeBytes);
+        Assert.Equal(FileActionTargetKind.File, requested.Kind);
+        Assert.Equal(selected.File.ModifiedUtc, requested.ExpectedModifiedUtc);
+        Assert.Equal(new ExactFileConstraint(survivor.FullPath, survivor.SizeBytes, survivor.File.ModifiedUtc),
+            Assert.Single(requested.ExpectedExactSurvivors!));
         Assert.Empty(viewModel.Groups);
     }
 

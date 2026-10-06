@@ -141,6 +141,26 @@ public sealed class MainWindowOperationGuardTests
         Assert.Null(coordinator.ActiveOperation);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ConfirmCloseAsync_ReplacementOperationRejectsStaleConfirmation(bool accepted)
+    {
+        var coordinator = new AppOperationCoordinator();
+        using var guard = new MainWindowOperationGuard(coordinator);
+        using IAppOperationLease firstLease = Acquire(coordinator, AppOperationKind.ExactScan, static () => { });
+        var promptResult = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<bool> close = guard.ConfirmCloseAsync(() => promptResult.Task);
+        firstLease.Dispose();
+        int cancellationCount = 0;
+        using IAppOperationLease replacement = Acquire(coordinator, AppOperationKind.ExifCleaning, () => cancellationCount++);
+        promptResult.SetResult(accepted);
+
+        Assert.False(await close);
+        Assert.Equal(0, cancellationCount);
+        Assert.NotNull(coordinator.ActiveOperation);
+    }
+
     [Fact]
     public async Task NoActiveOperationAllowsDepartureAndCloseWithoutPrompt()
     {

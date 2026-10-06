@@ -383,7 +383,7 @@ public sealed class ExifRemoverViewModelTests
         pathScope ??= new PathScopeViewModel();
         if (!pathScope.HasIncludedPaths)
         {
-            pathScope.AddFolder("C:\\ExifScope");
+            pathScope.IncludedPaths.Add(new ScopePathViewModel("C:\\ExifScope", Duplicates.Models.ScopePathKind.Folder));
         }
 
         return new ExifRemoverViewModel(
@@ -466,7 +466,8 @@ public sealed class ExifRemoverViewModelTests
         public Task<DeleteSummary> DeleteAsync(
             IReadOnlyList<FileActionTarget> targets,
             IProgress<DeleteProgress>? progress,
-            CancellationToken cancellationToken) => throw new NotSupportedException();
+            CancellationToken cancellationToken,
+            DeletionMode? deletionMode = null) => throw new NotSupportedException();
 
         public Task<FileOperationSummary> MoveAsync(
             IReadOnlyList<FileActionTarget> targets,

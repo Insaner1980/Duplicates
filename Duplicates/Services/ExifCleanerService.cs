@@ -450,7 +450,7 @@ public sealed class ExifCleanerService : IExifCleanerService
                     rollback,
                     cleaned,
                     ExifCleanOutcome.Failed,
-                    "The original image could not be recycled. The original was restored.",
+                    "The original image could not be recycled.",
                     cancellationToken);
             }
 
@@ -486,7 +486,7 @@ public sealed class ExifCleanerService : IExifCleanerService
                 rollback,
                 cleaned,
                 ExifCleanOutcome.Failed,
-                "The replacement transaction failed. The original was restored.",
+                "The replacement transaction failed.",
                 cancellationToken);
         }
     }
@@ -513,7 +513,7 @@ public sealed class ExifCleanerService : IExifCleanerService
                 {
                     return RecoveryRequired(
                         sourcePath,
-                        "The cleaned replacement could not be moved aside safely.",
+                        $"{detail} The cleaned replacement could not be moved aside safely.",
                         [sourcePath, rollbackPath, asidePath]);
                 }
 
@@ -528,7 +528,7 @@ public sealed class ExifCleanerService : IExifCleanerService
                 {
                     return RecoveryRequired(
                         sourcePath,
-                        "The original image could not be restored safely.",
+                        $"{detail} The original image could not be restored safely.",
                         [sourcePath, rollbackPath, cleaned.Path]);
                 }
 
@@ -537,7 +537,7 @@ public sealed class ExifCleanerService : IExifCleanerService
                 {
                     return RecoveryRequired(
                         sourcePath,
-                        "The original image could not be restored safely.",
+                        $"{detail} The original image could not be restored safely.",
                         [sourcePath, rollbackPath, cleaned.Path]);
                 }
 
@@ -549,16 +549,20 @@ public sealed class ExifCleanerService : IExifCleanerService
             {
                 return RecoveryRequired(
                     sourcePath,
-                    "The original image could not be restored safely.",
+                    $"{detail} The original image could not be restored safely.",
                     [sourcePath, rollbackPath, cleaned.Path]);
             }
 
-            ExifCleanResult cleanup = CleanupOrRecovery(safeOutcome, sourcePath, detail, cleaned);
+            ExifCleanResult cleanup = CleanupOrRecovery(
+                safeOutcome,
+                sourcePath,
+                $"{detail} The original was restored.",
+                cleaned);
             if (cleanup.Outcome == ExifCleanOutcome.RecoveryRequired)
             {
                 return RecoveryRequired(
                     sourcePath,
-                    cleanup.Detail,
+                    $"{detail} The original was restored. {cleanup.Detail}",
                     [sourcePath, rollbackPath, asidePath ?? cleaned.Path]);
             }
 
@@ -573,7 +577,7 @@ public sealed class ExifCleanerService : IExifCleanerService
         {
             return RecoveryRequired(
                 sourcePath,
-                "The original image could not be restored safely.",
+                $"{detail} The original image could not be restored safely.",
                 [sourcePath, rollbackPath, asidePath ?? cleaned.Path]);
         }
     }

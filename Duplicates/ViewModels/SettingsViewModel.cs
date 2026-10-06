@@ -12,6 +12,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     private readonly IMediaFingerprintCacheControl? _cacheControl;
     private readonly IAppOperationCoordinator? _operationCoordinator;
     private bool _isLoading;
+    private long _saveRevision;
 
     public SettingsViewModel(ISettingsService settingsService)
     {
@@ -201,9 +202,14 @@ public sealed partial class SettingsViewModel : ObservableObject
         {
             await _cacheControl.ClearAsync(CancellationToken.None);
             await RefreshCacheStatusAsync();
+            if (SettingsInfoMessage == "Could not clear media cache.")
+            {
+                SettingsInfoMessage = string.Empty;
+            }
         }
         catch (Exception)
         {
+            await RefreshCacheStatusAsync();
             SettingsInfoSeverity = Microsoft.UI.Xaml.Controls.InfoBarSeverity.Error;
             SettingsInfoMessage = "Could not clear media cache.";
         }
@@ -267,7 +273,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         }
 
         AppSettings snapshot = CaptureSettingsSnapshot();
-        _ = SaveAndObserveAsync(snapshot);
+        _ = SaveAndObserveAsync(snapshot, ++_saveRevision);
     }
 
     private AppSettings CaptureSettingsSnapshot()
@@ -314,16 +320,24 @@ public sealed partial class SettingsViewModel : ObservableObject
         };
     }
 
-    private async Task SaveAndObserveAsync(AppSettings snapshot)
+    private async Task SaveAndObserveAsync(AppSettings snapshot, long revision)
     {
         try
         {
             await _settingsService.SaveAsync(snapshot);
+            if (revision == _saveRevision && SettingsInfoMessage == "Could not save settings.")
+            {
+                SettingsInfoMessage = string.Empty;
+                SettingsInfoSeverity = Microsoft.UI.Xaml.Controls.InfoBarSeverity.Informational;
+            }
         }
         catch (Exception)
         {
-            SettingsInfoSeverity = Microsoft.UI.Xaml.Controls.InfoBarSeverity.Error;
-            SettingsInfoMessage = "Could not save settings.";
+            if (revision == _saveRevision)
+            {
+                SettingsInfoSeverity = Microsoft.UI.Xaml.Controls.InfoBarSeverity.Error;
+                SettingsInfoMessage = "Could not save settings.";
+            }
         }
     }
 

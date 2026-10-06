@@ -1,4 +1,3 @@
-using Windows.Foundation;
 using Windows.Media.MediaProperties;
 using Windows.Media.Transcoding;
 using Windows.Storage;
@@ -54,15 +53,11 @@ internal sealed class WindowsVideoTranscodeBackend : IVideoTranscodeBackend
                 return preparationResult;
             }
 
-            IAsyncActionWithProgress<double> operation = preparation.TranscodeAsync();
-            try
-            {
-                await operation.AsTask(cancellationToken, progress).ConfigureAwait(false);
-            }
-            finally
-            {
-                operation.Close();
-            }
+            await WinRtAsync.AwaitAndCloseAsync(
+                    preparation.TranscodeAsync(),
+                    progress,
+                    cancellationToken)
+                .ConfigureAwait(false);
 
             return new VideoTranscodeBackendResult(
                 VideoTranscodeBackendOutcome.Succeeded,

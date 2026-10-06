@@ -162,7 +162,7 @@ public sealed class VideoOptimizerViewModelTests
                     viewModel!.Preset = VideoOptimizationPreset.Smaller;
                     viewModel.HardwareAccelerationEnabled = false;
                     viewModel.KeepOutputWhenNotSmaller = true;
-                    viewModel.PathScope.AddFile("C:\\Media\\late.mp4");
+                    viewModel.PathScope.IncludedPaths.Add(new ScopePathViewModel("C:\\Media\\late.mp4", Duplicates.Models.ScopePathKind.File));
                 }
 
                 progress?.Report(100);
@@ -537,7 +537,7 @@ public sealed class VideoOptimizerViewModelTests
         pathScope ??= new PathScopeViewModel();
         if (!pathScope.HasIncludedPaths)
         {
-            pathScope.AddFolder("C:\\VideoScope");
+            pathScope.IncludedPaths.Add(new ScopePathViewModel("C:\\VideoScope", Duplicates.Models.ScopePathKind.Folder));
         }
 
         return new VideoOptimizerViewModel(
@@ -663,7 +663,8 @@ public sealed class VideoOptimizerViewModelTests
         public Task<DeleteSummary> DeleteAsync(
             IReadOnlyList<FileActionTarget> targets,
             IProgress<DeleteProgress>? progress,
-            CancellationToken cancellationToken) => throw new NotSupportedException();
+            CancellationToken cancellationToken,
+            DeletionMode? deletionMode = null) => throw new NotSupportedException();
 
         public Task<FileOperationSummary> MoveAsync(
             IReadOnlyList<FileActionTarget> targets,

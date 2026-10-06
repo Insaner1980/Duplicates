@@ -66,6 +66,52 @@ public sealed class SettingsViewModelTests
         Assert.Equal("Could not save settings.", viewModel.SettingsInfoMessage);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void LatestSuccessfulSaveClearsPriorErrorAndIgnoresDelayedOlderFailure(
+        bool failBeforeLatestRequest)
+    {
+        var older = new TaskCompletionSource();
+        var newer = new TaskCompletionSource();
+        int requestCount = 0;
+        var settings = new FakeSettingsService
+        {
+            SaveHandler = (_, _) => ++requestCount == 1 ? older.Task : newer.Task,
+        };
+        var viewModel = new SettingsViewModel(settings);
+        SynchronizationContext? previous = SynchronizationContext.Current;
+        SynchronizationContext.SetSynchronizationContext(null);
+        try
+        {
+            viewModel.ConfirmBeforeDelete = false;
+            if (failBeforeLatestRequest)
+            {
+                older.SetException(new IOException("Earlier save failure."));
+                Assert.True(viewModel.IsSettingsInfoOpen);
+            }
+
+            viewModel.IgnoreHiddenFiles = false;
+            AppSettings latest = settings.SavedSettings[1];
+            settings.SetCurrent(latest);
+            newer.SetResult();
+            if (!failBeforeLatestRequest)
+            {
+                older.SetException(new IOException("Delayed earlier save failure."));
+            }
+
+            Assert.False(viewModel.IsSettingsInfoOpen);
+            Assert.Equal(latest, settings.Current);
+            Assert.False(viewModel.ConfirmBeforeDelete);
+            Assert.False(viewModel.IgnoreHiddenFiles);
+            Assert.Equal(2, requestCount);
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(previous);
+        }
+    }
+
     [Fact]
     public void ConstructorAcceptsSharedCacheControlAndCoordinator()
     {
@@ -141,6 +187,42 @@ public sealed class SettingsViewModelTests
         Assert.Equal(1, cache.ClearCallCount);
         Assert.Equal("Could not clear media cache.", viewModel.SettingsInfoMessage);
         Assert.False(viewModel.IsClearingCache);
+    }
+
+    [Fact]
+    public async Task FailedClearRefreshesTheActualCacheStateAndRemainsRetryable()
+    {
+        string path = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "failed-clear-cache.json"));
+        var cache = new FakeCacheControl
+        {
+            Status = new MediaFingerprintCacheStatus(3, 4096, path),
+        };
+        var viewModel = new SettingsViewModel(
+            new FakeSettingsService(), cache, new AppOperationCoordinator());
+        await viewModel.RefreshCacheStatusAsync();
+        cache.ClearHandler = _ =>
+        {
+            cache.Status = new MediaFingerprintCacheStatus(0, 4096, path);
+            throw new IOException("Injected final document deletion failure.");
+        };
+
+        await viewModel.ClearCacheCommand.ExecuteAsync(null);
+
+        Assert.Equal("0 cached items, 4 KB", viewModel.CacheStatusText);
+        Assert.Equal(path, viewModel.CachePath);
+        Assert.Equal("Could not clear media cache.", viewModel.SettingsInfoMessage);
+        Assert.False(viewModel.IsClearingCache);
+        Assert.True(viewModel.ClearCacheCommand.CanExecute(null));
+
+        cache.ClearHandler = _ =>
+        {
+            cache.Status = new MediaFingerprintCacheStatus(0, 0, path);
+            return Task.CompletedTask;
+        };
+        await viewModel.ClearCacheCommand.ExecuteAsync(null);
+        Assert.Equal("0 cached items, 0 B", viewModel.CacheStatusText);
+        Assert.Equal(2, cache.ClearCallCount);
+        Assert.False(viewModel.IsSettingsInfoOpen);
     }
 
     [Fact]

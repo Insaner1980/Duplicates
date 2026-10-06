@@ -201,7 +201,13 @@ public sealed partial class AnalysisViewModel : ObservableObject
 
         try
         {
-            var progress = new Progress<AnalysisProgress>(UpdateProgress);
+            var progress = new Progress<AnalysisProgress>(value =>
+            {
+                if (ReferenceEquals(_analysisCancellation, cancellation) && !cancellation.IsCancellationRequested)
+                {
+                    UpdateProgress(value);
+                }
+            });
             AnalysisResult result = await _analysisService.RunAsync(
                 tool,
                 scope,
@@ -210,6 +216,7 @@ public sealed partial class AnalysisViewModel : ObservableObject
                 progress,
                 cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
+            PhaseText = "Done";
             completedResult = result;
         }
         catch (OperationCanceledException)

@@ -138,10 +138,15 @@ public sealed class WindowsMediaProviderTests : IDisposable
         Assert.Equal(length, new FileInfo(path).Length);
     }
 
-    [Fact]
-    public async Task MediaPreviewLoader_DecodesCanonicalImageItemCapsItAt512AndReleasesTheSource()
+    [Theory]
+    [InlineData(1024, 256, 512, 128)]
+    [InlineData(256, 1024, 128, 512)]
+    [InlineData(2, 1, 2, 1)]
+    [InlineData(1, 2, 1, 2)]
+    public async Task MediaPreviewLoader_DecodesCanonicalImageItemCapsItAt512AndReleasesTheSource(
+        int width, int height, int expectedWidth, int expectedHeight)
     {
-        string path = await WriteSolidImageAsync("preview.png", width: 1024, height: 256);
+        string path = await WriteSolidImageAsync("preview.png", checked((uint)width), checked((uint)height));
         var info = new FileInfo(path);
         SimilarityItem item = new()
         {
@@ -149,7 +154,7 @@ public sealed class WindowsMediaProviderTests : IDisposable
             SizeBytes = info.Length,
             ModifiedUtc = info.LastWriteTimeUtc,
             SimilarityPercent = 100,
-            Evidence = new ImageSimilarityEvidence(0, 1024, 256, "PNG"),
+            Evidence = new ImageSimilarityEvidence(0, width, height, "PNG"),
         };
 
         MediaPreviewData preview = await new WindowsMediaPreviewLoader().LoadAsync(
@@ -157,9 +162,9 @@ public sealed class WindowsMediaProviderTests : IDisposable
             item,
             CancellationToken.None);
 
-        Assert.Equal(512, preview.Width);
-        Assert.Equal(128, preview.Height);
-        Assert.Equal(512 * 128 * 4, preview.Bgra8.Length);
+        Assert.Equal(expectedWidth, preview.Width);
+        Assert.Equal(expectedHeight, preview.Height);
+        Assert.Equal(expectedWidth * expectedHeight * 4, preview.Bgra8.Length);
         MoveAwayAndBack(path);
         await File.WriteAllBytesAsync(path, new byte[info.Length], TestContext.Current.CancellationToken);
     }

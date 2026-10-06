@@ -10,6 +10,64 @@ namespace Duplicates.App.Tests;
 
 public sealed class AnalysisViewModelTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task QueuedProgressFromFinishedRunCannotOverwriteReplacementRun(bool cancelFirstRun)
+    {
+        AnalysisViewModel? viewModel = null;
+        var release = new TaskCompletionSource<AnalysisResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        int calls = 0;
+        var service = new FakeAnalysisService
+        {
+            Run = (_, _, _, progress, _) =>
+            {
+                if (++calls == 2)
+                {
+                    return release.Task;
+                }
+
+                progress!.Report(new AnalysisProgress(AnalysisPhase.Done, 5, 5, 10, 10, "old path"));
+                if (cancelFirstRun)
+                {
+                    viewModel!.CancelAnalysisCommand.Execute(null);
+                }
+
+                return Task.FromResult(NewResult());
+            },
+        };
+        viewModel = new AnalysisViewModel(service, new AnalysisSessionStore(), NewScope());
+        var context = new QueuedAnalysisProgressContext();
+        SynchronizationContext? previous = SynchronizationContext.Current;
+        Task first;
+        SynchronizationContext.SetSynchronizationContext(context);
+        try
+        {
+            first = viewModel.StartAnalysisCommand.ExecuteAsync(null);
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(previous);
+        }
+
+        await first;
+        Task second = viewModel.StartAnalysisCommand.ExecuteAsync(null);
+        viewModel.PhaseText = "Replacement run";
+        viewModel.CurrentPath = "new path";
+        try
+        {
+            Assert.True(context.HasProgress);
+            context.DrainProgress();
+            Assert.Equal("Replacement run", viewModel.PhaseText);
+            Assert.Equal("new path", viewModel.CurrentPath);
+        }
+        finally
+        {
+            release.TrySetResult(NewResult());
+            await second;
+        }
+    }
+
     [Fact]
     public void ConstructorAcceptsSettingsForRunSnapshotsAndIdleDefaults()
     {
@@ -88,13 +146,13 @@ public sealed class AnalysisViewModelTests
     [Fact]
     public async Task SuccessfulRunMovesFromSetupThroughProgressToStoredResults()
     {
+        var release = new TaskCompletionSource<AnalysisResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         var service = new FakeAnalysisService
         {
             Run = async (_, _, _, progress, _) =>
             {
                 progress?.Report(new AnalysisProgress(AnalysisPhase.Inspecting, 12, 5, 40, 100, @"C:\scan\current.tmp"));
-                await Task.Delay(20);
-                return NewResult([NewFinding(@"C:\scan\old.tmp", 25)]);
+                return await release.Task;
             },
         };
         var store = new AnalysisSessionStore();
@@ -104,12 +162,20 @@ public sealed class AnalysisViewModelTests
 
         Task run = viewModel.StartAnalysisCommand.ExecuteAsync(null);
 
-        Assert.True(SpinWait.SpinUntil(() => viewModel.IsAnalyzing, TimeSpan.FromSeconds(1)));
-        Assert.Equal(Visibility.Collapsed, viewModel.SetupVisibility);
-        Assert.Equal(Visibility.Visible, viewModel.ProgressVisibility);
-        Assert.True(SpinWait.SpinUntil(() => viewModel.CurrentPath == @"C:\scan\current.tmp", TimeSpan.FromSeconds(1)));
-
-        await run;
+        try
+        {
+            Assert.True(viewModel.IsAnalyzing);
+            Assert.Equal(Visibility.Collapsed, viewModel.SetupVisibility);
+            Assert.Equal(Visibility.Visible, viewModel.ProgressVisibility);
+            Assert.True(SpinWait.SpinUntil(() => viewModel.CurrentPath == @"C:\scan\current.tmp", TimeSpan.FromSeconds(1)));
+            Assert.False(run.IsCompleted);
+            Assert.Null(store.CurrentSession);
+        }
+        finally
+        {
+            release.TrySetResult(NewResult([NewFinding(@"C:\scan\old.tmp", 25)]));
+            await run;
+        }
 
         AnalysisSession session = Assert.IsType<AnalysisSession>(store.CurrentSession);
         Assert.Equal(ToolKind.TemporaryFiles, session.Tool);
@@ -687,9 +753,9 @@ public sealed class AnalysisViewModelTests
             IgnoreHiddenFiles = false,
             IgnoreSystemFiles = true,
         };
-        Assert.True(scope.AddFolder(@"C:\scan"));
-        Assert.True(scope.AddFile(@"C:\scan\single.txt"));
-        Assert.True(scope.ExcludePath(@"C:\scan\excluded"));
+        scope.IncludedPaths.Add(new ScopePathViewModel(@"C:\scan", ScopePathKind.Folder));
+        scope.IncludedPaths.Add(new ScopePathViewModel(@"C:\scan\single.txt", ScopePathKind.File));
+        scope.ExcludedPaths.Add(new ScopePathViewModel(@"C:\scan\excluded", ScopePathKind.Folder));
         return scope;
     }
 
@@ -765,5 +831,22 @@ public sealed class AnalysisViewModelTests
     private sealed class CapturingProgress<T>(Action<T> report) : IProgress<T>
     {
         public void Report(T value) => report(value);
+    }
+
+    private sealed class QueuedAnalysisProgressContext : SynchronizationContext
+    {
+        private readonly Queue<(SendOrPostCallback Callback, object? State)> _progress = new();
+
+        public bool HasProgress => _progress.Count > 0;
+
+        public override void Post(SendOrPostCallback callback, object? state) => _progress.Enqueue((callback, state));
+
+        public void DrainProgress()
+        {
+            while (_progress.TryDequeue(out var item))
+            {
+                item.Callback(item.State);
+            }
+        }
     }
 }

@@ -11,6 +11,135 @@ namespace Duplicates.App.Tests;
 
 public sealed class AnalysisResultsViewModelTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task TemporaryFileActionRejectsFreshTimestampAtServiceBoundary(bool move)
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates.Temporary.{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string path = Path.Combine(root, "cache.tmp");
+        File.WriteAllBytes(path, [1]);
+        DateTime utcNow = new(2026, 8, 14, 12, 0, 0, DateTimeKind.Utc);
+        File.SetLastWriteTimeUtc(path, utcNow.AddDays(-7));
+        try
+        {
+            int nativeCalls = 0;
+            var native = new FileActionService(new FakeSettingsService(), (_, _) => nativeCalls++, (_, _) => nativeCalls++);
+            var actions = new FakeFileActionService
+            {
+                DeleteHandler = (targets, token) =>
+                {
+                    File.SetLastWriteTimeUtc(path, utcNow);
+                    return native.DeleteAsync(targets, null, token);
+                },
+                MoveHandler = (targets, destination, collision, token) =>
+                {
+                    File.SetLastWriteTimeUtc(path, utcNow);
+                    return native.MoveAsync(targets, destination, collision, null, token);
+                },
+            };
+            var store = new AnalysisSessionStore();
+            var viewModel = new AnalysisResultsViewModel(store, actions, null);
+            store.SetCompleted(ToolKind.TemporaryFiles, new AnalysisScope(),
+                new TemporaryFileToolOptions(TimeSpan.FromDays(7), utcNow), NewResult([NewFinding(path, 1)]));
+            viewModel.Findings[0].IsSelected = true;
+
+            if (move)
+            {
+                FileOperationSummary summary = await viewModel.MoveSelectedAsync(root, MoveCollisionBehavior.KeepBoth, CancellationToken.None);
+                Assert.NotNull(Assert.Single(summary.Results).Failure);
+            }
+            else
+            {
+                DeleteSummary summary = await viewModel.DeleteSelectedAsync(CancellationToken.None);
+                Assert.Single(summary.Failures);
+            }
+
+            Assert.Equal(0, nativeCalls);
+            Assert.True(File.Exists(path));
+            Assert.True(Assert.Single(viewModel.Findings).IsSelected);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task CancellationWithoutItemSummarySetsStatusOnlyForInitiatingSession(bool move, bool replaceSession)
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates.Cancellation.{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        string path = Path.Combine(root, "file.bin");
+        File.WriteAllBytes(path, [1]);
+        try
+        {
+            var store = new AnalysisSessionStore();
+            var actions = new FakeFileActionService();
+            var viewModel = new AnalysisResultsViewModel(store, actions, null);
+            void Cancel()
+            {
+                if (replaceSession)
+                {
+                    store.SetCompleted(ToolKind.EmptyFiles, new AnalysisScope(), NewResult());
+                    viewModel.ActionStatusMessage = "Replacement status";
+                }
+
+                throw new OperationCanceledException();
+            }
+
+            actions.DeleteHandler = (_, _) => { Cancel(); return Task.FromResult(new DeleteSummary(0, 0, [])); };
+            actions.MoveHandler = (_, _, _, _) => { Cancel(); return Task.FromResult(new FileOperationSummary([], 0)); };
+            store.SetCompleted(ToolKind.BigFiles, new AnalysisScope(), new LargeFileToolOptions(0),
+                NewResult([NewFinding(path, 1)]));
+            viewModel.Findings[0].IsSelected = true;
+
+            await Assert.ThrowsAsync<OperationCanceledException>(async () =>
+            {
+                if (move)
+                {
+                    await viewModel.MoveSelectedAsync(root, MoveCollisionBehavior.Skip, CancellationToken.None);
+                }
+                else
+                {
+                    await viewModel.DeleteSelectedAsync(CancellationToken.None);
+                }
+            });
+
+            Assert.Equal(replaceSession ? "Replacement status" : "Action cancelled.", viewModel.ActionStatusMessage);
+            Assert.False(viewModel.IsActionRunning);
+            Assert.True(File.Exists(path));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("File renamed.")]
+    [InlineData("Results exported.")]
+    [InlineData("The operation failed.")]
+    public void DelayedActionStatusTargetsOnlyItsCapturedSession(string status)
+    {
+        var store = new AnalysisSessionStore();
+        var viewModel = new AnalysisResultsViewModel(store);
+        store.SetCompleted(ToolKind.BadNames, new AnalysisScope(), NewResult());
+        AnalysisSession initiating = store.CurrentSession!;
+        viewModel.SetActionStatusForSession(initiating, status);
+        Assert.Equal(status, viewModel.ActionStatusMessage);
+
+        store.SetCompleted(ToolKind.BigFiles, new AnalysisScope(), NewResult());
+        viewModel.ActionStatusMessage = "Replacement status";
+        viewModel.SetActionStatusForSession(initiating, status);
+        Assert.Equal("Replacement status", viewModel.ActionStatusMessage);
+    }
+
     public static TheoryData<Type> HeaderReadFailureTypes => new()
     {
         typeof(IOException),
@@ -736,7 +865,8 @@ public sealed class AnalysisResultsViewModelTests
             DeleteSummary summary = await viewModel.DeleteSelectedAsync(CancellationToken.None);
 
             Assert.Same(options, Assert.IsType<AnalysisSession>(store.CurrentSession).ToolOptions);
-            Assert.Equal([new FileActionTarget(path, 12, FileActionTargetKind.File)], requestedTargets);
+            Assert.Equal([new FileActionTarget(path, 12, FileActionTargetKind.File,
+                ExpectedModifiedUtc: utcNow.AddDays(-7))], requestedTargets);
             Assert.Equal(1, summary.DeletedCount);
             Assert.Empty(viewModel.Findings);
         }
@@ -2669,7 +2799,8 @@ public sealed class AnalysisResultsViewModelTests
         public Task<DeleteSummary> DeleteAsync(
             IReadOnlyList<FileActionTarget> targets,
             IProgress<DeleteProgress>? progress,
-            CancellationToken cancellationToken) => throw new NotSupportedException();
+            CancellationToken cancellationToken,
+            DeletionMode? deletionMode = null) => throw new NotSupportedException();
 
         public Task<FileOperationSummary> MoveAsync(
             IReadOnlyList<FileActionTarget> targets,

@@ -7,7 +7,8 @@ public interface IFileActionService
     Task<DeleteSummary> DeleteAsync(
         IReadOnlyList<FileActionTarget> targets,
         IProgress<DeleteProgress>? progress,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken,
+        DeletionMode? deletionMode = null);
 
     Task<FileOperationSummary> MoveAsync(
         IReadOnlyList<FileActionTarget> targets,

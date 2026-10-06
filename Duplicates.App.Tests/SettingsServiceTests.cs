@@ -254,6 +254,61 @@ public sealed class SettingsServiceTests
         }
     }
 
+    [Fact]
+    public async Task TemporaryCleanupFailureIsObservedAndReleasesWriteGate()
+    {
+        string directory = CreateTemporaryDirectory();
+        FileStream? lockedTemporary = null;
+        try
+        {
+            string path = Path.Combine(directory, "settings.json");
+            var initial = new AppSettings { DefaultMinSizeBytes = 10 };
+            string original = System.Text.Json.JsonSerializer.Serialize(initial);
+            await File.WriteAllTextAsync(path, original, TestContext.Current.CancellationToken);
+            var atCommit = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var service = new SettingsService(path, async (revision, temporaryPath, _) =>
+            {
+                if (revision == 1)
+                {
+                    lockedTemporary = File.Open(temporaryPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+                    atCommit.SetResult();
+                    await release.Task;
+                }
+            });
+            await service.LoadAsync();
+            int eventCount = 0;
+            service.SettingsChanged += (_, _) => eventCount++;
+
+            Task older = service.SaveAsync(
+                initial with { DefaultMinSizeBytes = 20 }, TestContext.Current.CancellationToken);
+            await atCommit.Task.WaitAsync(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken);
+            using var cancellation = new CancellationTokenSource();
+            cancellation.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.SaveAsync(
+                initial with { DefaultMinSizeBytes = 30 }, cancellation.Token));
+            release.SetResult();
+
+            await Assert.ThrowsAsync<IOException>(() => older);
+            Assert.Equal(original, await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken));
+            Assert.Equal(initial, service.Current);
+            Assert.Equal(0, eventCount);
+
+            lockedTemporary!.Dispose();
+            lockedTemporary = null;
+            await service.SaveAsync(
+                    initial with { DefaultMinSizeBytes = 40 }, TestContext.Current.CancellationToken)
+                .WaitAsync(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken);
+            Assert.Equal(40, service.Current.DefaultMinSizeBytes);
+            Assert.Equal(1, eventCount);
+        }
+        finally
+        {
+            lockedTemporary?.Dispose();
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static string CreateTemporaryDirectory()
     {
         string path = Path.Combine(Path.GetTempPath(), "Duplicates.SettingsTests", Guid.NewGuid().ToString("N"));

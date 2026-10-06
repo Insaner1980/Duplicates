@@ -8,6 +8,24 @@ namespace Duplicates.App.Tests;
 
 public sealed class AnalysisServiceTests : IDisposable
 {
+    [Theory]
+    [InlineData(ToolKind.BigFiles, false)]
+    [InlineData(ToolKind.TemporaryFiles, false)]
+    [InlineData(ToolKind.TemporaryFiles, true)]
+    public async Task InvalidStorageOptionsFailBeforeInventory(ToolKind tool, bool overflowingAge)
+    {
+        ToolOptions options = tool == ToolKind.BigFiles
+            ? new LargeFileToolOptions(-1)
+            : new TemporaryFileToolOptions(overflowingAge ? TimeSpan.MaxValue : TimeSpan.FromDays(-1), DateTime.UtcNow);
+        var reports = new List<AnalysisProgress>();
+
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => new AnalysisService().RunAsync(
+            tool, new AnalysisScope { IncludedFolders = [Path.Combine(_root, "missing")] }, options,
+            new RecordingProgress(reports), CancellationToken.None));
+
+        Assert.Empty(reports);
+    }
+
     private readonly string _root = Path.Combine(
         Path.GetTempPath(),
         "Duplicates.App.Tests",

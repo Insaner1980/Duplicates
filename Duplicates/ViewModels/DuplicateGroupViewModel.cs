@@ -38,7 +38,9 @@ public sealed class DuplicateGroupViewModel : ObservableObject
 
     public bool HasLinkSurvivor => LinkSurvivor is not null;
 
-    internal bool CanMutateSelection => _canMutateSelection;
+    internal bool IsChangingSelection { get; set; }
+
+    internal bool CanMutateSelection => _canMutateSelection && !IsChangingSelection;
 
     public bool CanSelectForDeletion(DuplicateFileViewModel candidate)
     {
@@ -103,9 +105,22 @@ public sealed class DuplicateGroupViewModel : ObservableObject
 
     public void ClearSelection()
     {
-        foreach (DuplicateFileViewModel file in Files)
+        if (IsChangingSelection)
         {
-            file.SetSelectedFromRule(false);
+            return;
+        }
+
+        IsChangingSelection = true;
+        try
+        {
+            foreach (DuplicateFileViewModel file in Files)
+            {
+                file.SetSelectedFromRule(false);
+            }
+        }
+        finally
+        {
+            IsChangingSelection = false;
         }
 
         NotifySelectionChanged();
@@ -113,17 +128,32 @@ public sealed class DuplicateGroupViewModel : ObservableObject
 
     public void RemoveDeleted(IReadOnlySet<string> deletedPaths)
     {
-        for (int index = Files.Count - 1; index >= 0; index--)
+        bool wasChangingSelection = IsChangingSelection;
+        IsChangingSelection = true;
+        try
         {
-            if (deletedPaths.Contains(Files[index].FullPath))
+            DuplicateFileViewModel[] remaining = Files.Where(file => !deletedPaths.Contains(file.FullPath)).ToArray();
+            if (remaining.Length > 0 && remaining.All(static file => file.IsSelected))
             {
-                if (ReferenceEquals(_linkSurvivor, Files[index]))
-                {
-                    ClearLinkSurvivor(Files[index]);
-                }
-
-                Files.RemoveAt(index);
+                OrderByNewest(remaining).First().SetSelectedFromRule(false);
             }
+
+            for (int index = Files.Count - 1; index >= 0; index--)
+            {
+                if (deletedPaths.Contains(Files[index].FullPath))
+                {
+                    if (ReferenceEquals(_linkSurvivor, Files[index]))
+                    {
+                        ClearLinkSurvivor(Files[index]);
+                    }
+
+                    Files.RemoveAt(index);
+                }
+            }
+        }
+        finally
+        {
+            IsChangingSelection = wasChangingSelection;
         }
 
         NotifySelectionChanged();
@@ -132,19 +162,13 @@ public sealed class DuplicateGroupViewModel : ObservableObject
 
     public bool RemoveFile(DuplicateFileViewModel file)
     {
-        bool removed = Files.Remove(file);
-        if (removed)
+        if (!Files.Contains(file))
         {
-            if (ReferenceEquals(_linkSurvivor, file))
-            {
-                ClearLinkSurvivor(file);
-            }
-
-            NotifySelectionChanged();
-            NotifyCurrentSummaryChanged();
+            return false;
         }
 
-        return removed;
+        RemoveDeleted(new HashSet<string>(StringComparer.OrdinalIgnoreCase) { file.FullPath });
+        return true;
     }
 
     internal void NotifySelectionChanged()
@@ -187,14 +211,27 @@ public sealed class DuplicateGroupViewModel : ObservableObject
 
     private void ApplySurvivor(DuplicateFileViewModel survivor)
     {
-        foreach (DuplicateFileViewModel file in Files)
+        if (IsChangingSelection)
         {
-            file.SetSelectedFromRule(false);
+            return;
         }
 
-        foreach (DuplicateFileViewModel file in Files.Where(file => file != survivor))
+        IsChangingSelection = true;
+        try
         {
-            file.SetSelectedFromRule(true);
+            foreach (DuplicateFileViewModel file in Files)
+            {
+                file.SetSelectedFromRule(false);
+            }
+
+            foreach (DuplicateFileViewModel file in Files.Where(file => file != survivor))
+            {
+                file.SetSelectedFromRule(true);
+            }
+        }
+        finally
+        {
+            IsChangingSelection = false;
         }
 
         NotifySelectionChanged();

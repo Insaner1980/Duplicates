@@ -5,6 +5,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+if (Test-Path -LiteralPath $OutputPath) {
+    throw "Certificate output already exists: $OutputPath"
+}
+
 $directory = Split-Path -Parent $OutputPath
 if ($directory) {
     New-Item -ItemType Directory -Path $directory -Force | Out-Null
@@ -17,7 +21,7 @@ $certificate = New-SelfSignedCertificate `
     -KeyUsage DigitalSignature `
     -FriendlyName "Duplicates local MSIX signing"
 
-Export-Certificate -Cert $certificate -FilePath $OutputPath | Out-Null
+Export-Certificate -Cert $certificate -FilePath $OutputPath -NoClobber | Out-Null
 
 Write-Host "Certificate exported to $OutputPath"
 Write-Host "Trust it with:"

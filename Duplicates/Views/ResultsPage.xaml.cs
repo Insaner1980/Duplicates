@@ -51,15 +51,27 @@ public sealed partial class ResultsPage : Page
             return;
         }
 
-        if (!await ConfirmDeleteAsync(
-                ViewModel.SelectedFileCount,
-                ViewModel.SelectedGroupCount,
-                ViewModel.SelectedBytes))
+        try
         {
-            return;
+            ExactDeleteSnapshot snapshot = ViewModel.CreateDeleteSnapshot();
+            if (!await ConfirmDeleteAsync(
+                    snapshot.Files.Count,
+                    ViewModel.SelectedGroupCount,
+                    snapshot.Files.Sum(static file => file.SizeBytes),
+                    snapshot.Mode))
+            {
+                return;
+            }
+            await ViewModel.DeleteConfirmedAsync(snapshot, CancellationToken.None);
         }
-
-        await ViewModel.DeleteSelectedAsync(CancellationToken.None);
+        catch (OperationCanceledException)
+        {
+            // The ViewModel has already recorded cancellation and committed paths.
+        }
+        catch (InvalidOperationException ex)
+        {
+            ViewModel.DeleteStatusMessage = ex.Message;
+        }
     }
 
     private async void DeleteFile_Click(object sender, RoutedEventArgs e)
@@ -70,12 +82,23 @@ public sealed partial class ResultsPage : Page
             return;
         }
 
-        if (!await ConfirmDeleteAsync(1, 1, file.SizeBytes, file.FileName, file.FullPath))
+        try
         {
-            return;
+            ExactDeleteSnapshot snapshot = ViewModel.CreateDeleteSnapshot(file);
+            if (!await ConfirmDeleteAsync(1, 1, file.SizeBytes, snapshot.Mode, file.FileName, file.FullPath))
+            {
+                return;
+            }
+            await ViewModel.DeleteConfirmedAsync(snapshot, CancellationToken.None);
         }
-
-        await ViewModel.DeleteFileAsync(file, CancellationToken.None);
+        catch (OperationCanceledException)
+        {
+            // The ViewModel has already recorded cancellation and committed paths.
+        }
+        catch (InvalidOperationException ex)
+        {
+            ViewModel.DeleteStatusMessage = ex.Message;
+        }
     }
 
     private async void MoveSelected_Click(object sender, RoutedEventArgs e)
@@ -278,6 +301,7 @@ public sealed partial class ResultsPage : Page
         int fileCount,
         int groupCount,
         long bytes,
+        DeletionMode deletionMode,
         string? fileName = null,
         string? fullPath = null)
     {
@@ -292,7 +316,7 @@ public sealed partial class ResultsPage : Page
         }
 
         bool isSingleFile = fileCount == 1;
-        bool usesRecycleBin = App.Current.Services.SettingsService.Current.DeletionMode == DeletionMode.RecycleBin;
+        bool usesRecycleBin = deletionMode != DeletionMode.Permanent;
         string targetText = (usesRecycleBin, isSingleFile) switch
         {
             (true, true) => "The file will be sent to the Recycle Bin.",
@@ -343,7 +367,7 @@ public sealed partial class ResultsPage : Page
     {
         if ((sender as FrameworkElement)?.DataContext is DuplicateFileViewModel file)
         {
-            App.Current.Services.FileActionService.OpenFile(file.FullPath);
+            ViewModel.OpenFile(file);
         }
     }
 
@@ -351,7 +375,7 @@ public sealed partial class ResultsPage : Page
     {
         if ((sender as FrameworkElement)?.DataContext is DuplicateFileViewModel file)
         {
-            App.Current.Services.FileActionService.RevealInExplorer(file.FullPath);
+            ViewModel.RevealFile(file);
         }
     }
 
@@ -359,9 +383,12 @@ public sealed partial class ResultsPage : Page
     {
         if ((sender as FrameworkElement)?.DataContext is DuplicateFileViewModel file)
         {
-            var package = new DataPackage();
-            package.SetText(file.FullPath);
-            Clipboard.SetContent(package);
+            ViewModel.CopyPath(file, path =>
+            {
+                var package = new DataPackage();
+                package.SetText(path);
+                Clipboard.SetContent(package);
+            });
         }
     }
 

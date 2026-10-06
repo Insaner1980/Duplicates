@@ -8,6 +8,35 @@ public sealed class FileLinkServiceTests
 {
     private static readonly DateTime SnapshotUtc = new(2026, 8, 8, 9, 30, 0, DateTimeKind.Utc);
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReplaceWithLinksAsync_StageFailurePreservesOriginalEntries(bool accessDenied)
+    {
+        var platform = NewEligiblePair(out string survivor, out string duplicate);
+        platform.StageException = accessDenied
+            ? new UnauthorizedAccessException("Staging denied")
+            : new IOException("Staging failed");
+        var recycle = new FakeRecycleBinService(platform);
+        var service = new FileLinkService(platform, recycle);
+
+        FileOperationSummary summary = await service.ReplaceWithLinksAsync(
+            [new(Snapshot(survivor, 3), [Snapshot(duplicate, 3)])],
+            LinkReplacementMode.HardLink, null, CancellationToken.None);
+
+        FileOperationResult result = Assert.Single(summary.Results);
+        Assert.False(result.Succeeded);
+        Assert.Null(result.Failure!.RecoveryPath);
+        Assert.Equal(0, summary.SucceededBytes);
+        Assert.True(platform.ContainsPath(survivor));
+        Assert.True(platform.ContainsPath(duplicate));
+        Assert.Equal(2, platform.Paths.Count);
+        Assert.Empty(platform.Renames);
+        Assert.Equal(0, platform.HardLinksCreated);
+        Assert.Equal(0, platform.DeleteByHandleCount);
+        Assert.Empty(recycle.Calls);
+    }
+
     [Fact]
     public async Task ReplaceWithLinksAsync_CopiesCallerListsSynchronouslyAndSupportsMultipleGroups()
     {
@@ -419,6 +448,7 @@ public sealed class FileLinkServiceTests
         Assert.Equal(0, platform.PathDeleteCount);
         Assert.True(platform.ContainsPath(duplicate));
         Assert.NotNull(Assert.Single(summary.Results).Failure!.RecoveryPath);
+        Assert.True(platform.CreatedHandleDisposed);
     }
 
     [Fact]
@@ -671,10 +701,14 @@ internal sealed class FakeFileLinkPlatform : IFileLinkPlatform
     private readonly Dictionary<string, Entry> _entries = new(StringComparer.OrdinalIgnoreCase);
     private int _nextIdentity = 500;
     private bool _firstRenameObserved;
+    private FakeHandle? _createdHandle;
+
+    public bool CreatedHandleDisposed => _createdHandle?.IsDisposed ?? true;
 
     public Exception? CreateException { get; set; }
 
     public Exception? RestoreException { get; set; }
+    public Exception? StageException { get; set; }
 
     public Exception? SecurityReadException { get; set; }
 
@@ -822,6 +856,10 @@ internal sealed class FakeFileLinkPlatform : IFileLinkPlatform
 
     public void Rename(IFileLinkHandle handle, string destinationPath)
     {
+        if (!_firstRenameObserved && StageException is not null)
+        {
+            throw StageException;
+        }
         var fake = GetHandle(handle);
         string source = fake.Path;
         string destination = Path.GetFullPath(destinationPath);
@@ -862,7 +900,8 @@ internal sealed class FakeFileLinkPlatform : IFileLinkPlatform
         _entries[link] = created;
         LastCreatedPath = link;
         HardLinksCreated++;
-        return new FakeHandle(link, created, true);
+        _createdHandle = new FakeHandle(link, created, true);
+        return _createdHandle;
     }
 
     public IFileLinkHandle CreateSymbolicLinkAndOpen(string linkPath, string targetPath)
@@ -885,7 +924,8 @@ internal sealed class FakeFileLinkPlatform : IFileLinkPlatform
             target);
         _entries[link] = created;
         LastCreatedPath = link;
-        return new FakeHandle(link, created, true);
+        _createdHandle = new FakeHandle(link, created, true);
+        return _createdHandle;
     }
 
     public string? GetSymbolicLinkTarget(string linkPath, IFileLinkHandle linkHandle) =>
@@ -1086,6 +1126,8 @@ internal sealed class FakeFileLinkPlatform : IFileLinkPlatform
 
     private sealed class FakeHandle(string path, Entry entry, bool deleteAccess) : IFileLinkHandle
     {
+        public bool IsDisposed { get; private set; }
+
         public string Path { get; set; } = path;
 
         public Entry Entry { get; } = entry;
@@ -1094,6 +1136,7 @@ internal sealed class FakeFileLinkPlatform : IFileLinkPlatform
 
         public void Dispose()
         {
+            IsDisposed = true;
         }
     }
 }

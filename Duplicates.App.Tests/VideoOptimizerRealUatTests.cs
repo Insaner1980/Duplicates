@@ -2,12 +2,14 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Duplicates.Engine.Analysis;
 using Duplicates.Models;
 using Duplicates.Services;
 using Duplicates.ViewModels;
+using Xunit.Sdk;
 
 namespace Duplicates.App.Tests;
 
@@ -868,7 +870,7 @@ public sealed class VideoOptimizerRealUatTests : IDisposable
         {
             return await new WindowsVideoMediaProbe().ProbeAsync(path, CancellationToken.None);
         }
-        catch (Exception exception) when (exception is not UatUnavailableException)
+        catch (COMException exception) when (exception.HResult == unchecked((int)0x80D10002))
         {
             Unavailable(
                 capability,
@@ -887,11 +889,7 @@ public sealed class VideoOptimizerRealUatTests : IDisposable
             CreateRequest(source, destination, options.KeepOutputWhenNotSmaller, options),
             null,
             CancellationToken.None);
-        if (result.Outcome is VideoOptimizationOutcome.CodecNotFound or
-            VideoOptimizationOutcome.InvalidProfile or
-            VideoOptimizationOutcome.UnsupportedInput or
-            VideoOptimizationOutcome.Failed or
-            VideoOptimizationOutcome.NoSpaceSaving)
+        if (result.Outcome == VideoOptimizationOutcome.CodecNotFound)
         {
             Unavailable(
                 capability,
@@ -969,6 +967,31 @@ public sealed class VideoOptimizerRealUatTests : IDisposable
         throw new UatUnavailableException(message);
     }
 
+    [Fact]
+    public async Task OptionalUat_ReportsUnavailableAsSkippedAndPreservesOtherFailures()
+    {
+        SkipException? skip = null;
+        try
+        {
+            await RunOptionalUatAsync(
+                () => Task.FromException(new UatUnavailableException("UNAVAILABLE: controlled media capability")));
+        }
+        catch (SkipException exception)
+        {
+            skip = exception;
+        }
+
+        Assert.NotNull(skip);
+        Assert.Contains("controlled media capability", skip.Message, StringComparison.Ordinal);
+
+        var failure = new InvalidOperationException("Controlled product failure.");
+        Assert.Same(failure, await Assert.ThrowsAsync<InvalidOperationException>(() => RunOptionalUatAsync(
+            () => Task.FromException(failure))));
+
+        await Assert.ThrowsAsync<FileNotFoundException>(() => ProbeOrUnavailableAsync(
+            Path.Combine(_root, "missing.mp4"), "controlled missing file"));
+    }
+
     private async Task RunOptionalUatAsync(Func<Task> test)
     {
         try
@@ -978,6 +1001,7 @@ public sealed class VideoOptimizerRealUatTests : IDisposable
         catch (UatUnavailableException exception)
         {
             _output.WriteLine(exception.Message);
+            throw SkipException.ForSkip(exception.Message);
         }
     }
 
@@ -1006,7 +1030,8 @@ public sealed class VideoOptimizerRealUatTests : IDisposable
         public Task<DeleteSummary> DeleteAsync(
             IReadOnlyList<FileActionTarget> targets,
             IProgress<DeleteProgress>? progress,
-            CancellationToken cancellationToken) => throw new NotSupportedException();
+            CancellationToken cancellationToken,
+            DeletionMode? deletionMode = null) => throw new NotSupportedException();
 
         public Task<FileOperationSummary> MoveAsync(
             IReadOnlyList<FileActionTarget> targets,

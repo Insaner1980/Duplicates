@@ -107,7 +107,15 @@ public sealed class DuplicateFileViewModel : ObservableObject
                 return;
             }
 
-            SetSelectedCore(value);
+            _parent.IsChangingSelection = true;
+            try
+            {
+                SetSelectedCore(value);
+            }
+            finally
+            {
+                _parent.IsChangingSelection = false;
+            }
             _parent.NotifySelectionChanged();
         }
     }

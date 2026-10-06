@@ -171,6 +171,7 @@ public sealed partial class ScanViewModel : ObservableObject
         StatusMessage = string.Empty;
         _scanStartedAt = DateTimeOffset.UtcNow;
         _scanCancellation = cancellation;
+        CancellationToken cancellationToken = cancellation.Token;
         ScanResult? completedResult = null;
         AnalysisScope? completedScope = null;
         DateTimeOffset completedAt = default;
@@ -178,10 +179,23 @@ public sealed partial class ScanViewModel : ObservableObject
         try
         {
             ScanOptions options = BuildScanOptions();
-            var progress = new Progress<ScanProgress>(UpdateProgress);
+            var progress = new Progress<ScanProgress>(value =>
+            {
+                if (ReferenceEquals(_scanCancellation, cancellation) && !cancellation.IsCancellationRequested)
+                {
+                    UpdateProgress(value);
+                }
+            });
             ScanResult result = await Task.Run(
-                () => _scanner.ScanAsync(options, progress, _scanCancellation.Token),
-                _scanCancellation.Token);
+                () => _scanner.ScanAsync(options, progress, cancellationToken),
+                cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            UpdateProgress(new ScanProgress
+            {
+                Phase = ScanPhase.Done,
+                FilesDiscovered = result.TotalFilesScanned,
+                FilesProcessed = result.TotalFilesScanned,
+            });
             completedResult = result;
             completedScope = BuildResultScope(options);
             completedAt = DateTimeOffset.UtcNow;
@@ -198,6 +212,7 @@ public sealed partial class ScanViewModel : ObservableObject
         {
             _scanCancellation?.Dispose();
             _scanCancellation = null;
+            CurrentFilePath = string.Empty;
             IsScanning = false;
             StartScanCommand.NotifyCanExecuteChanged();
             lease!.Dispose();

@@ -133,9 +133,14 @@ internal sealed class MainWindowOperationGuard : IDisposable
             accepted = await showConfirmationAsync().ConfigureAwait(true);
             lock (_gate)
             {
-                if (_coordinator.ActiveOperation is null || generation != _operationGeneration)
+                if (_coordinator.ActiveOperation is null)
                 {
                     return true;
+                }
+
+                if (generation != _operationGeneration)
+                {
+                    return false;
                 }
             }
 

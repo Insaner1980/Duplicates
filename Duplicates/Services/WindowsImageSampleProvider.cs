@@ -195,6 +195,45 @@ internal static class MediaLuminanceConverter
 
 internal static class WinRtAsync
 {
+    public static async Task AwaitAndCloseAsync<TProgress>(
+        Windows.Foundation.IAsyncActionWithProgress<TProgress> operation,
+        IProgress<TProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            Task nativeTask = operation.AsTask(progress);
+            try
+            {
+                await nativeTask.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                try
+                {
+                    operation.Cancel();
+                }
+                catch
+                {
+                }
+
+                try
+                {
+                    await nativeTask.ConfigureAwait(false);
+                }
+                catch
+                {
+                }
+
+                throw new OperationCanceledException(cancellationToken);
+            }
+        }
+        finally
+        {
+            operation.Close();
+        }
+    }
+
     public static async Task<T> AwaitAndCloseAsync<T>(
         Windows.Foundation.IAsyncOperation<T> operation,
         CancellationToken cancellationToken)
@@ -218,7 +257,11 @@ internal static class WinRtAsync
 
                 try
                 {
-                    await nativeTask.ConfigureAwait(false);
+                    T result = await nativeTask.ConfigureAwait(false);
+                    if (result is IDisposable disposable)
+                    {
+                        disposable.Dispose();
+                    }
                 }
                 catch
                 {

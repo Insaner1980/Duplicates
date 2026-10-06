@@ -11,7 +11,7 @@ namespace Duplicates.Services;
 
 public sealed class FileActionService : IFileActionService
 {
-    private const uint RecycleEmptyDirectoryFlags =
+    private const uint RecycleEntryFlags =
         0x0004 | // FOF_SILENT
         0x0010 | // FOF_NOCONFIRMATION
         0x0400 | // FOF_NOERRORUI
@@ -19,21 +19,36 @@ public sealed class FileActionService : IFileActionService
         0x00080000; // FOFX_RECYCLEONDELETE
 
     private static readonly HashSet<string> ReservedNames = new(
-        ["CON", "PRN", "AUX", "NUL", .. Enumerable.Range(1, 9).Select(static number => $"COM{number}"), .. Enumerable.Range(1, 9).Select(static number => $"LPT{number}")],
+        ["CON", "PRN", "AUX", "NUL", "COM\u00B9", "COM\u00B2", "COM\u00B3", "LPT\u00B9", "LPT\u00B2", "LPT\u00B3",
+            .. Enumerable.Range(1, 9).Select(static number => $"COM{number}"), .. Enumerable.Range(1, 9).Select(static number => $"LPT{number}")],
         StringComparer.OrdinalIgnoreCase);
 
     private readonly ISettingsService _settingsService;
+    private readonly Action<FileActionTarget, RecycleOption> _deleteTarget;
+    private readonly Action<FileActionTarget, string> _moveTarget;
 
     public FileActionService(ISettingsService settingsService)
+        : this(settingsService, DeleteTarget)
+    {
+    }
+
+    internal FileActionService(ISettingsService settingsService, Action<FileActionTarget, RecycleOption> deleteTarget,
+        Action<FileActionTarget, string>? moveTarget = null)
     {
         _settingsService = settingsService;
+        _deleteTarget = deleteTarget;
+        _moveTarget = moveTarget ?? MoveTarget;
     }
 
     public Task<DeleteSummary> DeleteAsync(
         IReadOnlyList<FileActionTarget> targets,
         IProgress<DeleteProgress>? progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        DeletionMode? deletionMode = null)
     {
+        RecycleOption recycleOption = (deletionMode ?? _settingsService.Current.DeletionMode) == DeletionMode.Permanent
+            ? RecycleOption.DeletePermanently
+            : RecycleOption.SendToRecycleBin;
         return Task.Run(
             () =>
             {
@@ -42,10 +57,6 @@ public sealed class FileActionService : IFileActionService
                 long deletedBytes = 0;
                 int processedCount = 0;
                 var deletedPaths = new List<string>();
-                RecycleOption recycleOption = _settingsService.Current.DeletionMode == DeletionMode.Permanent
-                    ? RecycleOption.DeletePermanently
-                    : RecycleOption.SendToRecycleBin;
-
                 foreach (FileActionTarget target in targets)
                 {
                     if (cancellationToken.IsCancellationRequested)
@@ -67,12 +78,12 @@ public sealed class FileActionService : IFileActionService
                     try
                     {
                         RevalidateTarget(target);
-                        DeleteTarget(target, recycleOption);
+                        _deleteTarget(target, recycleOption);
                         deletedCount++;
                         deletedBytes += target.SizeBytes;
                         deletedPaths.Add(target.FullPath);
                     }
-                    catch (Exception ex) when (IsOperationalFailure(ex))
+                    catch (Exception ex) when (IsOperationalFailure(ex) || ex is OperationCanceledException)
                     {
                         failures.Add(new FileActionFailure(target.FullPath, ex.Message));
                     }
@@ -127,6 +138,7 @@ public sealed class FileActionService : IFileActionService
                     }
 
                     string? finalPath = null;
+                    string? recoveryPath = null;
                     FileActionFailure? failure = null;
                     try
                     {
@@ -141,14 +153,22 @@ public sealed class FileActionService : IFileActionService
                             ? GetKeepBothPath(destination, leafName, target.Kind, existingNames)
                             : Path.Combine(destination, leafName);
                         RevalidateTarget(target);
-                        MoveTarget(target, finalPath);
+                        _moveTarget(target, finalPath);
+                        if (PathEntryExists(finalPath))
+                        {
+                            recoveryPath = finalPath;
+                        }
+                        if (recoveryPath is null || PathEntryExists(target.FullPath))
+                        {
+                            throw new IOException("The move did not complete. Check the source and destination paths.");
+                        }
                         existingNames.Add(Path.GetFileName(finalPath));
                         succeededBytes += target.SizeBytes;
                     }
                     catch (Exception ex) when (IsOperationalFailure(ex))
                     {
                         finalPath = null;
-                        failure = new FileActionFailure(target.FullPath, ex.Message);
+                        failure = new FileActionFailure(target.FullPath, ex.Message, recoveryPath);
                     }
                     finally
                     {
@@ -264,31 +284,17 @@ public sealed class FileActionService : IFileActionService
 
     private static void DeleteTarget(FileActionTarget target, RecycleOption recycleOption)
     {
-        if (target.Kind == FileActionTargetKind.Directory)
+        if (recycleOption == RecycleOption.SendToRecycleBin)
         {
-            if (recycleOption == RecycleOption.SendToRecycleBin)
-            {
-                RecycleEmptyDirectory(target.FullPath);
-            }
-            else
-            {
-                Directory.Delete(target.FullPath, recursive: false);
-            }
+            RecycleEntry(target.FullPath, requireEmpty: target.Kind == FileActionTargetKind.Directory);
         }
-        else if (target.Kind == FileActionTargetKind.DirectoryLink)
+        else if (target.Kind is FileActionTargetKind.Directory or FileActionTargetKind.DirectoryLink)
         {
-            if (recycleOption == RecycleOption.SendToRecycleBin)
-            {
-                RecycleDirectoryEntry(target.FullPath, requireEmpty: false);
-            }
-            else
-            {
-                Directory.Delete(target.FullPath, recursive: false);
-            }
+            Directory.Delete(target.FullPath, recursive: false);
         }
         else
         {
-            FileSystem.DeleteFile(target.FullPath, UIOption.OnlyErrorDialogs, recycleOption);
+            FileSystem.DeleteFile(target.FullPath, UIOption.OnlyErrorDialogs, recycleOption, UICancelOption.ThrowException);
         }
     }
 
@@ -331,6 +337,14 @@ public sealed class FileActionService : IFileActionService
 
     private static void RevalidateTarget(FileActionTarget target)
     {
+        if (target.ExpectedExactSurvivors is not null)
+        {
+            foreach (ExactFileConstraint survivor in target.ExpectedExactSurvivors)
+            {
+                RevalidateTarget(new FileActionTarget(survivor.FullPath, survivor.SizeBytes, FileActionTargetKind.File,
+                    ExpectedModifiedUtc: survivor.ModifiedUtc));
+            }
+        }
         FileAttributes attributes = File.GetAttributes(target.FullPath);
         FileActionTargetKind actualKind = (attributes.HasFlag(FileAttributes.Directory), attributes.HasFlag(FileAttributes.ReparsePoint)) switch
         {
@@ -438,21 +452,19 @@ public sealed class FileActionService : IFileActionService
             return false;
         }
 
-        string stem = Path.GetFileNameWithoutExtension(name).TrimEnd(' ', '.');
+        int firstDot = name.IndexOf('.');
+        string stem = (firstDot < 0 ? name : name[..firstDot]).TrimEnd(' ', '.');
         return !ReservedNames.Contains(stem);
     }
 
-    private static void RecycleEmptyDirectory(string path) =>
-        RecycleDirectoryEntry(path, requireEmpty: true);
-
-    private static void RecycleDirectoryEntry(string path, bool requireEmpty)
+    private static void RecycleEntry(string path, bool requireEmpty)
     {
         Exception? failure = null;
         var thread = new Thread(() =>
         {
             try
             {
-                RecycleDirectoryEntryOnSta(path, requireEmpty);
+                RecycleEntryOnSta(path, requireEmpty);
             }
             catch (Exception ex)
             {
@@ -472,7 +484,7 @@ public sealed class FileActionService : IFileActionService
         }
     }
 
-    private static void RecycleDirectoryEntryOnSta(string path, bool requireEmpty)
+    private static void RecycleEntryOnSta(string path, bool requireEmpty)
     {
         if (requireEmpty && Directory.EnumerateFileSystemEntries(path).Any())
         {
@@ -484,7 +496,7 @@ public sealed class FileActionService : IFileActionService
         try
         {
             operation = (IFileOperation)(object)new FileOperationComObject();
-            Marshal.ThrowExceptionForHR(operation.SetOperationFlags(RecycleEmptyDirectoryFlags));
+            Marshal.ThrowExceptionForHR(operation.SetOperationFlags(RecycleEntryFlags));
             Guid shellItemId = typeof(IShellItem).GUID;
             Marshal.ThrowExceptionForHR(SHCreateItemFromParsingName(
                 path,
@@ -499,7 +511,7 @@ public sealed class FileActionService : IFileActionService
             Marshal.ThrowExceptionForHR(abortedResult);
             if (wasAborted != 0 || PathEntryExists(path))
             {
-                throw new IOException("The Recycle Bin operation did not delete the empty directory.");
+                throw new IOException("The Recycle Bin operation did not remove the requested entry.");
             }
         }
         catch (COMException ex)

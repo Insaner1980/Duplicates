@@ -314,6 +314,54 @@ public sealed class ExifCleanerServiceTests
         Assert.Single(Directory.EnumerateFiles(fixture.Root));
     }
 
+    [Theory]
+    [InlineData("move-aside", false)]
+    [InlineData("restore", false)]
+    [InlineData("cleanup", true)]
+    public async Task CleanAsync_RecycleAndRecoveryFailuresRetainBothReasons(
+        string failureStage,
+        bool originalRestored)
+    {
+        using var fixture = new TempFixture();
+        string source = fixture.Write("recovery-reasons.jpg", [0xFF, 0xD8, 0xFF, 1, 0xFF, 0xD9]);
+        byte[] originalBytes = await File.ReadAllBytesAsync(source, TestContext.Current.CancellationToken);
+        var transactions = new FakeIdentityFileTransactions
+        {
+            BeforeMove = (tracked, destination) =>
+            {
+                bool movingAside = string.Equals(tracked.Path, source, StringComparison.OrdinalIgnoreCase) &&
+                    destination.Contains("cleaned-aside", StringComparison.Ordinal);
+                bool restoring = tracked.Path.Contains("rollback", StringComparison.Ordinal);
+                if ((failureStage == "move-aside" && movingAside) ||
+                    (failureStage == "restore" && restoring))
+                {
+                    throw new IOException("Injected recovery move failure.");
+                }
+            },
+            DeleteFailure = failureStage == "cleanup" ? new IOException("Injected cleanup failure.") : null,
+        };
+        var service = new ExifCleanerService(
+            new FakeWicMetadataBackend(WicContainerKind.Jpeg) { MutateEditedFile = true },
+            transactions,
+            new RecordingRecycleBinService { Failure = new IOException("Injected recycle failure.") });
+
+        ExifCleanResult result = await service.CleanAsync(
+            Request(source, AllPrivacyOptions() with { ReplaceOriginal = true }),
+            null,
+            CancellationToken.None);
+
+        Assert.Equal(ExifCleanOutcome.RecoveryRequired, result.Outcome);
+        Assert.Null(result.OutputPath);
+        Assert.Contains("could not be recycled", result.Detail, StringComparison.Ordinal);
+        Assert.Contains(
+            failureStage == "cleanup" ? "could not be removed safely" : "could not be restored safely",
+            result.Detail,
+            StringComparison.Ordinal);
+        Assert.Equal(originalRestored, result.Detail.Contains("The original was restored.", StringComparison.Ordinal));
+        Assert.Contains(result.RecoveryPaths, path =>
+            File.Exists(path) && File.ReadAllBytes(path).SequenceEqual(originalBytes));
+    }
+
     [Fact]
     public async Task CleanAsync_CopyFaultAfterOwnedCreationCleansTheKnownTempIdentity()
     {

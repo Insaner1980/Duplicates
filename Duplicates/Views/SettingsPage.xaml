@@ -242,6 +242,7 @@
 
                     <InfoBar
                         AutomationProperties.Name="Permanent deletion warning"
+                        IsClosable="False"
                         IsOpen="True"
                         Message="Permanent delete bypasses the Recycle Bin and cannot be undone."
                         Severity="Warning"

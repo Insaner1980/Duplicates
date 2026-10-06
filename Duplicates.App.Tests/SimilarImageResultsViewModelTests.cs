@@ -366,6 +366,45 @@ public sealed class SimilarImageResultsViewModelTests : IDisposable
         });
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PartialMove_DropsSurvivorWhoseSnapshotChangedDuringAction(bool removeSurvivor)
+    {
+        SimilarityItem reference = WriteItem("reference.jpg", 0, width: 300, height: 300);
+        SimilarityItem survivor = WriteItem("survivor.jpg", 0, width: 200, height: 200);
+        SimilarityItem moved = WriteItem("moved.jpg", 0, width: 100, height: 100);
+        var actions = new FakeFileActionService
+        {
+            OnMove = (_, _, _, _) =>
+            {
+                if (removeSurvivor)
+                {
+                    File.Delete(survivor.FullPath);
+                }
+                else
+                {
+                    File.AppendAllBytes(survivor.FullPath, [9]);
+                }
+            },
+            NextMoveSummary = new FileOperationSummary(
+                [new FileOperationResult(moved.FullPath, Path.Combine(_root, "destination.jpg"), null)],
+                moved.SizeBytes),
+        };
+        var store = new AnalysisSessionStore();
+        var viewModel = NewViewModel(store, actions, new FakeSimilarityAnalysisService());
+        store.SetCompleted(ToolKind.SimilarImages, new AnalysisScope(), new SimilarImageToolOptions(8),
+            Result(Regroup([reference, survivor, moved])));
+        viewModel.Groups[0].Items.Single(item => item.FullPath == moved.FullPath).IsSelected = true;
+
+        await viewModel.MoveSelectedAsync(_root, MoveCollisionBehavior.Skip, CancellationToken.None);
+
+        Assert.Empty(viewModel.Groups);
+        Assert.Empty(viewModel.ResultItems);
+        Assert.True(File.Exists(reference.FullPath));
+        Assert.Equal(1, actions.MoveCallCount);
+    }
+
     [Fact]
     public async Task Preview_GroupDefaultsToReferenceAndFailureKeepsSelectionWithUnavailableState()
     {

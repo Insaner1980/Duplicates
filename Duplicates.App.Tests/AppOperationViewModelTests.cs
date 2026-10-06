@@ -45,7 +45,7 @@ public sealed class AppOperationViewModelTests
         var coordinator = new AppOperationCoordinator();
         var service = new ImmediateAnalysisService();
         var scope = new PathScopeViewModel();
-        scope.AddFolder("C:\\Task16Analysis");
+        scope.IncludedPaths.Add(new ScopePathViewModel("C:\\Task16Analysis", Duplicates.Models.ScopePathKind.Folder));
         var viewModel = new AnalysisViewModel(service, new AnalysisSessionStore(), scope, coordinator);
         AppOperationDescriptor? operationObservedByCompletion = new(AppOperationKind.AnalysisRun);
         viewModel.AnalysisCompleted += (_, _) => operationObservedByCompletion = coordinator.ActiveOperation;
@@ -61,7 +61,7 @@ public sealed class AppOperationViewModelTests
     {
         var coordinator = new AppOperationCoordinator();
         var scope = new PathScopeViewModel();
-        scope.AddFolder("C:\\Task16Scope");
+        scope.IncludedPaths.Add(new ScopePathViewModel("C:\\Task16Scope", Duplicates.Models.ScopePathKind.Folder));
         var scan = new ScanViewModel(
             new Duplicates.Engine.DuplicateScanner(),
             new FakeSettingsService(),

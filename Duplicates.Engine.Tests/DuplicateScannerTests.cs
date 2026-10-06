@@ -163,6 +163,68 @@ public sealed class DuplicateScannerTests : IDisposable
     }
 
     [Fact]
+    public async Task ScanAsync_ReferenceDeletedAfterHashing_RetainsSurvivingDuplicates()
+    {
+        string reference = WriteFile("a.bin", "same bytes");
+        string second = WriteFile("b.bin", "same bytes");
+        string third = WriteFile("c.bin", "same bytes");
+        int hashed = 0;
+        var hasher = new ConstantHasher(_ =>
+        {
+            if (++hashed == 3)
+            {
+                File.Delete(reference);
+            }
+        });
+        var scanner = new DuplicateScanner(new FileWalker(), hasher);
+
+        ScanResult result = await scanner.ScanAsync(
+            NewOptions() with { MaxHashingConcurrency = 1 }, progress: null, CancellationToken.None);
+
+        DuplicateGroup group = Assert.Single(result.Groups);
+        Assert.Equal(new[] { second, third }, group.Files.Select(file => file.FullPath));
+        Assert.Equal(reference, Assert.Single(result.SkippedPaths).Path);
+    }
+
+    [Fact]
+    public async Task ByteVerification_IdenticalContentWithDifferentShortReads_IsEqual()
+    {
+        byte[] content = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+        using var left = new ShortReadStream(content, 2);
+        using var right = new ShortReadStream(content, 3);
+
+        bool equal = await DuplicateScanner.StreamsAreEqualAsync(
+            left, right, new byte[1024 * 1024], new byte[1024 * 1024], CancellationToken.None);
+
+        Assert.True(equal);
+        Assert.Equal(content.Length, left.Position);
+        Assert.Equal(content.Length, right.Position);
+    }
+
+    [Fact]
+    public async Task ByteVerification_AsymmetricEof_IsNotEqual()
+    {
+        using var left = new ShortReadStream([1, 2, 3, 4], 2);
+        using var right = new ShortReadStream([1, 2, 3], 3);
+
+        Assert.False(await DuplicateScanner.StreamsAreEqualAsync(
+            left, right, new byte[1024 * 1024], new byte[1024 * 1024], CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task ByteVerification_LateMismatchInFinalChunk_IsNotEqual()
+    {
+        byte[] content = new byte[1024 * 1024 + 11];
+        byte[] changed = (byte[])content.Clone();
+        changed[^1] = 1;
+        using var left = new ShortReadStream(content, 12_345);
+        using var right = new ShortReadStream(changed, 23_456);
+
+        Assert.False(await DuplicateScanner.StreamsAreEqualAsync(
+            left, right, new byte[1024 * 1024], new byte[1024 * 1024], CancellationToken.None));
+    }
+
+    [Fact]
     public async Task ScanAsync_ByteVerificationRentsOneBufferPairPerHashGroup()
     {
         const int fileCount = 64;
@@ -184,6 +246,54 @@ public sealed class DuplicateScannerTests : IDisposable
         Assert.Equal(fileCount - 1, result.TotalDuplicateFiles);
         Assert.Equal(2, verificationPool.RentCount);
         Assert.Equal(2, verificationPool.ReturnCount);
+    }
+
+    [Fact]
+    public async Task ScanAsync_SecondVerifierRentalFails_ReturnsFirstBuffer()
+    {
+        WriteFile("first.bin", "same bytes");
+        WriteFile("second.bin", "same bytes");
+        var pool = new CountingArrayPool(failSecondRent: true);
+        var scanner = new DuplicateScanner(new FileWalker(), new FileHasher(), pool);
+
+        await Assert.ThrowsAsync<OutOfMemoryException>(
+            () => scanner.ScanAsync(NewOptions(), progress: null, CancellationToken.None));
+
+        Assert.Equal(2, pool.RentCount);
+        Assert.Equal(1, pool.ReturnCount);
+    }
+
+    [Fact]
+    public async Task ScanAsync_EqualSizeAndNameGroups_HaveStablePathOrder()
+    {
+        string first = WriteFile("a/same.bin", "aaaa");
+        string firstCopy = WriteFile("a/z.bin", "aaaa");
+        string second = WriteFile("b/same.bin", "bbbb");
+        string secondCopy = WriteFile("b/z.bin", "bbbb");
+        string[] files = [first, firstCopy, second, secondCopy];
+        var options = NewOptions() with { Folders = [], Files = files, MaxHashingConcurrency = 1 };
+
+        ScanResult result = await new DuplicateScanner().ScanAsync(options, null, CancellationToken.None);
+        ScanResult reversed = await new DuplicateScanner().ScanAsync(
+            options with { Files = files.Reverse().ToArray() }, null, CancellationToken.None);
+
+        Assert.Equal(new[] { first, second }, result.Groups.Select(group => group.Files[0].FullPath));
+        Assert.Equal(new[] { first, second }, reversed.Groups.Select(group => group.Files[0].FullPath));
+    }
+
+    [Fact]
+    public async Task ScanAsync_HardlinkRepresentative_UsesFirstCanonicalPath()
+    {
+        string first = WriteFile("a.bin", "same bytes");
+        string alias = Path.Combine(_root, "z.bin");
+        Assert.True(CreateHardLinkW(alias, first, IntPtr.Zero), $"CreateHardLink failed: {Marshal.GetLastWin32Error()}");
+        string independent = WriteFile("b.bin", "same bytes");
+
+        ScanResult result = await new DuplicateScanner().ScanAsync(
+            NewOptions() with { Folders = [], Files = [first, alias, independent], MaxHashingConcurrency = 1 },
+            null, CancellationToken.None);
+
+        Assert.Equal(new[] { first, independent }, Assert.Single(result.Groups).Files.Select(file => file.FullPath));
     }
 
     [Fact]
@@ -249,6 +359,31 @@ public sealed class DuplicateScannerTests : IDisposable
 
         DuplicateGroup group = Assert.Single(result.Groups);
         Assert.All(group.Files, file => Assert.Equal(".png", file.Extension));
+    }
+
+    [Fact]
+    public async Task ScanAsync_ReparseRootIsNotTraversedWhenFollowingLinksIsDisabled()
+    {
+        string target = Path.Combine(_root, "target");
+        WriteFile("target/one.bin", "same");
+        WriteFile("target/two.bin", "same");
+        string link = Path.Combine(_root, "link");
+        try
+        {
+            Directory.CreateSymbolicLink(link, target);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+        {
+            throw Xunit.Sdk.SkipException.ForSkip("Directory symbolic links are unavailable on this host.");
+        }
+
+        ScanResult result = await new DuplicateScanner().ScanAsync(
+            NewOptions() with { Folders = [link], FollowSymlinks = false },
+            progress: null,
+            TestContext.Current.CancellationToken);
+
+        Assert.Empty(result.Groups);
+        Assert.Equal(0, result.TotalFilesScanned);
     }
 
     [Fact]
@@ -418,6 +553,26 @@ public sealed class DuplicateScannerTests : IDisposable
     }
 
     [Fact]
+    public async Task ScanAsync_CancelledAfterEmptyInventory_DoesNotReportDone()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var reports = new List<ScanProgress>();
+        var progress = new InlineProgress<ScanProgress>(report =>
+        {
+            reports.Add(report);
+            if (report.Phase == ScanPhase.GroupingBySize)
+            {
+                cancellation.Cancel();
+            }
+        });
+
+        await Assert.ThrowsAsync<OperationCanceledException>(
+            () => new DuplicateScanner().ScanAsync(NewOptions(), progress, cancellation.Token));
+
+        Assert.DoesNotContain(reports, report => report.Phase == ScanPhase.Done);
+    }
+
+    [Fact]
     public async Task ScanAsync_ProgressReports_AreThrottledForFastScans()
     {
         for (int index = 0; index < 50; index++)
@@ -471,7 +626,7 @@ public sealed class DuplicateScannerTests : IDisposable
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     private static extern bool CreateHardLinkW(string lpFileName, string lpExistingFileName, IntPtr lpSecurityAttributes);
 
-    private sealed class ConstantHasher : IFileHasher
+    private sealed class ConstantHasher(Action<string>? onHash = null) : IFileHasher
     {
         public Task<ulong> HashAsync(
             string path,
@@ -480,12 +635,19 @@ public sealed class DuplicateScannerTests : IDisposable
             Action<long>? bytesRead,
             CancellationToken cancellationToken)
         {
+            onHash?.Invoke(path);
             bytesRead?.Invoke(Math.Min(expectedSizeBytes, maxBytesToRead));
             return Task.FromResult(42UL);
         }
     }
 
-    private sealed class CountingArrayPool : ArrayPool<byte>
+    private sealed class ShortReadStream(byte[] content, int chunkSize) : MemoryStream(content)
+    {
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) =>
+            base.ReadAsync(buffer[..Math.Min(buffer.Length, chunkSize)], cancellationToken);
+    }
+
+    private sealed class CountingArrayPool(bool failSecondRent = false) : ArrayPool<byte>
     {
         public int RentCount { get; private set; }
 
@@ -494,6 +656,11 @@ public sealed class DuplicateScannerTests : IDisposable
         public override byte[] Rent(int minimumLength)
         {
             RentCount++;
+            if (failSecondRent && RentCount == 2)
+            {
+                throw new OutOfMemoryException("Injected second rental failure.");
+            }
+
             return new byte[minimumLength];
         }
 

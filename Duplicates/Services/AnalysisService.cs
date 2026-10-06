@@ -128,6 +128,18 @@ public sealed class AnalysisService : IAnalysisService
             throw new ArgumentException($"Options do not match {tool}.", nameof(toolOptions));
         }
 
+        if (toolOptions is LargeFileToolOptions { MinimumSizeBytes: < 0 })
+        {
+            throw new ArgumentOutOfRangeException(nameof(toolOptions));
+        }
+
+        if (toolOptions is TemporaryFileToolOptions temporaryOptions &&
+            (temporaryOptions.MinimumAge < TimeSpan.Zero ||
+             temporaryOptions.MinimumAge > temporaryOptions.UtcNow - DateTime.MinValue))
+        {
+            throw new ArgumentOutOfRangeException(nameof(toolOptions));
+        }
+
         if (toolOptions is SimilarImageToolOptions { MaximumHammingDistance: < 0 or > 12 })
         {
             throw new ArgumentOutOfRangeException(nameof(toolOptions));

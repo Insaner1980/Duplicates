@@ -20,6 +20,26 @@ public sealed class PathScopeViewModelTests : IDisposable
     }
 
     [Fact]
+    public void InvalidPathsPreserveExistingScope()
+    {
+        string file = Path.Combine(_root, "existing.txt");
+        File.WriteAllText(file, "data");
+        var scope = new PathScopeViewModel();
+        Assert.True(scope.AddFile(file));
+        ScopePathViewModel original = Assert.Single(scope.IncludedPaths);
+
+        Assert.False(scope.AddFolder(file));
+        Assert.False(scope.AddFile(_root));
+        Assert.False(scope.AddFolder(Path.Combine(_root, "missing")));
+        Assert.False(scope.AddFile(Path.Combine(_root, "missing.txt")));
+        Assert.False(scope.ExcludePath(Path.Combine(_root, "missing.txt")));
+        Assert.False(scope.AddFile(" "));
+        Assert.False(scope.AddFile("invalid\0path"));
+        Assert.Same(original, Assert.Single(scope.IncludedPaths));
+        Assert.Empty(scope.ExcludedPaths);
+    }
+
+    [Fact]
     public void AddPath_CanonicalizesAndDeduplicatesCaseInsensitively()
     {
         string folder = Path.Combine(_root, "ScopeFolder");

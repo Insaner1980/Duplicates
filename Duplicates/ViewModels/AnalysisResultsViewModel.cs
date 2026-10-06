@@ -112,6 +112,14 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
 
     public event EventHandler<ToolKind>? NewAnalysisRequested;
 
+    internal void SetActionStatusForSession(AnalysisSession? session, string message)
+    {
+        if (session is not null && ReferenceEquals(_sessionStore.CurrentSession, session))
+        {
+            ActionStatusMessage = message;
+        }
+    }
+
     internal Action? SimilaritySelectionValidated { get; set; }
 
     public ObservableCollection<PathFindingViewModel> Findings { get; } = [];
@@ -990,9 +998,19 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
 
         _actionCancellation = actionCancellation;
         IsActionRunning = true;
+        AnalysisSession? initiatingSession = _sessionStore.CurrentSession;
         try
         {
             return await action(actionCancellation.Token);
+        }
+        catch (OperationCanceledException ex)
+        {
+            if (ex is not DeleteOperationCanceledException and not FileOperationCanceledException)
+            {
+                SetActionStatusForSession(initiatingSession, "Action cancelled.");
+            }
+
+            throw;
         }
         finally
         {
@@ -1608,9 +1626,10 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
 
             FileAttributes attributes = File.GetAttributes(finding.FullPath);
             var file = new FileInfo(finding.FullPath);
+            DateTime modifiedUtc = file.LastWriteTimeUtc;
             if (attributes.HasFlag(FileAttributes.Directory) ||
                 attributes.HasFlag(FileAttributes.ReparsePoint) ||
-                file.LastWriteTimeUtc > options.UtcNow - options.MinimumAge)
+                modifiedUtc > options.UtcNow - options.MinimumAge)
             {
                 failure = TemporaryFileChangedFailure(finding.FullPath);
                 return false;
@@ -1621,7 +1640,8 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
             {
             }
 
-            target = new FileActionTarget(finding.FullPath, sizeBytes, FileActionTargetKind.File);
+            target = new FileActionTarget(finding.FullPath, sizeBytes, FileActionTargetKind.File,
+                ExpectedModifiedUtc: modifiedUtc);
             return true;
         }
         catch (Exception ex) when (IsFileSystemFailure(ex))
@@ -1871,7 +1891,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         IReadOnlySet<string> successfulPaths,
         SimilarityActionSnapshot snapshot)
     {
-        if (!ReferenceEquals(_sessionStore.CurrentSession, snapshot.Session))
+        if (!ReferenceEquals(_sessionStore.CurrentSession, snapshot.Session) || successfulPaths.Count == 0)
         {
             return;
         }
@@ -1881,6 +1901,8 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         SimilarityItem[] survivors = _allGroups
             .SelectMany(static group => group.Items)
             .Where(item => !successfulPaths.Contains(item.FullPath))
+            .Where(item => TryReadSimilaritySnapshot(item.FullPath, out SimilarityFileSnapshot current) &&
+                MatchesSimilaritySnapshot(item, current))
             .Select(static item => item.Source)
             .ToArray();
         IReadOnlyList<SimilarityGroup> regrouped = analysisService.RegroupSimilarityItems(

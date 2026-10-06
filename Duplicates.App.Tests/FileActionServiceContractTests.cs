@@ -1,4 +1,5 @@
 using System.Security.Principal;
+using System.Globalization;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
@@ -12,6 +13,155 @@ namespace Duplicates.App.Tests;
 
 public sealed class FileActionServiceContractTests
 {
+    [Fact]
+    public async Task CancellationDuringCommittedDeleteKeepsTheCommitAndDoesNotRepeatIt()
+    {
+        using var fixture = new TemporaryDirectory();
+        string first = fixture.WriteFile("first.bin", [1]);
+        string second = fixture.WriteFile("second.bin", [2]);
+        using var cancellation = new CancellationTokenSource();
+        int calls = 0;
+        var service = new FileActionService(new FakeSettingsService(), (target, _) =>
+        {
+            calls++;
+            File.Delete(target.FullPath);
+            cancellation.Cancel();
+        });
+
+        DeleteOperationCanceledException exception = await Assert.ThrowsAsync<DeleteOperationCanceledException>(() =>
+            service.DeleteAsync(
+                [new FileActionTarget(first, 1, FileActionTargetKind.File), new FileActionTarget(second, 1, FileActionTargetKind.File)],
+                null, cancellation.Token));
+
+        Assert.Equal(1, calls);
+        Assert.Equal([first], exception.Summary.DeletedPaths);
+        Assert.Equal(1, exception.Summary.DeletedBytes);
+        Assert.Empty(exception.Summary.Failures);
+        Assert.False(File.Exists(first));
+        Assert.True(File.Exists(second));
+    }
+
+    [Fact]
+    public async Task ShellCancellationPreservesEarlierCommittedPathsAndReportsTheUnfinishedItem()
+    {
+        using var fixture = new TemporaryDirectory();
+        string first = fixture.WriteFile("first.bin", [1]);
+        string cancelled = fixture.WriteFile("cancelled.bin", [2]);
+        var settings = new FakeSettingsService();
+        settings.SetCurrent(new AppSettings { DeletionMode = DeletionMode.Permanent });
+        var progress = new List<DeleteProgress>();
+        var service = new FileActionService(settings, (target, _) =>
+        {
+            if (target.FullPath == first)
+            {
+                File.Delete(first);
+                return;
+            }
+            throw new OperationCanceledException("The shell dialog was cancelled");
+        });
+
+        DeleteSummary summary = await service.DeleteAsync(
+            [new FileActionTarget(first, 1, FileActionTargetKind.File), new FileActionTarget(cancelled, 1, FileActionTargetKind.File)],
+            new InlineProgress<DeleteProgress>(progress.Add), CancellationToken.None);
+
+        Assert.Equal(1, summary.DeletedCount);
+        Assert.Equal([first], summary.DeletedPaths);
+        Assert.Equal(cancelled, Assert.Single(summary.Failures).Path);
+        Assert.False(File.Exists(first));
+        Assert.True(File.Exists(cancelled));
+        Assert.Equal([1, 2], progress.Select(static value => value.ProcessedCount));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RecycleFailureKeepsTheRequestedModeAndSource(bool accessDenied)
+    {
+        using var fixture = new TemporaryDirectory();
+        string path = fixture.WriteFile("source.bin", [1]);
+        var settings = new FakeSettingsService();
+        settings.SetCurrent(new AppSettings { DeletionMode = DeletionMode.Permanent });
+        int calls = 0;
+        var service = new FileActionService(settings, (_, option) =>
+        {
+            calls++;
+            Assert.Equal(RecycleOption.SendToRecycleBin, option);
+            if (accessDenied)
+            {
+                throw new UnauthorizedAccessException("Access denied");
+            }
+            throw new NotSupportedException("Recycling is unavailable");
+        });
+
+        DeleteSummary summary = await service.DeleteAsync([new FileActionTarget(path, 1, FileActionTargetKind.File)], null,
+            CancellationToken.None, DeletionMode.RecycleBin);
+
+        Assert.Equal(1, calls);
+        Assert.Equal(0, summary.DeletedCount);
+        Assert.Empty(summary.DeletedPaths!);
+        Assert.Equal(path, Assert.Single(summary.Failures).Path);
+        Assert.True(File.Exists(path));
+    }
+
+    [Theory]
+    [InlineData(DeletionMode.RecycleBin, DeletionMode.Permanent, RecycleOption.DeletePermanently)]
+    [InlineData(DeletionMode.Permanent, DeletionMode.RecycleBin, RecycleOption.SendToRecycleBin)]
+    [InlineData(DeletionMode.RecycleBin, null, RecycleOption.SendToRecycleBin)]
+    [InlineData(DeletionMode.Permanent, null, RecycleOption.DeletePermanently)]
+    [InlineData(DeletionMode.Permanent, (DeletionMode)999, RecycleOption.SendToRecycleBin)]
+    public async Task DeleteModeIsCapturedBeforeNativeDispatch(DeletionMode ambient, DeletionMode? requested, RecycleOption expected)
+    {
+        using var fixture = new TemporaryDirectory();
+        string path = fixture.WriteFile("source.bin", [1]);
+        var settings = new FakeSettingsService();
+        settings.SetCurrent(new AppSettings { DeletionMode = ambient });
+        RecycleOption? actual = null;
+        var service = new FileActionService(settings, (_, option) => actual = option);
+
+        await service.DeleteAsync([new FileActionTarget(path, 1, FileActionTargetKind.File)], null, CancellationToken.None, requested);
+
+        Assert.Equal(expected, actual);
+        Assert.True(File.Exists(path));
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task ExactActionsRefuseChangedSurvivorAndPreserveUnchangedControls(bool move, bool changeSurvivor)
+    {
+        using var fixture = new TemporaryDirectory();
+        string selected = fixture.WriteFile("selected.bin", [1, 2, 3]);
+        string survivor = fixture.WriteFile("survivor.bin", [1, 2, 3]);
+        DateTime originalModifiedUtc = File.GetLastWriteTimeUtc(survivor);
+        var target = new FileActionTarget(selected, 3, FileActionTargetKind.File,
+            ExpectedModifiedUtc: File.GetLastWriteTimeUtc(selected),
+            ExpectedExactSurvivors: [new ExactFileConstraint(survivor, 3, originalModifiedUtc)]);
+        if (changeSurvivor)
+        {
+            File.WriteAllBytes(survivor, [4, 5, 6]);
+            File.SetLastWriteTimeUtc(survivor, originalModifiedUtc.AddSeconds(5));
+        }
+        FileActionService service = CreateService(DeletionMode.Permanent);
+
+        if (move)
+        {
+            string destination = fixture.CreateDirectory("destination");
+            FileOperationSummary summary = await service.MoveAsync([target], destination, MoveCollisionBehavior.Skip, null, CancellationToken.None);
+            Assert.Equal(!changeSurvivor, Assert.Single(summary.Results).Succeeded);
+            Assert.Equal(!changeSurvivor, File.Exists(Path.Combine(destination, "selected.bin")));
+        }
+        else
+        {
+            DeleteSummary summary = await service.DeleteAsync([target], null, CancellationToken.None);
+            Assert.Equal(changeSurvivor ? 0 : 1, summary.DeletedCount);
+            Assert.Equal(changeSurvivor ? 1 : 0, summary.Failures.Count);
+        }
+        Assert.Equal(changeSurvivor, File.Exists(selected));
+        Assert.Equal(changeSurvivor ? new byte[] { 4, 5, 6 } : new byte[] { 1, 2, 3 }, File.ReadAllBytes(survivor));
+    }
+
     [Fact]
     public async Task DeleteAsync_PermanentDispatchesFilesAndDirectoriesAndContinuesAfterFailure()
     {
@@ -244,6 +394,95 @@ public sealed class FileActionServiceContractTests
     }
 
     [Fact]
+    public async Task MoveAsync_LateCollisionPreservesCompetingFileAndSource()
+    {
+        using var fixture = new TemporaryDirectory();
+        string source = fixture.WriteFile("source.bin", [1, 2]);
+        string destination = fixture.CreateDirectory("destination");
+        string output = Path.Combine(destination, "source.bin");
+        var service = new FileActionService(new FakeSettingsService(), (_, _) => { }, (target, path) =>
+        {
+            File.WriteAllBytes(path, [9]);
+            File.Move(target.FullPath, path);
+        });
+
+        FileOperationSummary summary = await service.MoveAsync(
+            [new FileActionTarget(source, 2, FileActionTargetKind.File)], destination,
+            MoveCollisionBehavior.Skip, null, CancellationToken.None);
+
+        FileOperationResult result = Assert.Single(summary.Results);
+        Assert.False(result.Succeeded);
+        Assert.Equal(0, summary.SucceededBytes);
+        Assert.Null(result.Failure!.RecoveryPath);
+        Assert.Equal([1, 2], File.ReadAllBytes(source));
+        Assert.Equal([9], File.ReadAllBytes(output));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MoveAsync_ReportsCopyOnlyNativeCompletionAsPartialFailure(bool removeSource)
+    {
+        using var fixture = new TemporaryDirectory();
+        string source = fixture.WriteFile("source.bin", [1, 2]);
+        string destination = fixture.CreateDirectory("destination");
+        string output = Path.Combine(destination, "source.bin");
+        var service = new FileActionService(new FakeSettingsService(), (_, _) => { }, (target, path) =>
+        {
+            File.Copy(target.FullPath, path);
+            if (removeSource)
+            {
+                File.Delete(target.FullPath);
+            }
+        });
+
+        FileOperationSummary summary = await service.MoveAsync(
+            [new FileActionTarget(source, 2, FileActionTargetKind.File)], destination,
+            MoveCollisionBehavior.Skip, null, CancellationToken.None);
+
+        FileOperationResult result = Assert.Single(summary.Results);
+        Assert.Equal(removeSource, result.Succeeded);
+        Assert.Equal(removeSource ? 2 : 0, summary.SucceededBytes);
+        Assert.Equal(!removeSource, File.Exists(source));
+        Assert.Equal([1, 2], File.ReadAllBytes(output));
+        if (!removeSource)
+        {
+            Assert.Null(result.DestinationPath);
+            Assert.Equal(output, Assert.IsType<FileActionFailure>(result.Failure).RecoveryPath);
+            Assert.Equal([1, 2], File.ReadAllBytes(source));
+        }
+    }
+
+    [Theory]
+    [InlineData(MoveCollisionBehavior.Skip)]
+    [InlineData(MoveCollisionBehavior.KeepBoth)]
+    [InlineData(MoveCollisionBehavior.Cancel)]
+    public async Task MoveAsync_CurrentDirectoryFollowsCollisionPolicy(MoveCollisionBehavior policy)
+    {
+        using var fixture = new TemporaryDirectory();
+        string folder = fixture.CreateDirectory("source");
+        string source = fixture.WriteFile(Path.Combine("source", "file.bin"), [1, 2]);
+        FileActionService service = CreateService(DeletionMode.Permanent);
+        FileActionTarget[] targets = [new(source, 2, FileActionTargetKind.File)];
+        if (policy == MoveCollisionBehavior.Cancel)
+        {
+            await Assert.ThrowsAsync<OperationCanceledException>(() =>
+                service.MoveAsync(targets, folder, policy, null, CancellationToken.None));
+            Assert.Equal([1, 2], File.ReadAllBytes(source));
+            return;
+        }
+
+        FileOperationSummary summary = await service.MoveAsync(targets, folder, policy, null, CancellationToken.None);
+        FileOperationResult result = Assert.Single(summary.Results);
+        bool moved = policy == MoveCollisionBehavior.KeepBoth;
+        Assert.Equal(moved, result.Succeeded);
+        Assert.Equal(moved ? 2 : 0, summary.SucceededBytes);
+        Assert.Equal(!moved, File.Exists(source));
+        Assert.Equal([1, 2], File.ReadAllBytes(moved ? result.DestinationPath! : source));
+        Assert.Single(Directory.EnumerateFiles(folder));
+    }
+
+    [Fact]
     public async Task MoveAsync_SkipReportsCollisionWithoutMovingSource()
     {
         using var fixture = new TemporaryDirectory();
@@ -318,6 +557,28 @@ public sealed class FileActionServiceContractTests
         Assert.True(File.Exists(first));
         Assert.True(File.Exists(second));
         Assert.False(File.Exists(Path.Combine(destination, "unique.txt")));
+    }
+
+    [Theory]
+    [InlineData("CON.backup.txt")]
+    [InlineData("nul.tar.gz")]
+    [InlineData("COM1 .backup.txt")]
+    [InlineData("LPT9.backup.txt")]
+    [InlineData("COM\u00B9.txt")]
+    [InlineData("COM\u00B2.backup.txt")]
+    [InlineData("LPT\u00B3.txt")]
+    public async Task RenameAsync_ReservedLeafThrowsBeforeSourceInspection(string newName)
+    {
+        using var fixture = new TemporaryDirectory();
+        string source = fixture.PathFor("missing-source.txt");
+        FileActionService service = CreateService(DeletionMode.Permanent);
+
+        await Assert.ThrowsAsync<ArgumentException>(() => service.RenameAsync(
+            new FileActionTarget(source, 0, FileActionTargetKind.File),
+            newName,
+            CancellationToken.None));
+
+        Assert.False(File.Exists(source));
     }
 
     [Theory]
@@ -637,6 +898,81 @@ public sealed class FileActionServiceContractTests
         Assert.True(File.Exists(source));
     }
 
+    [Theory]
+    [InlineData("en-US", ResultExportFormat.Csv)]
+    [InlineData("fi-FI", ResultExportFormat.Csv)]
+    [InlineData("en-US", ResultExportFormat.Json)]
+    [InlineData("fi-FI", ResultExportFormat.Json)]
+    public async Task ExportAsync_NumbersRemainInvariantAcrossCultures(string culture, ResultExportFormat format)
+    {
+        using var fixture = new TemporaryDirectory();
+        string destination = fixture.PathFor("results");
+        ResultExportItem item = NewExportItem(@"C:\scan\file.bin", "group") with
+        {
+            SizeBytes = 3_000_000_000,
+            SimilarityPercent = 42.5,
+        };
+        CultureInfo originalCulture = CultureInfo.CurrentCulture;
+        try
+        {
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo(culture);
+            await new ResultExportService().ExportAsync(
+                new ResultExportSnapshot(ToolKind.SimilarImages, DateTimeOffset.UtcNow, "Scope", [item], []),
+                format, destination, CancellationToken.None);
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = originalCulture;
+        }
+
+        if (format == ResultExportFormat.Json)
+        {
+            using JsonDocument document = JsonDocument.Parse(File.ReadAllText(destination));
+            JsonElement value = document.RootElement.GetProperty("items")[0];
+            Assert.Equal(item.SizeBytes, value.GetProperty("sizeBytes").GetInt64());
+            Assert.Equal(item.SimilarityPercent, value.GetProperty("similarityPercent").GetDouble());
+        }
+        else
+        {
+            using var parser = new TextFieldParser(destination, Encoding.UTF8);
+            parser.SetDelimiters(",");
+            _ = parser.ReadFields();
+            string[] fields = parser.ReadFields()!;
+            Assert.Equal("42.5", fields[9]);
+            Assert.Equal("3000000000", fields[10]);
+        }
+    }
+
+    [Fact]
+    public async Task ExportAsync_CsvRoundTripsDelimitersNewlinesAndUnicode()
+    {
+        using var fixture = new TemporaryDirectory();
+        string destination = fixture.PathFor("results.csv");
+        ResultExportItem item = NewExportItem(@"C:\scan\ä,東京,😀.txt", "group") with
+        {
+            Reason = "A \"quoted\" reason\r\nSecond line, ää 東京 😀",
+            Suggestion = "line\nnext",
+        };
+        var snapshot = new ResultExportSnapshot(ToolKind.BigFiles, DateTimeOffset.UtcNow,
+            "Scope, \"quoted\"", [item], []);
+
+        await new ResultExportService().ExportAsync(snapshot, ResultExportFormat.Csv, destination, CancellationToken.None);
+
+        using var parser = new TextFieldParser(destination, Encoding.UTF8);
+        parser.TextFieldType = FieldType.Delimited;
+        parser.SetDelimiters(",");
+        parser.HasFieldsEnclosedInQuotes = true;
+        parser.TrimWhiteSpace = false;
+        Assert.Equal(15, parser.ReadFields()!.Length);
+        string[] fields = parser.ReadFields()!;
+        Assert.Equal(15, fields.Length);
+        Assert.Equal(snapshot.ScopeSummary, fields[3]);
+        Assert.Equal(item.FullPath, fields[4]);
+        Assert.Equal(item.Reason, fields[6]);
+        Assert.Equal(item.Suggestion, fields[7]);
+        Assert.True(parser.EndOfData);
+    }
+
     [Fact]
     public async Task ExportAsync_CsvUsesBomRfc4180AndDeterministicRecordOrder()
     {
@@ -726,6 +1062,49 @@ public sealed class FileActionServiceContractTests
             ["alpha", "zeta"],
             exportedItems[0].GetProperty("metadata").EnumerateObject().Select(property => property.Name));
         Assert.Equal(@"C:\\scan\\locked.jpg", root.GetProperty("skippedPaths")[0].GetProperty("path").GetString());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ExportAsync_NeverCleansAnUnownedTemporaryCollision(bool cancelBeforeCreate)
+    {
+        using var fixture = new TemporaryDirectory();
+        Guid temporaryId = Guid.NewGuid();
+        string destination = fixture.WriteFile("results.json", [7, 8]);
+        string foreignTemporary = fixture.WriteFile($".results.json.{temporaryId:N}.tmp", [9]);
+        var service = new ResultExportService(() => temporaryId);
+        var snapshot = new ResultExportSnapshot(ToolKind.EmptyFiles, DateTimeOffset.UtcNow, "Scope", [], []);
+        using var cancellation = new CancellationTokenSource();
+        if (cancelBeforeCreate)
+        {
+            cancellation.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.ExportAsync(
+                snapshot, ResultExportFormat.Json, destination, cancellation.Token, overwriteExisting: true));
+        }
+        else
+        {
+            await Assert.ThrowsAsync<IOException>(() => service.ExportAsync(
+                snapshot, ResultExportFormat.Json, destination, cancellation.Token, overwriteExisting: true));
+        }
+
+        Assert.Equal([7, 8], File.ReadAllBytes(destination));
+        Assert.Equal([9], File.ReadAllBytes(foreignTemporary));
+    }
+
+    [Fact]
+    public async Task ExportAsync_FailedPublicationPreservesLockedDestinationAndCleansOwnedTemp()
+    {
+        using var fixture = new TemporaryDirectory();
+        string destination = fixture.WriteFile("results.json", [7, 8, 9]);
+        using var destinationLock = new FileStream(destination, FileMode.Open, FileAccess.Read, FileShare.Read);
+        var snapshot = new ResultExportSnapshot(ToolKind.EmptyFiles, DateTimeOffset.UtcNow, "Scope", [], []);
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => new ResultExportService().ExportAsync(
+            snapshot, ResultExportFormat.Json, destination, CancellationToken.None, overwriteExisting: true));
+
+        Assert.Equal([7, 8, 9], File.ReadAllBytes(destination));
+        Assert.Equal([destination], Directory.GetFiles(fixture.RootPath));
     }
 
     [Fact]

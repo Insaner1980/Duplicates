@@ -222,11 +222,11 @@
                 <TextBlock
                     HorizontalAlignment="Center"
                     Style="{ThemeResource SubtitleTextBlockStyle}"
-                    Text="No duplicates found" />
+                    Text="{Binding EmptyResultsTitle}" />
                 <TextBlock
                     HorizontalAlignment="Center"
                     Style="{StaticResource MutedTextBlockStyle}"
-                    Text="Every file in the scanned folders is unique." />
+                    Text="{Binding EmptyResultsDescription}" />
             </StackPanel>
 
             <SplitView

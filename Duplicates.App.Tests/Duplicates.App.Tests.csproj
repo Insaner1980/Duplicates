@@ -42,6 +42,10 @@
       Include="..\Duplicates\MainWindow.xaml.cs"
       Link="UiSource\MainWindow.xaml.cs"
       CopyToOutputDirectory="PreserveNewest" />
+    <None
+      Include="..\Duplicates\Views\AnalysisResultsPage.xaml.cs"
+      Link="UiSource\Views\AnalysisResultsPage.xaml.cs"
+      CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

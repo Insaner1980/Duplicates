@@ -13,7 +13,7 @@ public sealed class AppServicesCompositionTests
 
         Assert.IsType<ExifCleanerService>(services.ExifCleanerService);
         Assert.Same(services.PathScopeViewModel, services.ExifRemoverViewModel.PathScope);
-        services.PathScopeViewModel.AddFolder("C:\\ExifComposition");
+        services.PathScopeViewModel.IncludedPaths.Add(new Duplicates.ViewModels.ScopePathViewModel("C:\\ExifComposition", Duplicates.Models.ScopePathKind.Folder));
         Assert.True(services.ExifRemoverViewModel.CleanImagesCommand.CanExecute(false));
 
         Assert.True(services.OperationCoordinator.TryAcquire(
@@ -41,7 +41,7 @@ public sealed class AppServicesCompositionTests
             transactions,
             GetPrivateField(Assert.IsType<VideoOptimizerService>(services.VideoOptimizerService), "_transactions"));
 
-        services.PathScopeViewModel.AddFolder("C:\\VideoOptimizerComposition");
+        services.PathScopeViewModel.IncludedPaths.Add(new Duplicates.ViewModels.ScopePathViewModel("C:\\VideoOptimizerComposition", Duplicates.Models.ScopePathKind.Folder));
         Assert.True(services.VideoOptimizerViewModel.OptimizeVideosCommand.CanExecute(null));
 
         Assert.True(services.OperationCoordinator.TryAcquire(

@@ -134,12 +134,17 @@ public sealed class SettingsService : ISettingsService
         }
         finally
         {
-            if (temporaryPath is not null)
+            try
             {
-                TryDelete(temporaryPath);
+                if (temporaryPath is not null)
+                {
+                    File.Delete(temporaryPath);
+                }
             }
-
-            _writeGate.Release();
+            finally
+            {
+                _writeGate.Release();
+            }
         }
     }
 
@@ -168,15 +173,4 @@ public sealed class SettingsService : ISettingsService
     private static bool IsSettingsFailure(Exception exception) =>
         exception is IOException or UnauthorizedAccessException or System.Security.SecurityException or
             JsonException or NotSupportedException;
-
-    private static void TryDelete(string path)
-    {
-        try
-        {
-            File.Delete(path);
-        }
-        catch (Exception ex) when (IsSettingsFailure(ex))
-        {
-        }
-    }
 }

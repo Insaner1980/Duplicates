@@ -1,4 +1,5 @@
 using Duplicates.Engine;
+using Duplicates.Engine.Models;
 using Duplicates.Models;
 using Duplicates.Services;
 using Duplicates.ViewModels;
@@ -8,6 +9,100 @@ namespace Duplicates.App.Tests;
 
 public sealed class ScanViewModelTests
 {
+    [Fact]
+    public async Task CompletedScanQueuedProgressCannotOverwriteLaterState()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates.ScanProgress.{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var scope = new PathScopeViewModel();
+            scope.AddFolder(root);
+            var viewModel = new ScanViewModel(new DuplicateScanner(), new FakeSettingsService(), new ResultsStore(), scope);
+            var context = new QueuedScanProgressContext();
+            SynchronizationContext? previous = SynchronizationContext.Current;
+            Task scan;
+            SynchronizationContext.SetSynchronizationContext(context);
+            try
+            {
+                scan = viewModel.StartScanCommand.ExecuteAsync(null);
+            }
+            finally
+            {
+                SynchronizationContext.SetSynchronizationContext(previous);
+            }
+
+            await scan;
+            Assert.True(context.HasProgress);
+            viewModel.PhaseText = "Next scan";
+            viewModel.CurrentFilePath = "new request";
+
+            context.DrainProgress();
+
+            Assert.Equal("Next scan", viewModel.PhaseText);
+            Assert.Equal("new request", viewModel.CurrentFilePath);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task CancellationBeforeScanContinuationDoesNotPublishCompletedResult()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates.ScanCancellation.{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var scope = new PathScopeViewModel();
+            scope.AddFolder(root);
+            var store = new ResultsStore();
+            var prior = new ScanResult
+            {
+                Groups = [],
+                TotalFilesScanned = 7,
+                TotalDuplicateFiles = 0,
+                TotalReclaimableBytes = 0,
+                Elapsed = TimeSpan.Zero,
+                SkippedPaths = [],
+            };
+            store.SetResult(prior);
+            var coordinator = new AppOperationCoordinator();
+            var viewModel = new ScanViewModel(new DuplicateScanner(), new FakeSettingsService(), store, scope, coordinator);
+            int completed = 0;
+            viewModel.ScanCompleted += (_, _) => completed++;
+            using var releaseProgress = new ManualResetEventSlim();
+            var context = new QueuedScanProgressContext(coordinator.RequestCancellation, releaseProgress);
+            SynchronizationContext? previous = SynchronizationContext.Current;
+            Task scan;
+            SynchronizationContext.SetSynchronizationContext(context);
+            try
+            {
+                scan = viewModel.StartScanCommand.ExecuteAsync(null);
+            }
+            finally
+            {
+                SynchronizationContext.SetSynchronizationContext(previous);
+                releaseProgress.Set();
+            }
+
+            await scan;
+            context.DrainProgress();
+
+            Assert.Same(prior, store.CurrentResult);
+            Assert.Equal(0, completed);
+            Assert.Equal("Scan cancelled.", viewModel.StatusMessage);
+            Assert.Null(coordinator.ActiveOperation);
+            Assert.False(viewModel.IsScanning);
+            Assert.True(viewModel.StartScanCommand.CanExecute(null));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Fact]
     public void AddFolderCreatesReadablePresentationWithoutChangingCanonicalPath()
     {
@@ -208,5 +303,37 @@ public sealed class ScanViewModelTests
 
         Assert.Equal(Visibility.Collapsed, viewModel.CategoryFiltersVisibility);
         Assert.Equal(Visibility.Visible, viewModel.CustomExtensionsVisibility);
+    }
+
+    private sealed class QueuedScanProgressContext(Action? beforeContinuation = null, ManualResetEventSlim? releaseProgress = null) : SynchronizationContext
+    {
+        private readonly System.Collections.Concurrent.ConcurrentQueue<(SendOrPostCallback Callback, object? State)> _progress = new();
+
+        public bool HasProgress => !_progress.IsEmpty;
+
+        public override void Post(SendOrPostCallback callback, object? state)
+        {
+            if (state is ScanProgress)
+            {
+                _progress.Enqueue((callback, state));
+                releaseProgress?.Wait(TestContext.Current.CancellationToken);
+            }
+            else
+            {
+                ThreadPool.QueueUserWorkItem(_ =>
+                {
+                    beforeContinuation?.Invoke();
+                    callback(state);
+                });
+            }
+        }
+
+        public void DrainProgress()
+        {
+            while (_progress.TryDequeue(out var item))
+            {
+                item.Callback(item.State);
+            }
+        }
     }
 }

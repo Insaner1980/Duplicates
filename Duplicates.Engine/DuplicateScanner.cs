@@ -138,8 +138,10 @@ public sealed class DuplicateScanner
         groups = groups
             .OrderByDescending(static group => group.WastedBytes)
             .ThenBy(static group => group.Files[0].FileName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(static group => group.Files[0].FullPath, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
+        cancellationToken.ThrowIfCancellationRequested();
         stopwatch.Stop();
         progressReporter.Report(new ScanProgress
         {
@@ -245,9 +247,9 @@ public sealed class DuplicateScanner
     private static List<FileEntry> DeduplicateSamePhysicalFiles(IEnumerable<FileEntry> files)
     {
         return files
+            .OrderBy(static file => file.FullPath, StringComparer.OrdinalIgnoreCase)
             .GroupBy(static file => FileIdentityReader.GetBestEffortIdentity(file.FullPath), StringComparer.OrdinalIgnoreCase)
             .Select(static group => group.First())
-            .OrderBy(static file => file.FullPath, StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
 
@@ -257,9 +259,10 @@ public sealed class DuplicateScanner
         CancellationToken cancellationToken)
     {
         byte[] leftBuffer = _verificationPool.Rent(VerificationBufferSize);
-        byte[] rightBuffer = _verificationPool.Rent(VerificationBufferSize);
+        byte[]? rightBuffer = null;
         try
         {
+            rightBuffer = _verificationPool.Rent(VerificationBufferSize);
             var remaining = new List<FileEntry>(files);
             var verifiedGroups = new List<IReadOnlyList<FileEntry>>();
 
@@ -286,6 +289,13 @@ public sealed class DuplicateScanner
                             remaining.RemoveAt(index);
                         }
                     }
+                    catch (ReferenceFileException ex)
+                    {
+                        skippedPaths.Add(new SkippedPath { Path = reference.FullPath, Reason = ex.Message });
+                        remaining.AddRange(group.Skip(1));
+                        group.Clear();
+                        break;
+                    }
                     catch (Exception ex) when (IsSkippable(ex))
                     {
                         skippedPaths.Add(new SkippedPath { Path = candidate.FullPath, Reason = ex.Message });
@@ -304,7 +314,10 @@ public sealed class DuplicateScanner
         finally
         {
             _verificationPool.Return(leftBuffer);
-            _verificationPool.Return(rightBuffer);
+            if (rightBuffer is not null)
+            {
+                _verificationPool.Return(rightBuffer);
+            }
         }
     }
 
@@ -315,13 +328,7 @@ public sealed class DuplicateScanner
         byte[] rightBuffer,
         CancellationToken cancellationToken)
     {
-        using var leftStream = new FileStream(
-            left.FullPath,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.ReadWrite | FileShare.Delete,
-            VerificationBufferSize,
-            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        using FileStream leftStream = OpenVerificationReference(left);
         using var rightStream = new FileStream(
             right.FullPath,
             FileMode.Open,
@@ -330,19 +337,47 @@ public sealed class DuplicateScanner
             VerificationBufferSize,
             FileOptions.Asynchronous | FileOptions.SequentialScan);
 
-        if (leftStream.Length != left.SizeBytes || rightStream.Length != right.SizeBytes || leftStream.Length != rightStream.Length)
+        if (leftStream.Length != left.SizeBytes)
+        {
+            throw new ReferenceFileException(new IOException("File changed during scan."));
+        }
+
+        if (rightStream.Length != right.SizeBytes || leftStream.Length != rightStream.Length)
         {
             throw new IOException("File changed during scan.");
         }
 
+        return await StreamsAreEqualAsync(
+            leftStream, rightStream, leftBuffer, rightBuffer, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal static async Task<bool> StreamsAreEqualAsync(
+        Stream leftStream,
+        Stream rightStream,
+        byte[] leftBuffer,
+        byte[] rightBuffer,
+        CancellationToken cancellationToken)
+    {
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            int leftRead = await leftStream.ReadAsync(
-                leftBuffer.AsMemory(0, VerificationBufferSize),
-                cancellationToken).ConfigureAwait(false);
-            int rightRead = await rightStream.ReadAsync(
+            int leftRead;
+            try
+            {
+                leftRead = await leftStream.ReadAtLeastAsync(
+                    leftBuffer.AsMemory(0, VerificationBufferSize),
+                    VerificationBufferSize,
+                    throwOnEndOfStream: false,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (IsSkippable(ex))
+            {
+                throw new ReferenceFileException(ex);
+            }
+            int rightRead = await rightStream.ReadAtLeastAsync(
                 rightBuffer.AsMemory(0, VerificationBufferSize),
+                VerificationBufferSize,
+                throwOnEndOfStream: false,
                 cancellationToken).ConfigureAwait(false);
 
             if (leftRead != rightRead)
@@ -359,6 +394,24 @@ public sealed class DuplicateScanner
             {
                 return false;
             }
+        }
+    }
+
+    private static FileStream OpenVerificationReference(FileEntry file)
+    {
+        try
+        {
+            return new FileStream(
+                file.FullPath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete,
+                VerificationBufferSize,
+                FileOptions.Asynchronous | FileOptions.SequentialScan);
+        }
+        catch (Exception ex) when (IsSkippable(ex))
+        {
+            throw new ReferenceFileException(ex);
         }
     }
 
@@ -380,4 +433,6 @@ public sealed class DuplicateScanner
     }
 
     private sealed record HashResult(FileEntry File, ulong Hash);
+
+    private sealed class ReferenceFileException(Exception innerException) : IOException(innerException.Message, innerException);
 }

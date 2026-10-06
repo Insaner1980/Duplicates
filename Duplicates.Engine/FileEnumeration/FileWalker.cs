@@ -42,6 +42,11 @@ internal sealed class FileWalker
             IEnumerable<string> paths;
             try
             {
+                if (!options.FollowSymlinks && File.GetAttributes(root).HasFlag(FileAttributes.ReparsePoint))
+                {
+                    continue;
+                }
+
                 paths = Directory.EnumerateFiles(root, "*", enumerationOptions);
             }
             catch (Exception ex) when (IsSkippable(ex))

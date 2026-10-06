@@ -5,13 +5,16 @@ public sealed record BadExtensionContentConstraint(
     string DetectedType,
     string RecommendedExtension);
 
+public sealed record ExactFileConstraint(string FullPath, long SizeBytes, DateTime ModifiedUtc);
+
 public sealed record FileActionTarget(
     string FullPath,
     long SizeBytes,
     FileActionTargetKind Kind,
     string? ExpectedInvalidLinkReason = null,
     BadExtensionContentConstraint? ExpectedBadExtensionContent = null,
-    DateTime? ExpectedModifiedUtc = null);
+    DateTime? ExpectedModifiedUtc = null,
+    IReadOnlyList<ExactFileConstraint>? ExpectedExactSurvivors = null);
 
 public sealed record FileOperationResult(
     string SourcePath,

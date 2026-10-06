@@ -68,7 +68,7 @@ public sealed partial class AnalysisResultsPage : Page
             BitmapAlphaMode.Premultiplied);
         var source = new SoftwareBitmapSource();
         await source.SetBitmapAsync(bitmap);
-        if (ReferenceEquals(ViewModel.SimilarityPreview, preview))
+        if (IsLoaded && ReferenceEquals(ViewModel.SimilarityPreview, preview))
         {
             SimilarityPreviewImage.Source = source;
         }
@@ -95,13 +95,17 @@ public sealed partial class AnalysisResultsPage : Page
             return;
         }
 
+        AnalysisSession? initiatingSession = App.Current.Services.AnalysisSessionStore.CurrentSession;
         try
         {
             await ViewModel.DeleteSelectedAsync(CancellationToken.None);
         }
+        catch (OperationCanceledException)
+        {
+        }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
-            ViewModel.ActionStatusMessage = ex.Message;
+            ViewModel.SetActionStatusForSession(initiatingSession, ex.Message);
         }
     }
 
@@ -130,13 +134,17 @@ public sealed partial class AnalysisResultsPage : Page
             return;
         }
 
+        AnalysisSession? initiatingSession = App.Current.Services.AnalysisSessionStore.CurrentSession;
         try
         {
             await ViewModel.MoveSelectedAsync(pickedFolder.Path, collisionBehavior.Value, CancellationToken.None);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or OperationCanceledException)
+        catch (OperationCanceledException)
         {
-            ViewModel.ActionStatusMessage = ex.Message;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            ViewModel.SetActionStatusForSession(initiatingSession, ex.Message);
         }
     }
 
@@ -148,6 +156,7 @@ public sealed partial class AnalysisResultsPage : Page
             return;
         }
 
+        AnalysisSession? initiatingSession = App.Current.Services.AnalysisSessionStore.CurrentSession;
         _renameFinding = finding;
         RenameDialog.XamlRoot = XamlRoot;
         RenameCurrentPathTextBlock.Text = finding.FullPath;
@@ -172,14 +181,14 @@ public sealed partial class AnalysisResultsPage : Page
                 finding,
                 requestedName,
                 CancellationToken.None);
-            ViewModel.ActionStatusMessage = result.Succeeded
+            ViewModel.SetActionStatusForSession(initiatingSession, result.Succeeded
                 ? "File renamed."
-                : result.Failure?.Reason ?? "The file could not be renamed.";
+                : result.Failure?.Reason ?? "The file could not be renamed.");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or
             ArgumentException or InvalidOperationException)
         {
-            ViewModel.ActionStatusMessage = ex.Message;
+            ViewModel.SetActionStatusForSession(initiatingSession, ex.Message);
         }
     }
 
@@ -230,6 +239,7 @@ public sealed partial class AnalysisResultsPage : Page
         ResultExportFormat format = string.Equals(Path.GetExtension(result.Path), ".json", StringComparison.OrdinalIgnoreCase)
             ? ResultExportFormat.Json
             : ResultExportFormat.Csv;
+        AnalysisSession? initiatingSession = App.Current.Services.AnalysisSessionStore.CurrentSession;
         try
         {
             await ViewModel.ExportAsync(
@@ -237,11 +247,11 @@ public sealed partial class AnalysisResultsPage : Page
                 result.Path,
                 CancellationToken.None,
                 overwriteExisting: true);
-            ViewModel.ActionStatusMessage = "Results exported.";
+            ViewModel.SetActionStatusForSession(initiatingSession, "Results exported.");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException)
         {
-            ViewModel.ActionStatusMessage = ex.Message;
+            ViewModel.SetActionStatusForSession(initiatingSession, ex.Message);
         }
     }
 

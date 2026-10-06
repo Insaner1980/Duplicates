@@ -80,6 +80,18 @@ public sealed class NativeWinUiContractTests
     }
 
     [Fact]
+    public void MainWindow_RuntimeIconUsesTheApplicationDirectory()
+    {
+        string source = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "UiSource", "MainWindow.xaml.cs"));
+
+        Assert.Contains(
+            "AppWindow.SetIcon(Path.Combine(AppContext.BaseDirectory,",
+            source,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("AppWindow.SetIcon(\"Assets/", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void MainWindow_UsesOneNativeTitleBarNavigationViewAndFrame()
     {
         XDocument main = LoadXaml("MainWindow.xaml");
@@ -683,6 +695,12 @@ public sealed class NativeWinUiContractTests
             page.Descendants(Presentation + "InfoBar"),
             infoBar => (string?)infoBar.Attribute("AutomationProperties.Name") == "Settings operation status");
         Assert.Equal("Polite", (string?)operationStatus.Attribute("AutomationProperties.LiveSetting"));
+        XElement permanentWarning = Assert.Single(
+            page.Descendants(Presentation + "InfoBar"),
+            infoBar => (string?)infoBar.Attribute("AutomationProperties.Name") == "Permanent deletion warning");
+        Assert.Equal("False", (string?)permanentWarning.Attribute("IsClosable"));
+        Assert.Equal("True", (string?)permanentWarning.Attribute("IsOpen"));
+        Assert.Equal("{Binding PermanentDeleteWarningVisibility}", (string?)permanentWarning.Attribute("Visibility"));
         XElement cacheStatus = Assert.Single(
             page.Descendants(Presentation + "TextBlock"),
             text => (string?)text.Attribute("Text") == "{Binding CacheStatusText}");
@@ -713,6 +731,18 @@ public sealed class NativeWinUiContractTests
         Assert.DoesNotContain(
             page.Descendants(Presentation + "Border"),
             element => element.Attribute("Tapped") is not null);
+    }
+
+    [Fact]
+    public void ResultsPage_EmptyStateUsesTheCurrentResultDescription()
+    {
+        XDocument page = LoadXaml(@"Views\ResultsPage.xaml");
+        XElement emptyState = page.Descendants(Presentation + "StackPanel")
+            .Single(element => (string?)element.Attribute("Visibility") == "{Binding NoDuplicatesVisibility}");
+        string?[] textBindings = emptyState.Descendants(Presentation + "TextBlock")
+            .Select(element => (string?)element.Attribute("Text")).ToArray();
+        Assert.Contains("{Binding EmptyResultsTitle}", textBindings);
+        Assert.Contains("{Binding EmptyResultsDescription}", textBindings);
     }
 
     [Fact]
@@ -1580,6 +1610,21 @@ public sealed class NativeWinUiContractTests
         Assert.Contains("args.Cancel = true", source, StringComparison.Ordinal);
         Assert.Contains("ConfirmCloseAsync", source, StringComparison.Ordinal);
         Assert.Contains("Close();", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AnalysisResultsPage_PreviewCompletionRequiresAnAttachedPageAndTheCurrentPreview()
+    {
+        string path = Path.Combine(AppContext.BaseDirectory, "UiSource", "Views", "AnalysisResultsPage.xaml.cs");
+        string source = File.ReadAllText(path);
+        int completion = source.IndexOf("await source.SetBitmapAsync(bitmap);", StringComparison.Ordinal);
+        Assert.True(completion >= 0);
+        int publication = source.IndexOf("SimilarityPreviewImage.Source = source;", completion, StringComparison.Ordinal);
+        Assert.True(publication > completion);
+        string publicationGuard = source[completion..publication];
+
+        Assert.Contains("IsLoaded &&", publicationGuard, StringComparison.Ordinal);
+        Assert.Contains("ReferenceEquals(ViewModel.SimilarityPreview, preview)", publicationGuard, StringComparison.Ordinal);
     }
 
     private static XDocument LoadXaml(string relativePath)

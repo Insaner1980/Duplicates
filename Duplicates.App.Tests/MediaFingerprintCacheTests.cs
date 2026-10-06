@@ -415,6 +415,33 @@ public sealed class MediaFingerprintCacheTests : IDisposable
     }
 
     [Fact]
+    public async Task ReplacementFailure_PreservesPriorFinalAndMemoryAndCleansOwnedTemporaryFile()
+    {
+        string oldPath = await WriteSourceAsync("prior.png", [1]);
+        string newPath = await WriteSourceAsync("replacement.png", [2]);
+        var cache = new MediaFingerprintCache(_cachePath);
+        _ = await cache.GetOrCreateImageAsync(
+            oldPath, _ => Task.FromResult(Image(1)), CancellationToken.None);
+        byte[] priorFinal = await File.ReadAllBytesAsync(_cachePath, TestContext.Current.CancellationToken);
+        using var finalLock = new FileStream(_cachePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        int calls = 0;
+        Task<ImageSample> Create(CancellationToken _) => Task.FromResult(Image((byte)++calls));
+
+        _ = await cache.GetOrCreateImageAsync(newPath, Create, CancellationToken.None);
+        _ = await cache.GetOrCreateImageAsync(newPath, Create, CancellationToken.None);
+
+        Assert.Equal(2, calls);
+        Assert.Equal(priorFinal, await File.ReadAllBytesAsync(_cachePath, TestContext.Current.CancellationToken));
+        Assert.Equal(1, (await cache.GetStatusAsync(CancellationToken.None)).EntryCount);
+        Assert.Empty(TemporaryFiles());
+        ImageSample oldHit = await new MediaFingerprintCache(_cachePath).GetOrCreateImageAsync(
+            oldPath,
+            _ => throw new InvalidOperationException("The prior committed entry should remain a cache hit."),
+            CancellationToken.None);
+        Assert.Equal(1, oldHit.Luminance32x32[0]);
+    }
+
+    [Fact]
     public async Task FactoriesForDifferentPaths_RunOutsideStateLock()
     {
         string firstPath = await WriteSourceAsync("first.png", [1]);
@@ -438,6 +465,18 @@ public sealed class MediaFingerprintCacheTests : IDisposable
             cache.GetOrCreateImageAsync(secondPath, _ => Create(2), CancellationToken.None));
 
         Assert.Equal(2, started);
+        Assert.Equal(
+            new[] { Path.GetFullPath(firstPath), Path.GetFullPath(secondPath) }.Order(),
+            GetImagePaths(await ReadDocumentAsync()).Order());
+        var reopenedCache = new MediaFingerprintCache(_cachePath);
+        Task<ImageSample> UnexpectedFactory(CancellationToken _) =>
+            throw new InvalidOperationException("Both committed entries should be cache hits.");
+        ImageSample firstHit = await reopenedCache.GetOrCreateImageAsync(
+            firstPath, UnexpectedFactory, CancellationToken.None);
+        ImageSample secondHit = await reopenedCache.GetOrCreateImageAsync(
+            secondPath, UnexpectedFactory, CancellationToken.None);
+        Assert.Equal(1, firstHit.Luminance32x32[0]);
+        Assert.Equal(2, secondHit.Luminance32x32[0]);
     }
 
     [Fact]
@@ -496,6 +535,41 @@ public sealed class MediaFingerprintCacheTests : IDisposable
         Assert.False(File.Exists(_cachePath));
         _ = await cache.GetOrCreateImageAsync(path, Create, CancellationToken.None);
         Assert.Equal(2, calls);
+    }
+
+    [Fact]
+    public async Task ClearWaitsForPendingPublicationAndRemovesItsCommittedSnapshot()
+    {
+        string path = await WriteSourceAsync("pending-publication.png", [1]);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cache = new MediaFingerprintCache(_cachePath, async (temporaryPath, token) =>
+        {
+            Assert.True(File.Exists(temporaryPath));
+            started.TrySetResult();
+            await release.Task.WaitAsync(TimeSpan.FromSeconds(5), token);
+        });
+
+        Task<ImageSample> publication = cache.GetOrCreateImageAsync(
+            path, _ => Task.FromResult(Image(1)), CancellationToken.None);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Task clear = cache.ClearAsync(CancellationToken.None);
+        try
+        {
+            Assert.False(clear.IsCompleted);
+        }
+        finally
+        {
+            release.TrySetResult();
+            await publication;
+            await clear;
+        }
+
+        Assert.Equal(0, (await cache.GetStatusAsync(CancellationToken.None)).EntryCount);
+        Assert.Equal(0, (await new MediaFingerprintCache(_cachePath)
+            .GetStatusAsync(CancellationToken.None)).EntryCount);
+        Assert.False(File.Exists(_cachePath));
+        Assert.Empty(TemporaryFiles());
     }
 
     [Fact]

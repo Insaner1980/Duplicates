@@ -46,6 +46,8 @@ internal sealed class FakeSettingsService : ISettingsService
 
 internal sealed class FakeFileActionService : IFileActionService
 {
+    public DeletionMode? LastDeletionMode { get; private set; }
+
     public DeleteSummary NextSummary { get; set; } = new(0, 0, []);
 
     public DeleteOperationCanceledException? NextDeleteCancellation { get; set; }
@@ -75,13 +77,17 @@ internal sealed class FakeFileActionService : IFileActionService
     public Action<IReadOnlyList<FileActionTarget>, IProgress<DeleteProgress>?>? OnDelete { get; set; }
 
     public Action<IReadOnlyList<FileActionTarget>, string, MoveCollisionBehavior, IProgress<FileOperationProgress>?>? OnMove { get; set; }
+    public Action<string>? OnOpen { get; set; }
+    public Action<string>? OnReveal { get; set; }
 
     public Task<DeleteSummary> DeleteAsync(
         IReadOnlyList<FileActionTarget> targets,
         IProgress<DeleteProgress>? progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        DeletionMode? deletionMode = null)
     {
         DeleteCallCount++;
+        LastDeletionMode = deletionMode;
         OnDelete?.Invoke(targets, progress);
         if (DeleteHandler is not null)
         {
@@ -139,10 +145,12 @@ internal sealed class FakeFileActionService : IFileActionService
 
     public void OpenFile(string path)
     {
+        OnOpen?.Invoke(path);
     }
 
     public void RevealInExplorer(string path)
     {
+        OnReveal?.Invoke(path);
     }
 }
 
