@@ -146,12 +146,8 @@ public sealed class FileLinkService : IFileLinkService
             FileLinkFileInfo duplicateInfo = _platform.GetInfo(duplicate);
             duplicateIdentity = duplicateInfo.Identity;
             EnsureEligible(
-                survivorRequest,
-                survivor,
-                survivorInfo,
-                duplicateRequest,
-                duplicate,
-                duplicateInfo,
+                (survivorRequest, survivor, survivorInfo),
+                (duplicateRequest, duplicate, duplicateInfo),
                 mode,
                 cancellationToken);
 
@@ -165,24 +161,7 @@ public sealed class FileLinkService : IFileLinkService
                 throw new IOException("The rollback file no longer matches the survivor.");
             }
 
-            if (mode == LinkReplacementMode.HardLink)
-            {
-                FileLinkFileInfo currentSurvivor = _platform.GetInfo(survivor);
-                if (currentSurvivor.LinkCount >= MaximumNtfsLinkCount)
-                {
-                    throw new IOException("The survivor has reached the NTFS hard-link limit of 1024 links.");
-                }
-
-                createdLink = _platform.CreateHardLinkAndOpen(
-                    duplicateRequest.FullPath,
-                    survivorRequest.FullPath);
-            }
-            else
-            {
-                createdLink = _platform.CreateSymbolicLinkAndOpen(
-                    duplicateRequest.FullPath,
-                    survivorRequest.FullPath);
-            }
+            createdLink = CreateLink(survivor, survivorRequest.FullPath, duplicateRequest.FullPath, mode);
 
             createdIdentity = _platform.GetInfo(createdLink).Identity;
             VerifyCreatedLink(
@@ -206,33 +185,7 @@ public sealed class FileLinkService : IFileLinkService
                 createdLink,
                 createdIdentity);
 
-            try
-            {
-                _recycleBinService.RecycleFileAsync(
-                    rollbackPath,
-                    duplicateIdentity,
-                    CancellationToken.None).GetAwaiter().GetResult();
-            }
-            catch (Exception recycleFailure) when (IsOperationalFailure(recycleFailure))
-            {
-                FileLinkPathProbe rollback = _platform.ProbeNoFollow(rollbackPath);
-                if (rollback.State == FileLinkPathState.Missing)
-                {
-                    return Success(duplicateRequest);
-                }
-
-                if (rollback.State != FileLinkPathState.Present || rollback.Identity != duplicateIdentity)
-                {
-                    return FatalFailure(
-                        duplicateRequest,
-                        "The Recycle Bin result is indeterminate; the rollback file was left for manual recovery.",
-                        rollbackPath);
-                }
-
-                throw new RecycleRollbackException(recycleFailure);
-            }
-
-            return Success(duplicateRequest);
+            return RecycleRollback(duplicateRequest, rollbackPath, duplicateIdentity);
         }
         catch (OperationCanceledException) when (!renamed)
         {
@@ -263,10 +216,8 @@ public sealed class FileLinkService : IFileLinkService
                 rollbackPath,
                 duplicate,
                 duplicateIdentity,
-                createdLink,
-                createdIdentity,
-                survivor,
-                survivorRequest.FullPath,
+                (createdLink, createdIdentity),
+                (survivor, survivorRequest.FullPath),
                 mode);
             if (rollback.Succeeded)
             {
@@ -286,70 +237,127 @@ public sealed class FileLinkService : IFileLinkService
         }
     }
 
-    private void EnsureEligible(
-        ValidatedFile survivorRequest,
-        IFileLinkHandle survivorHandle,
-        FileLinkFileInfo survivorInfo,
+    private IFileLinkHandle CreateLink(
+        IFileLinkHandle survivor,
+        string survivorPath,
+        string duplicatePath,
+        LinkReplacementMode mode)
+    {
+        if (mode == LinkReplacementMode.HardLink)
+        {
+            FileLinkFileInfo currentSurvivor = _platform.GetInfo(survivor);
+            if (currentSurvivor.LinkCount >= MaximumNtfsLinkCount)
+            {
+                throw new IOException("The survivor has reached the NTFS hard-link limit of 1024 links.");
+            }
+
+            return _platform.CreateHardLinkAndOpen(
+                duplicatePath,
+                survivorPath);
+        }
+        else
+        {
+            return _platform.CreateSymbolicLinkAndOpen(
+                duplicatePath,
+                survivorPath);
+        }
+
+    }
+
+    private ItemOutcome RecycleRollback(
         ValidatedFile duplicateRequest,
-        IFileLinkHandle duplicateHandle,
-        FileLinkFileInfo duplicateInfo,
+        string rollbackPath,
+        FileSystemIdentity duplicateIdentity)
+    {
+        try
+        {
+            _recycleBinService.RecycleFileAsync(
+                rollbackPath,
+                duplicateIdentity,
+                CancellationToken.None).GetAwaiter().GetResult();
+        }
+        catch (Exception recycleFailure) when (IsOperationalFailure(recycleFailure))
+        {
+            FileLinkPathProbe rollback = _platform.ProbeNoFollow(rollbackPath);
+            if (rollback.State == FileLinkPathState.Missing)
+            {
+                return Success(duplicateRequest);
+            }
+
+            if (rollback.State != FileLinkPathState.Present || rollback.Identity != duplicateIdentity)
+            {
+                return FatalFailure(
+                    duplicateRequest,
+                    "The Recycle Bin result is indeterminate; the rollback file was left for manual recovery.",
+                    rollbackPath);
+            }
+
+            throw new RecycleRollbackException(recycleFailure);
+        }
+
+        return Success(duplicateRequest);
+    }
+
+    private void EnsureEligible(
+        (ValidatedFile Request, IFileLinkHandle Handle, FileLinkFileInfo Info) survivor,
+        (ValidatedFile Request, IFileLinkHandle Handle, FileLinkFileInfo Info) duplicate,
         LinkReplacementMode mode,
         CancellationToken cancellationToken)
     {
-        EnsureSnapshot(survivorRequest, survivorInfo);
-        EnsureSnapshot(duplicateRequest, duplicateInfo);
-        EnsureAllowedAttributes(survivorInfo.Attributes);
-        EnsureAllowedAttributes(duplicateInfo.Attributes);
-        if ((survivorInfo.Attributes & EqualAttributes) !=
-            (duplicateInfo.Attributes & EqualAttributes))
+        EnsureSnapshot(survivor.Request, survivor.Info);
+        EnsureSnapshot(duplicate.Request, duplicate.Info);
+        EnsureAllowedAttributes(survivor.Info.Attributes);
+        EnsureAllowedAttributes(duplicate.Info.Attributes);
+        if ((survivor.Info.Attributes & EqualAttributes) !=
+            (duplicate.Info.Attributes & EqualAttributes))
         {
             throw new IOException("The file attributes no longer match exactly.");
         }
 
-        if (duplicateInfo.LinkCount != 1)
+        if (duplicate.Info.LinkCount != 1)
         {
             throw new IOException("The duplicate already has more than one physical hard link.");
         }
 
         if (mode == LinkReplacementMode.HardLink)
         {
-            if (!survivorInfo.IsLocal || !duplicateInfo.IsLocal ||
-                !string.Equals(survivorInfo.FileSystemName, "NTFS", StringComparison.OrdinalIgnoreCase) ||
-                !string.Equals(duplicateInfo.FileSystemName, "NTFS", StringComparison.OrdinalIgnoreCase))
+            if (!survivor.Info.IsLocal || !duplicate.Info.IsLocal ||
+                !string.Equals(survivor.Info.FileSystemName, "NTFS", StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(duplicate.Info.FileSystemName, "NTFS", StringComparison.OrdinalIgnoreCase))
             {
                 throw new IOException("Hard-link replacement requires two files on a local NTFS volume.");
             }
 
-            if (survivorInfo.Identity.VolumeSerialNumber != duplicateInfo.Identity.VolumeSerialNumber)
+            if (survivor.Info.Identity.VolumeSerialNumber != duplicate.Info.Identity.VolumeSerialNumber)
             {
                 throw new IOException("Hard-link replacement requires the survivor and duplicate on the same volume.");
             }
 
-            if (survivorInfo.LinkCount >= MaximumNtfsLinkCount)
+            if (survivor.Info.LinkCount >= MaximumNtfsLinkCount)
             {
                 throw new IOException("The survivor has reached the NTFS hard-link limit of 1024 links.");
             }
         }
 
-        FileLinkSecurityInfo survivorSecurity = _platform.GetSecurityInfo(survivorHandle);
-        FileLinkSecurityInfo duplicateSecurity = _platform.GetSecurityInfo(duplicateHandle);
+        FileLinkSecurityInfo survivorSecurity = _platform.GetSecurityInfo(survivor.Handle);
+        FileLinkSecurityInfo duplicateSecurity = _platform.GetSecurityInfo(duplicate.Handle);
         if (!SecurityEquals(survivorSecurity, duplicateSecurity))
         {
             throw new IOException("The owner, group, DACL, or DACL control state no longer matches.");
         }
 
         if (!_platform.StreamsEqual(
-                survivorRequest.FullPath,
-                survivorHandle,
-                duplicateRequest.FullPath,
-                duplicateHandle,
+                survivor.Request.FullPath,
+                survivor.Handle,
+                duplicate.Request.FullPath,
+                duplicate.Handle,
                 cancellationToken))
         {
             throw new IOException("The alternate data streams no longer match exactly.");
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        if (!_platform.ContentEquals(survivorHandle, duplicateHandle, cancellationToken))
+        if (!_platform.ContentEquals(survivor.Handle, duplicate.Handle, cancellationToken))
         {
             throw new IOException("The files are no longer byte-identical.");
         }
@@ -466,10 +474,8 @@ public sealed class FileLinkService : IFileLinkService
         string rollbackPath,
         IFileLinkHandle rollbackHandle,
         FileSystemIdentity rollbackIdentity,
-        IFileLinkHandle? createdLink,
-        FileSystemIdentity createdIdentity,
-        IFileLinkHandle? survivorHandle,
-        string survivorPath,
+        (IFileLinkHandle? Handle, FileSystemIdentity Identity) created,
+        (IFileLinkHandle? Handle, string Path) survivor,
         LinkReplacementMode mode)
     {
         try
@@ -482,47 +488,10 @@ public sealed class FileLinkService : IFileLinkService
                 return new RollbackOutcome(false, "The rollback identity is no longer owned by this operation.");
             }
 
-            FileLinkPathProbe originalProbe = _platform.ProbeNoFollow(originalPath);
-            if (createdLink is null)
+            RollbackOutcome? removalFailure = TryRemoveCreatedLink(originalPath, created, survivor, mode);
+            if (removalFailure is not null)
             {
-                if (originalProbe.State != FileLinkPathState.Missing)
-                {
-                    return new RollbackOutcome(false, "Another entry occupies the original path.");
-                }
-            }
-            else
-            {
-                if (originalProbe.State == FileLinkPathState.Missing)
-                {
-                    createdLink.Dispose();
-                }
-                else
-                {
-                    if (originalProbe.State != FileLinkPathState.Present ||
-                        originalProbe.Identity != createdIdentity)
-                    {
-                        return new RollbackOutcome(false, "Another entry occupies the original path.");
-                    }
-
-                    if (!CanDeleteCreatedLink(
-                            originalPath,
-                            createdLink,
-                            createdIdentity,
-                            survivorHandle,
-                            survivorPath,
-                            mode))
-                    {
-                        return new RollbackOutcome(false, "The created entry can no longer be proven owned.");
-                    }
-
-                    _platform.DeleteByHandle(createdLink);
-                    createdLink.Dispose();
-                    originalProbe = _platform.ProbeNoFollow(originalPath);
-                    if (originalProbe.State != FileLinkPathState.Missing)
-                    {
-                        return new RollbackOutcome(false, "The created pathname could not be removed safely.");
-                    }
-                }
+                return removalFailure.Value;
             }
 
             _platform.Rename(rollbackHandle, originalPath);
@@ -535,6 +504,44 @@ public sealed class FileLinkService : IFileLinkService
         {
             return new RollbackOutcome(false, $"The rollback file could not be restored safely: {ex.Message}");
         }
+    }
+
+    private RollbackOutcome? TryRemoveCreatedLink(
+        string originalPath,
+        (IFileLinkHandle? Handle, FileSystemIdentity Identity) created,
+        (IFileLinkHandle? Handle, string Path) survivor,
+        LinkReplacementMode mode)
+    {
+        FileLinkPathProbe originalProbe = _platform.ProbeNoFollow(originalPath);
+        if (created.Handle is null)
+        {
+            return originalProbe.State == FileLinkPathState.Missing
+                ? null
+                : new RollbackOutcome(false, "Another entry occupies the original path.");
+        }
+
+        if (originalProbe.State == FileLinkPathState.Missing)
+        {
+            created.Handle.Dispose();
+            return null;
+        }
+
+        if (originalProbe.State != FileLinkPathState.Present || originalProbe.Identity != created.Identity)
+        {
+            return new RollbackOutcome(false, "Another entry occupies the original path.");
+        }
+
+        if (!CanDeleteCreatedLink(originalPath, created.Handle, created.Identity, survivor.Handle, survivor.Path, mode))
+        {
+            return new RollbackOutcome(false, "The created entry can no longer be proven owned.");
+        }
+
+        _platform.DeleteByHandle(created.Handle);
+        created.Handle.Dispose();
+        originalProbe = _platform.ProbeNoFollow(originalPath);
+        return originalProbe.State == FileLinkPathState.Missing
+            ? null
+            : new RollbackOutcome(false, "The created pathname could not be removed safely.");
     }
 
     private bool CanDeleteCreatedLink(
@@ -564,22 +571,22 @@ public sealed class FileLinkService : IFileLinkService
     private void RejectPhysicalAliases(IReadOnlyList<ValidatedGroup> groups)
     {
         var identities = new Dictionary<FileSystemIdentity, string>();
-        foreach (ValidatedFile file in groups.SelectMany(static group =>
-                     group.Duplicates.Prepend(group.Survivor)))
+        foreach (string path in groups.SelectMany(static group =>
+                     group.Duplicates.Prepend(group.Survivor)).Select(static file => file.FullPath))
         {
             try
             {
-                using IFileLinkHandle handle = _platform.OpenNoFollow(file.FullPath, requestDelete: false);
+                using IFileLinkHandle handle = _platform.OpenNoFollow(path, requestDelete: false);
                 FileSystemIdentity identity = _platform.GetInfo(handle).Identity;
                 if (identities.TryGetValue(identity, out string? existingPath) &&
-                    !string.Equals(existingPath, file.FullPath, StringComparison.OrdinalIgnoreCase))
+                    !string.Equals(existingPath, path, StringComparison.OrdinalIgnoreCase))
                 {
                     throw new ArgumentException(
-                        $"The request contains filesystem aliases for '{existingPath}' and '{file.FullPath}'.",
+                        $"The request contains filesystem aliases for '{existingPath}' and '{path}'.",
                         nameof(groups));
                 }
 
-                identities[identity] = file.FullPath;
+                identities[identity] = path;
             }
             catch (ArgumentException)
             {
@@ -740,7 +747,7 @@ public sealed class FileLinkService : IFileLinkService
         NotSupportedException;
 
     private static void ThrowCancellation(
-        IReadOnlyList<FileOperationResult> results,
+        List<FileOperationResult> results,
         long succeededBytes,
         CancellationToken cancellationToken)
     {
@@ -789,6 +796,12 @@ public sealed class FileLinkService : IFileLinkService
 
     private readonly record struct RollbackOutcome(bool Succeeded, string Reason);
 
-    private sealed class RecycleRollbackException(Exception innerException)
-        : IOException("The rollback file could not be recycled.", innerException);
+    private sealed class RecycleRollbackException
+        : IOException
+    {
+        public RecycleRollbackException(Exception innerException)
+            : base("The rollback file could not be recycled.", innerException)
+        {
+        }
+    }
 }

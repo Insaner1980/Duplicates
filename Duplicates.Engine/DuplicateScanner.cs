@@ -10,26 +10,23 @@ namespace Duplicates.Engine;
 public sealed class DuplicateScanner
 {
     private const int VerificationBufferSize = 1024 * 1024;
-    private readonly FileWalker _fileWalker;
     private readonly IFileHasher _fileHasher;
     private readonly ArrayPool<byte> _verificationPool;
 
     public DuplicateScanner()
-        : this(new FileWalker(), new FileHasher())
+        : this(new FileHasher())
     {
     }
 
-    internal DuplicateScanner(FileWalker fileWalker, IFileHasher fileHasher)
-        : this(fileWalker, fileHasher, ArrayPool<byte>.Shared)
+    internal DuplicateScanner(IFileHasher fileHasher)
+        : this(fileHasher, ArrayPool<byte>.Shared)
     {
     }
 
     internal DuplicateScanner(
-        FileWalker fileWalker,
         IFileHasher fileHasher,
         ArrayPool<byte> verificationPool)
     {
-        _fileWalker = fileWalker;
         _fileHasher = fileHasher;
         _verificationPool = verificationPool;
     }
@@ -47,7 +44,7 @@ public sealed class DuplicateScanner
         var progressReporter = new ScanProgressReporter(progress);
         var skippedPaths = new ConcurrentBag<SkippedPath>();
 
-        FileWalkResult walkResult = _fileWalker.Walk(options, progressReporter, cancellationToken);
+        FileWalkResult walkResult = FileWalker.Walk(options, progressReporter, cancellationToken);
         foreach (SkippedPath skippedPath in walkResult.SkippedPaths)
         {
             skippedPaths.Add(skippedPath);
@@ -165,7 +162,7 @@ public sealed class DuplicateScanner
     {
         if (options.MinSizeBytes < 0)
         {
-            throw new ArgumentOutOfRangeException(nameof(options.MinSizeBytes), options.MinSizeBytes, "Minimum size cannot be negative.");
+            throw new ArgumentOutOfRangeException(nameof(options), options.MinSizeBytes, "Minimum size cannot be negative.");
         }
 
         if (options.MaxSizeBytes < options.MinSizeBytes)
@@ -177,7 +174,7 @@ public sealed class DuplicateScanner
     }
 
     private async Task<HashResult[]> HashFilesAsync(
-        IReadOnlyList<FileEntry> files,
+        List<FileEntry> files,
         Func<FileEntry, long> bytesToRead,
         ScanPhase phase,
         ScanProgressReporter progress,
@@ -434,5 +431,11 @@ public sealed class DuplicateScanner
 
     private sealed record HashResult(FileEntry File, ulong Hash);
 
-    private sealed class ReferenceFileException(Exception innerException) : IOException(innerException.Message, innerException);
+    private sealed class ReferenceFileException : IOException
+    {
+        public ReferenceFileException(Exception innerException)
+            : base(innerException.Message, innerException)
+        {
+        }
+    }
 }

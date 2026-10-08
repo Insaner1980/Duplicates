@@ -6,7 +6,7 @@ This is the comprehensive, source-backed reference for the current Duplicates im
 
 The implementation is authoritative. Historical specifications and implementation plans explain intent, but they do not override current source or tests.
 
-The data-cleaner implementation is integrated with the newer package versions from `main`. The August 8–9 runtime and scanner results below are historical branch evidence, not verification of the merged Windows App SDK 2.3 build. Their ignored artifacts belonged to the removed worktree and are not part of this checkout.
+The data-cleaner implementation is integrated with the newer package versions from `main`. The August 8–9 runtime and scanner results below are historical branch evidence, not verification of the Windows App SDK 2.5 build. Their ignored artifacts belonged to the removed worktree and are not part of this checkout.
 
 ## Product Summary
 
@@ -91,15 +91,17 @@ All projects enable nullable reference types, implicit usings, and C# language v
 
 | Package | Repository pin |
 | --- | --- |
-| `Microsoft.WindowsAppSDK` | `2.3.1` |
-| `Microsoft.Windows.SDK.BuildTools` | `10.0.28000.2526` |
+| `Microsoft.WindowsAppSDK` | `2.5.1` |
+| `Microsoft.Windows.SDK.BuildTools` | `10.0.28000.2705` |
 | `CommunityToolkit.Mvvm` | `8.4.2` |
 | `CommunityToolkit.WinUI.Controls.SettingsControls` | `8.2.251219` |
-| `System.IO.Hashing` | `10.0.10` |
-| `coverlet.collector` | `10.0.1` |
-| `Microsoft.NET.Test.Sdk` | `18.8.1` |
-| `xunit.v3` | `3.2.2` |
-| `xunit.runner.visualstudio` | `3.1.5` |
+| `System.IO.Hashing` | `10.0.12` |
+| `coverlet.collector` | `10.1.0` |
+| `Microsoft.NET.Test.Sdk` | `18.10.1` |
+| `xunit.v3.mtp-off` | `4.0.1` |
+| `xunit.runner.visualstudio` | `4.0.0` |
+
+The test projects use `xunit.v3.mtp-off` to retain VSTest execution and `coverlet.collector` coverage on .NET 10.
 
 ### Package update policy
 
@@ -146,7 +148,7 @@ That test-only property disables Windows App SDK auto-initialization, bootstrap 
 
 ### Runtime and signing helpers
 
-`tools/Install-WindowsAppRuntime2.3.ps1` is pinned to `2.3.1`. It downloads Microsoft's x64 runtime installer to `%TEMP%`, runs it with `--quiet`, and rejects a nonzero exit code.
+`tools/Install-WindowsAppRuntime2.5.ps1` is pinned to `2.5.1`. It downloads Microsoft's x64 runtime installer to `%TEMP%`, runs it with `--quiet`, and rejects a nonzero exit code.
 
 `tools/New-SigningCertificate.ps1`:
 
@@ -968,7 +970,7 @@ Review cautions:
 - Dark/light semantic roles collapse to five palette colors. Light persistence, High Contrast substitution, and observable keyboard/Narrator focus were exercised in both modes; text scale and objective spoken Narrator output still require separate runtime evidence.
 - `SuccessBrush` is red, so "success" naming does not describe its visual semantics.
 - ViewModels subscribe to long-lived service events and are themselves long-lived singletons; this currently matches `AppServices`, but a move to transient pages/ViewModels would require unsubscription/lifetime work.
-- About text hardcodes `.NET 10` and `Windows App SDK 2.3`; it is not derived from package metadata.
+- About text hardcodes `.NET 10` and `Windows App SDK 2.5`; it is not derived from package metadata.
 - The inventory measurement and fresh unpackaged/packaged rendered 100,000-file runs are one local NTFS/NVMe host's evidence, not a cross-machine performance guarantee.
 - Semgrep, gitleaks, and trufflehog availability is external to the repository; missing scanners must remain `UNAVAILABLE`, never reported as a clean scan.
 
@@ -1052,7 +1054,7 @@ Review cautions:
 
 ## Remaining Runtime Acceptance
 
-The historical Task 20 Gate D passed for the feature branch on Windows App SDK 1.8; the merged Windows App SDK 2.3 build requires its own runtime acceptance. The following still need explicit manual or environment-backed evidence before claiming distribution-wide release readiness:
+The historical Task 20 Gate D passed for the feature branch on Windows App SDK 1.8; the Windows App SDK 2.5 build requires its own runtime acceptance. The following still need explicit manual or environment-backed evidence before claiming distribution-wide release readiness:
 
 - Unsigned Debug MSIX generation, MakeAppx unpack, DevelopmentMode registration, AUMID launch, removal, and exact InstallLocation verification passed. Release signing, trusted sideload installation, update, and uninstall remain unverified as a distribution flow.
 - Runtime installer behavior with missing, same, newer, and corrupted runtime packages.
@@ -1063,4 +1065,4 @@ The historical Task 20 Gate D passed for the feature branch on Windows App SDK 1
 - The historical accumulated-process Windows-media lifetime hang remains worth monitoring even though bounded cleanup, three fresh full runs, the final blame-hang run, and both wrappers passed.
 - Semgrep, Gitleaks, and TruffleHog are installed on this host. Gitleaks reported no leaks, while Semgrep reported three blocking `unsafe-path-combine` findings in test helpers that remain to be adjudicated. TruffleHog passed an installation probe but was not used for the repository scan because the wrapper prefers Gitleaks when both are available. The dependency audit and the scoped regex review also passed.
 - External Windows-check implementations and any remote CI/security service.
-- Packaged and unpackaged GUI acceptance of the combined tool implementation on Windows App SDK 2.3.1; historical 1.8 runtime results do not verify that combination.
+- Packaged and unpackaged GUI acceptance of the combined tool implementation on Windows App SDK 2.5.1; historical 1.8 runtime results do not verify that combination.

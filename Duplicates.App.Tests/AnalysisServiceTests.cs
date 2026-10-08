@@ -6,7 +6,7 @@ using Xunit.Sdk;
 
 namespace Duplicates.App.Tests;
 
-public sealed class AnalysisServiceTests : IDisposable
+public sealed partial class AnalysisServiceTests : IDisposable
 {
     [Theory]
     [InlineData(ToolKind.BigFiles, false)]
@@ -14,7 +14,7 @@ public sealed class AnalysisServiceTests : IDisposable
     [InlineData(ToolKind.TemporaryFiles, true)]
     public async Task InvalidStorageOptionsFailBeforeInventory(ToolKind tool, bool overflowingAge)
     {
-        ToolOptions options = tool == ToolKind.BigFiles
+        IToolOptions options = tool == ToolKind.BigFiles
             ? new LargeFileToolOptions(-1)
             : new TemporaryFileToolOptions(overflowingAge ? TimeSpan.MaxValue : TimeSpan.FromDays(-1), DateTime.UtcNow);
         var reports = new List<AnalysisProgress>();
@@ -71,7 +71,7 @@ public sealed class AnalysisServiceTests : IDisposable
                 1,
                 10L,
                 new RecordingProgress(reports),
-                cancellation.Token,
+                cancellation.Token
             ]));
 
         Assert.IsType<OperationCanceledException>(failure.InnerException);
@@ -154,8 +154,8 @@ public sealed class AnalysisServiceTests : IDisposable
             progress: null,
             CancellationToken.None);
 
-        Assert.Equal(useCache ? [path] : [], provider.CachedPaths);
-        Assert.Equal(useCache ? [] : [path], provider.FreshPaths);
+        Assert.Equal(useCache ? [path] : Array.Empty<string>(), provider.CachedPaths);
+        Assert.Equal(useCache ? Array.Empty<string>() : [path], provider.FreshPaths);
     }
 
     [Theory]
@@ -752,8 +752,15 @@ public sealed class AnalysisServiceTests : IDisposable
         return exception is IOException && nativeError is 5 or 1314;
     }
 
-    private sealed class DelayingProgress(TimeSpan delay) : IProgress<AnalysisProgress>
+    private sealed class DelayingProgress : IProgress<AnalysisProgress>
     {
+        private readonly TimeSpan _delay;
+
+        public DelayingProgress(TimeSpan delay)
+        {
+            _delay = delay;
+        }
+
         public bool Delayed { get; private set; }
 
         public void Report(AnalysisProgress value)
@@ -764,13 +771,20 @@ public sealed class AnalysisServiceTests : IDisposable
             }
 
             Delayed = true;
-            Thread.Sleep(delay);
+            Thread.Sleep(_delay);
         }
     }
 
-    private sealed class RecordingProgress(List<AnalysisProgress> reports) : IProgress<AnalysisProgress>
+    private sealed class RecordingProgress : IProgress<AnalysisProgress>
     {
-        public void Report(AnalysisProgress value) => reports.Add(value);
+        private readonly List<AnalysisProgress> _reports;
+
+        public RecordingProgress(List<AnalysisProgress> reports)
+        {
+            _reports = reports;
+        }
+
+        public void Report(AnalysisProgress value) => _reports.Add(value);
     }
 
     private sealed class DelayedImageSampleProvider : IImageSampleProvider

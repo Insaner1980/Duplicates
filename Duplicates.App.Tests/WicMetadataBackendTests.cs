@@ -10,8 +10,10 @@ using Windows.Storage.Streams;
 
 namespace Duplicates.App.Tests;
 
-public sealed class WicMetadataBackendTests : IDisposable
+public sealed partial class WicMetadataBackendTests : IDisposable
 {
+    private static readonly string[] OriginalKeywords = ["alpha"];
+    private static readonly string[] MutatedKeywords = ["bravo"];
     private readonly string _root = Path.Combine(
         Path.GetTempPath(),
         "Duplicates-WicMetadata",
@@ -49,8 +51,14 @@ public sealed class WicMetadataBackendTests : IDisposable
     public void Interop_CanCreateAndReleaseFactory()
     {
         object factory = WicMetadataInterop.CreateFactory();
-
-        WicMetadataInterop.Release(factory);
+        try
+        {
+            Assert.True(Marshal.IsComObject(factory));
+        }
+        finally
+        {
+            WicMetadataInterop.Release(factory);
+        }
     }
 
     [Fact]
@@ -427,14 +435,14 @@ public sealed class WicMetadataBackendTests : IDisposable
         File.Delete(moved);
     }
 
-    public static IEnumerable<object[]> DisabledSubtreeMutationCases()
+    public static IEnumerable<TheoryDataRow<bool, string, string, string, int>> DisabledSubtreeMutationCases()
     {
-        yield return [true, "jpeg-gps.jpg", "/app1/ifd/gps", "/app1/ifd/gps/{ushort=1}", 0];
-        yield return [true, "jpeg-iptc.jpg", "/app13/irb/8bimiptc/iptc", "/app13/irb/8bimiptc/iptc/keywords", 2];
-        yield return [true, "jpeg-thumb.jpg", "/app1/thumb", "/app1/thumb/{ushort=274}", 3];
-        yield return [false, "tiff-gps.tiff", "/ifd/gps", "/ifd/gps/{ushort=1}", 0];
-        yield return [false, "tiff-iptc.tiff", "/ifd/iptc", "/ifd/iptc/keywords", 2];
-        yield return [false, "tiff-irb-iptc.tiff", "/ifd/irb/8bimiptc/iptc", "/ifd/irb/8bimiptc/iptc/keywords", 2];
+        yield return new(true, "jpeg-gps.jpg", "/app1/ifd/gps", "/app1/ifd/gps/{ushort=1}", 0);
+        yield return new(true, "jpeg-iptc.jpg", "/app13/irb/8bimiptc/iptc", "/app13/irb/8bimiptc/iptc/keywords", 2);
+        yield return new(true, "jpeg-thumb.jpg", "/app1/thumb", "/app1/thumb/{ushort=274}", 3);
+        yield return new(false, "tiff-gps.tiff", "/ifd/gps", "/ifd/gps/{ushort=1}", 0);
+        yield return new(false, "tiff-iptc.tiff", "/ifd/iptc", "/ifd/iptc/keywords", 2);
+        yield return new(false, "tiff-irb-iptc.tiff", "/ifd/irb/8bimiptc/iptc", "/ifd/irb/8bimiptc/iptc/keywords", 2);
     }
 
     [Theory]
@@ -572,7 +580,7 @@ public sealed class WicMetadataBackendTests : IDisposable
     {
         0 => new BitmapTypedValue(mutated ? "S" : "N", PropertyType.String),
         2 => new BitmapTypedValue(
-            mutated ? new[] { "bravo" } : new[] { "alpha" },
+            mutated ? MutatedKeywords : OriginalKeywords,
             PropertyType.StringArray),
         3 => new BitmapTypedValue(mutated ? (ushort)2 : (ushort)1, PropertyType.UInt16),
         _ => throw new ArgumentOutOfRangeException(nameof(kind)),

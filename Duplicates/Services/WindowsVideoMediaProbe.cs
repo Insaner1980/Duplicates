@@ -49,23 +49,13 @@ internal sealed class WindowsVideoMediaProbe : IVideoMediaProbe
             MediaRatio frameRate = video.FrameRate;
             MediaRatio pixelAspectRatio = video.PixelAspectRatio;
             VideoMediaInfo info = BuildInfo(
-                properties.Width,
-                properties.Height,
-                properties.Orientation,
+                (properties.Width, properties.Height, properties.Orientation),
                 properties.Duration,
-                properties.Bitrate,
-                video.Bitrate,
-                frameRate.Numerator,
-                frameRate.Denominator,
-                pixelAspectRatio.Numerator,
-                pixelAspectRatio.Denominator,
-                video.Subtype,
-                encodingProfile.Container?.Subtype ?? string.Empty,
-                audio?.Subtype,
-                audio?.Bitrate ?? 0,
-                videoTracks.Count,
-                audioTracks.Count,
-                timedMetadataTracks.Count);
+                (properties.Bitrate, video.Bitrate, audio?.Bitrate ?? 0),
+                (frameRate.Numerator, frameRate.Denominator),
+                (pixelAspectRatio.Numerator, pixelAspectRatio.Denominator),
+                (video.Subtype, encodingProfile.Container?.Subtype ?? string.Empty, audio?.Subtype),
+                (videoTracks.Count, audioTracks.Count, timedMetadataTracks.Count));
 
             MediaClip clip = await WinRtAsync.AwaitAndCloseAsync(
                     MediaClip.CreateFromFileAsync(file),
@@ -116,24 +106,20 @@ internal sealed class WindowsVideoMediaProbe : IVideoMediaProbe
     }
 
     internal static VideoMediaInfo BuildInfo(
-        uint codedWidth,
-        uint codedHeight,
-        VideoOrientation orientation,
+        (uint Width, uint Height, VideoOrientation Orientation) dimensions,
         TimeSpan duration,
-        uint totalBitrate,
-        uint videoBitrate,
-        uint frameRateNumerator,
-        uint frameRateDenominator,
-        uint pixelAspectRatioNumerator,
-        uint pixelAspectRatioDenominator,
-        string videoCodec,
-        string containerCodec,
-        string? audioCodec,
-        uint audioBitrate,
-        int videoTrackCount,
-        int audioTrackCount,
-        int timedMetadataTrackCount)
+        (uint Total, uint Video, uint Audio) bitrates,
+        (uint Numerator, uint Denominator) frameRate,
+        (uint Numerator, uint Denominator) pixelAspectRatio,
+        (string Video, string Container, string? Audio) codecs,
+        (int Video, int Audio, int TimedMetadata) trackCounts)
     {
+        (uint codedWidth, uint codedHeight, VideoOrientation orientation) = dimensions;
+        (uint totalBitrate, uint videoBitrate, uint audioBitrate) = bitrates;
+        (uint frameRateNumerator, uint frameRateDenominator) = frameRate;
+        (uint pixelAspectRatioNumerator, uint pixelAspectRatioDenominator) = pixelAspectRatio;
+        (string videoCodec, string containerCodec, string? audioCodec) = codecs;
+        (int videoTrackCount, int audioTrackCount, int timedMetadataTrackCount) = trackCounts;
         bool missingPixelAspectRatio =
             pixelAspectRatioNumerator == 0 && pixelAspectRatioDenominator == 0;
         if (duration <= TimeSpan.Zero ||

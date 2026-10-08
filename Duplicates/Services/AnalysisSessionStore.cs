@@ -6,7 +6,7 @@ namespace Duplicates.Services;
 public sealed record AnalysisSession(
     ToolKind Tool,
     AnalysisScope Scope,
-    ToolOptions ToolOptions,
+    IToolOptions ToolOptions,
     AnalysisResult Result,
     DateTimeOffset CompletedAtUtc);
 
@@ -16,7 +16,7 @@ public sealed class AnalysisSessionStore
 
     public event EventHandler<AnalysisSession?>? ResultChanged;
 
-    public void SetCompleted(ToolKind tool, AnalysisScope scope, ToolOptions toolOptions, AnalysisResult result)
+    public void SetCompleted(ToolKind tool, AnalysisScope scope, IToolOptions toolOptions, AnalysisResult result)
     {
         CurrentSession = new AnalysisSession(tool, CopyScope(scope), toolOptions, result, DateTimeOffset.UtcNow);
         ResultChanged?.Invoke(this, CurrentSession);
@@ -27,6 +27,7 @@ public sealed class AnalysisSessionStore
         SetCompleted(tool, scope, DefaultOptions(tool), result);
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Major Code Smell", "S4220", Justification = "The nullable session payload signals that the current session has been cleared.")]
     public void Clear()
     {
         CurrentSession = null;
@@ -43,7 +44,7 @@ public sealed class AnalysisSessionStore
         IgnoreSystemFiles = scope.IgnoreSystemFiles,
     };
 
-    private static ToolOptions DefaultOptions(ToolKind tool) => tool switch
+    private static IToolOptions DefaultOptions(ToolKind tool) => tool switch
     {
         ToolKind.BigFiles => new LargeFileToolOptions(1_073_741_824),
         ToolKind.SimilarImages => new SimilarImageToolOptions(8),

@@ -203,7 +203,7 @@ public sealed class InvalidLinkAnalyzerTests : IDisposable
             cancellationSource));
 
         await Assert.ThrowsAsync<OperationCanceledException>(() =>
-            new InvalidLinkAnalyzer().AnalyzeAsync(inventory, cancellationSource.Token));
+            InvalidLinkAnalyzer.AnalyzeAsync(inventory, cancellationSource.Token));
     }
 
     [Fact]
@@ -224,7 +224,7 @@ public sealed class InvalidLinkAnalyzerTests : IDisposable
             [lowerCasePath, lastLink, regularFile, upperCasePath],
             skippedPaths);
 
-        AnalysisResult result = await new InvalidLinkAnalyzer().AnalyzeAsync(inventory, CancellationToken.None);
+        AnalysisResult result = await InvalidLinkAnalyzer.AnalyzeAsync(inventory, CancellationToken.None);
 
         Assert.Equal(
             [upperCasePath, lowerCasePath, lastLink],
@@ -234,8 +234,8 @@ public sealed class InvalidLinkAnalyzerTests : IDisposable
         Assert.True(result.Elapsed >= TimeSpan.Zero);
     }
 
-    private Task<AnalysisResult> AnalyzeAsync(IReadOnlyList<string> reparsePointPaths) =>
-        new InvalidLinkAnalyzer().AnalyzeAsync(NewInventory(reparsePointPaths), CancellationToken.None);
+    private static Task<AnalysisResult> AnalyzeAsync(IReadOnlyList<string> reparsePointPaths) =>
+        InvalidLinkAnalyzer.AnalyzeAsync(NewInventory(reparsePointPaths), CancellationToken.None);
 
     private static FileInventory NewInventory(
         IReadOnlyList<string> reparsePointPaths,
@@ -362,13 +362,22 @@ public sealed class InvalidLinkAnalyzerTests : IDisposable
 
     private sealed record ProcessResult(int ExitCode, string StandardOutput, string StandardError);
 
-    private sealed class CancelBeforeSecondItemList<T>(
-        IReadOnlyList<T> items,
-        CancellationTokenSource cancellationSource) : IReadOnlyList<T>
+    private sealed class CancelBeforeSecondItemList<T> : IReadOnlyList<T>
     {
-        public int Count => items.Count;
+        private readonly IReadOnlyList<T> _items;
+        private readonly CancellationTokenSource _cancellationSource;
 
-        public T this[int index] => items[index];
+        public CancelBeforeSecondItemList(
+        IReadOnlyList<T> items,
+        CancellationTokenSource cancellationSource)
+        {
+            _items = items;
+            _cancellationSource = cancellationSource;
+        }
+
+        public int Count => _items.Count;
+
+        public T this[int index] => _items[index];
 
         public IEnumerator<T> GetEnumerator() => Enumerate().GetEnumerator();
 
@@ -376,11 +385,11 @@ public sealed class InvalidLinkAnalyzerTests : IDisposable
 
         private IEnumerable<T> Enumerate()
         {
-            yield return items[0];
-            cancellationSource.Cancel();
-            for (int index = 1; index < items.Count; index++)
+            yield return _items[0];
+            _cancellationSource.Cancel();
+            for (int index = 1; index < _items.Count; index++)
             {
-                yield return items[index];
+                yield return _items[index];
             }
         }
     }

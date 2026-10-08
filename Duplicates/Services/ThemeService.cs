@@ -5,9 +5,9 @@ using Microsoft.UI.Xaml.Media;
 
 namespace Duplicates.Services;
 
-public sealed class ThemeService
+public static class ThemeService
 {
-    public void Apply(Window window, FrameworkElement root, AppSettings settings)
+    public static void Apply(Window window, FrameworkElement root, AppSettings settings)
     {
         root.RequestedTheme = settings.ThemeMode switch
         {

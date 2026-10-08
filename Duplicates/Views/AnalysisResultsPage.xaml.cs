@@ -74,7 +74,7 @@ public sealed partial class AnalysisResultsPage : Page
         }
     }
 
-    private async void NewAnalysisRequested(object? sender, ToolKind tool)
+    private static async void NewAnalysisRequested(object? sender, ToolKind tool)
     {
         if (App.Current.MainWindow is MainWindow window)
         {
@@ -102,6 +102,7 @@ public sealed partial class AnalysisResultsPage : Page
         }
         catch (OperationCanceledException)
         {
+            // The ViewModel has already reconciled any completed actions.
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
@@ -141,6 +142,7 @@ public sealed partial class AnalysisResultsPage : Page
         }
         catch (OperationCanceledException)
         {
+            // The ViewModel has already reconciled any completed actions.
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
         {
@@ -323,7 +325,7 @@ public sealed partial class AnalysisResultsPage : Page
     }
 }
 
-public sealed class AnalysisResultTemplateSelector : DataTemplateSelector
+public sealed partial class AnalysisResultTemplateSelector : DataTemplateSelector
 {
     public DataTemplate? PathFindingTemplate { get; set; }
 

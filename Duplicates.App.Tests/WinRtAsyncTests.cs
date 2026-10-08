@@ -3,7 +3,7 @@ using Windows.Foundation;
 
 namespace Duplicates.App.Tests;
 
-public sealed class WinRtAsyncTests
+public sealed partial class WinRtAsyncTests
 {
     [Fact]
     public async Task AwaitAndCloseAsync_DisposesLateResultAfterCancellation()
@@ -86,7 +86,7 @@ public sealed class WinRtAsyncTests
         public void Report(double value) => report(value);
     }
 
-    private sealed class ControlledProgressAction : IAsyncActionWithProgress<double>
+    private sealed partial class ControlledProgressAction : IAsyncActionWithProgress<double>
     {
         public AsyncActionWithProgressCompletedHandler<double>? Completed { get; set; }
 
@@ -117,7 +117,7 @@ public sealed class WinRtAsyncTests
         }
     }
 
-    private sealed class DisposableResult : IDisposable
+    private sealed partial class DisposableResult : IDisposable
     {
         public int DisposeCount { get; private set; }
 

@@ -5,7 +5,7 @@ namespace Duplicates.Engine.Analysis.Analyzers;
 
 public sealed record TemporaryFileOptions(TimeSpan MinimumAge, DateTime UtcNow);
 
-public sealed class TemporaryFileAnalyzer
+public static class TemporaryFileAnalyzer
 {
     private static readonly string[] ApprovedSuffixes =
     [
@@ -19,7 +19,7 @@ public sealed class TemporaryFileAnalyzer
         ".chk",
     ];
 
-    public Task<AnalysisResult> AnalyzeAsync(
+    public static Task<AnalysisResult> AnalyzeAsync(
         FileInventory inventory,
         TemporaryFileOptions options,
         CancellationToken cancellationToken)

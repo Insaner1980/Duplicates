@@ -13,7 +13,7 @@ using Xunit.Sdk;
 
 namespace Duplicates.App.Tests;
 
-public sealed class VideoOptimizerRealUatTests : IDisposable
+public sealed partial class VideoOptimizerRealUatTests : IDisposable
 {
     private const string UatCategory = "Task18RealUat";
     private static readonly TimeSpan FixtureTimeout = TimeSpan.FromSeconds(45);
@@ -661,7 +661,7 @@ public sealed class VideoOptimizerRealUatTests : IDisposable
                 "-f", "lavfi", "-i",
                 denseAudio
                     ? "anoisesrc=color=white:sample_rate=48000"
-                    : "sine=frequency=1000:sample_rate=48000",
+                    : "sine=frequency=1000:sample_rate=48000"
             ]);
         }
 
@@ -678,7 +678,7 @@ public sealed class VideoOptimizerRealUatTests : IDisposable
                 "-profile:v", string.Equals(pixelFormat, "yuv444p", StringComparison.OrdinalIgnoreCase)
                     ? "high444"
                     : "high",
-                "-level:v", "4.1",
+                "-level:v", "4.1"
             ]
             : ["-crf", efficient ? "51" : "23"]);
         arguments.AddRange(["-pix_fmt", pixelFormat]);
@@ -745,7 +745,7 @@ public sealed class VideoOptimizerRealUatTests : IDisposable
         return path;
     }
 
-    private async Task AssertFixtureTrackLayoutAsync(string path, string layout)
+    private static async Task AssertFixtureTrackLayoutAsync(string path, string layout)
     {
         string json = await RunToolAsync(
             "ffprobe",
@@ -767,7 +767,7 @@ public sealed class VideoOptimizerRealUatTests : IDisposable
         }
     }
 
-    private async Task<int?> ReadDisplayRotationAsync(string path)
+    private static async Task<int?> ReadDisplayRotationAsync(string path)
     {
         string json = await RunToolAsync(
             "ffprobe",
@@ -777,7 +777,7 @@ public sealed class VideoOptimizerRealUatTests : IDisposable
                 "-select_streams", "v:0",
                 "-show_entries", "stream_side_data=rotation:stream_tags=rotate",
                 "-of", "json",
-                path,
+                path
             ]);
         using JsonDocument document = JsonDocument.Parse(json);
         JsonElement stream = document.RootElement.GetProperty("streams")[0];
@@ -802,13 +802,13 @@ public sealed class VideoOptimizerRealUatTests : IDisposable
         return null;
     }
 
-    private Task RunFfmpegAsync(string capability, params string[] arguments) =>
+    private static Task<string> RunFfmpegAsync(string capability, params string[] arguments) =>
         RunToolAsync(
             "ffmpeg",
             capability,
             ["-hide_banner", "-loglevel", "error", "-y", .. arguments]);
 
-    private async Task<string> RunToolAsync(
+    private static async Task<string> RunToolAsync(
         string executable,
         string capability,
         IReadOnlyList<string> arguments)
@@ -864,7 +864,7 @@ public sealed class VideoOptimizerRealUatTests : IDisposable
         return standardOutput;
     }
 
-    private async Task<VideoMediaInfo> ProbeOrUnavailableAsync(string path, string capability)
+    private static async Task<VideoMediaInfo> ProbeOrUnavailableAsync(string path, string capability)
     {
         try
         {
@@ -879,7 +879,7 @@ public sealed class VideoOptimizerRealUatTests : IDisposable
         }
     }
 
-    private async Task<VideoOptimizationResult> OptimizeOrUnavailableAsync(
+    private static async Task<VideoOptimizationResult> OptimizeOrUnavailableAsync(
         string source,
         string destination,
         VideoOptimizationOptions options,
@@ -961,7 +961,7 @@ public sealed class VideoOptimizerRealUatTests : IDisposable
     }
 
     [DoesNotReturn]
-    private void Unavailable(string capability, string reason)
+    private static void Unavailable(string capability, string reason)
     {
         string message = $"UNAVAILABLE: {capability}: {Condense(reason)}";
         throw new UatUnavailableException(message);
@@ -1020,9 +1020,16 @@ public sealed class VideoOptimizerRealUatTests : IDisposable
         return await SHA256.HashDataAsync(stream);
     }
 
-    private sealed class InlineProgress(Action<double> report) : IProgress<double>
+    private sealed class InlineProgress : IProgress<double>
     {
-        public void Report(double value) => report(value);
+        private readonly Action<double> _report;
+
+        public InlineProgress(Action<double> report)
+        {
+            _report = report;
+        }
+
+        public void Report(double value) => _report(value);
     }
 
     private sealed class UnusedFileActionService : IFileActionService
@@ -1050,6 +1057,12 @@ public sealed class VideoOptimizerRealUatTests : IDisposable
         public void RevealInExplorer(string path) => throw new NotSupportedException();
     }
 
-    private sealed class UatUnavailableException(string message) : Exception(message);
+    private sealed class UatUnavailableException : Exception
+    {
+        public UatUnavailableException(string message)
+            : base(message)
+        {
+        }
+    }
 
 }

@@ -15,21 +15,7 @@ public static class PerceptualHash
             throw new ArgumentException("A perceptual hash requires exactly 1,024 luminance bytes.", nameof(luminance32x32));
         }
 
-        var horizontal = new double[SampleSide, LowFrequencySide];
-        for (int y = 0; y < SampleSide; y++)
-        {
-            for (int u = 0; u < LowFrequencySide; u++)
-            {
-                double sum = 0;
-                for (int x = 0; x < SampleSide; x++)
-                {
-                    sum += luminance32x32[(y * SampleSide) + x] * Cosine[x, u];
-                }
-
-                horizontal[y, u] = sum;
-            }
-        }
-
+        double[,] horizontal = ComputeHorizontal(luminance32x32);
         var coefficients = new double[LowFrequencySide * LowFrequencySide];
         for (int v = 0; v < LowFrequencySide; v++)
         {
@@ -64,6 +50,26 @@ public static class PerceptualHash
     }
 
     public static int Distance(ulong left, ulong right) => BitOperations.PopCount(left ^ right);
+
+    private static double[,] ComputeHorizontal(ReadOnlySpan<byte> luminance32x32)
+    {
+        var horizontal = new double[SampleSide, LowFrequencySide];
+        for (int y = 0; y < SampleSide; y++)
+        {
+            for (int u = 0; u < LowFrequencySide; u++)
+            {
+                double sum = 0;
+                for (int x = 0; x < SampleSide; x++)
+                {
+                    sum += luminance32x32[(y * SampleSide) + x] * Cosine[x, u];
+                }
+
+                horizontal[y, u] = sum;
+            }
+        }
+
+        return horizontal;
+    }
 
     private static double Alpha(int frequency) => frequency == 0
         ? 1d / Math.Sqrt(SampleSide)

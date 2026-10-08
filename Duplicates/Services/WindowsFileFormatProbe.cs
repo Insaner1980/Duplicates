@@ -14,6 +14,7 @@ namespace Duplicates.Services;
 
 public sealed class WindowsFileFormatProbe : IFileFormatProbe
 {
+    private const string UnsupportedContainer = "UnsupportedContainer";
     private const int MfEUnsupportedBytestreamType = unchecked((int)0xC00D36C4);
     private const int MfETopoCodecNotFound = unchecked((int)0xC00D5212);
     private const int MfEDrmUnsupported = unchecked((int)0xC00D3700);
@@ -128,17 +129,13 @@ public sealed class WindowsFileFormatProbe : IFileFormatProbe
                 ? Unsupported("PasswordProtected")
                 : Valid();
         }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
         catch (InvalidDataException)
         {
             return Invalid("ZipCentralDirectoryFailure");
         }
         catch (NotSupportedException)
         {
-            return Unsupported("UnsupportedContainer");
+            return Unsupported(UnsupportedContainer);
         }
     }
 
@@ -201,7 +198,7 @@ public sealed class WindowsFileFormatProbe : IFileFormatProbe
         result = exception.HResult switch
         {
             WinCodecErrComponentNotFound or WinCodecErrUnsupportedPixelFormat => Unsupported("CodecUnavailable"),
-            WinCodecErrUnsupportedOperation => Unsupported("UnsupportedContainer"),
+            WinCodecErrUnsupportedOperation => Unsupported(UnsupportedContainer),
             WinCodecErrUnknownImageFormat or WinCodecErrBadImage or WinCodecErrBadHeader or
                 WinCodecErrFrameMissing or WinCodecErrBadMetadataHeader or WinCodecErrBadStreamData or
                 WinCodecErrStreamRead or MfEInvalidFileFormat => Invalid("ImageDecodeFailure"),
@@ -215,8 +212,8 @@ public sealed class WindowsFileFormatProbe : IFileFormatProbe
         result = exception switch
         {
             InvalidDataException or ArgumentException => Invalid("ImageDecodeFailure"),
-            NotSupportedException => Unsupported("UnsupportedContainer"),
-            COMException => Unsupported("UnsupportedContainer"),
+            NotSupportedException => Unsupported(UnsupportedContainer),
+            COMException => Unsupported(UnsupportedContainer),
             _ => null,
         };
         return result is not null;
@@ -227,7 +224,7 @@ public sealed class WindowsFileFormatProbe : IFileFormatProbe
         result = exception.HResult switch
         {
             MfETopoCodecNotFound => Unsupported("CodecUnavailable"),
-            MfEUnsupportedBytestreamType => Unsupported("UnsupportedContainer"),
+            MfEUnsupportedBytestreamType => Unsupported(UnsupportedContainer),
             MfEDrmUnsupported or MfELicenseRequired => Unsupported("PasswordProtected"),
             MfEInvalidFileFormat or MfEEndOfStream => Invalid("MediaOpenFailure"),
             _ => null,
@@ -240,8 +237,8 @@ public sealed class WindowsFileFormatProbe : IFileFormatProbe
         result = exception switch
         {
             InvalidDataException or ArgumentException => Invalid("MediaOpenFailure"),
-            NotSupportedException => Unsupported("UnsupportedContainer"),
-            COMException => Unsupported("UnsupportedContainer"),
+            NotSupportedException => Unsupported(UnsupportedContainer),
+            COMException => Unsupported(UnsupportedContainer),
             _ => null,
         };
         return result is not null;
@@ -265,22 +262,7 @@ public sealed class WindowsFileFormatProbe : IFileFormatProbe
         stream.Position = stream.Length - tailLength;
         stream.ReadExactly(tail);
 
-        int endRecordOffset = -1;
-        for (int offset = tail.Length - endRecordLength; offset >= 0; offset--)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (BinaryPrimitives.ReadUInt32LittleEndian(tail.AsSpan(offset)) == ZipEndOfCentralDirectorySignature &&
-                offset + endRecordLength + BinaryPrimitives.ReadUInt16LittleEndian(tail.AsSpan(offset + 20)) == tail.Length)
-            {
-                endRecordOffset = offset;
-                break;
-            }
-        }
-
-        if (endRecordOffset < 0)
-        {
-            throw new InvalidDataException();
-        }
+        int endRecordOffset = FindZipEndRecord(tail, endRecordLength, cancellationToken);
 
         long endRecordPosition = stream.Length - tailLength + endRecordOffset;
         ReadOnlySpan<byte> endRecord = tail.AsSpan(endRecordOffset, endRecordLength);
@@ -309,6 +291,29 @@ public sealed class WindowsFileFormatProbe : IFileFormatProbe
                 ReadZip64EndRecord(stream, endRecordPosition);
         }
 
+        return ReadZipDirectoryEncryption(stream,
+            entryCount, centralDirectorySize, centralDirectoryOffset, centralDirectoryLimit, cancellationToken);
+    }
+
+    private static int FindZipEndRecord(byte[] tail, int endRecordLength, CancellationToken cancellationToken)
+    {
+        for (int offset = tail.Length - endRecordLength; offset >= 0; offset--)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (BinaryPrimitives.ReadUInt32LittleEndian(tail.AsSpan(offset)) == ZipEndOfCentralDirectorySignature &&
+                offset + endRecordLength + BinaryPrimitives.ReadUInt16LittleEndian(tail.AsSpan(offset + 20)) == tail.Length)
+            {
+                return offset;
+            }
+        }
+
+        throw new InvalidDataException();
+    }
+
+    private static bool ReadZipDirectoryEncryption(Stream stream,
+        ulong entryCount, ulong centralDirectorySize, ulong centralDirectoryOffset, ulong centralDirectoryLimit,
+        CancellationToken cancellationToken)
+    {
         if (centralDirectoryOffset > centralDirectoryLimit ||
             centralDirectorySize > centralDirectoryLimit - centralDirectoryOffset)
         {

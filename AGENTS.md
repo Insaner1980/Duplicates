@@ -15,10 +15,10 @@
 - TFM appille: `net10.0-windows10.0.22621.0`
 - Minimi Windows: `10.0.22000.0`
 - RuntimeIdentifier: `win-x64`
-- Windows App SDK: `Microsoft.WindowsAppSDK` `2.3.1`
+- Windows App SDK: `Microsoft.WindowsAppSDK` `2.5.1`
 - MVVM Toolkit: `CommunityToolkit.Mvvm` `8.4.2`
 - Settings controls: `CommunityToolkit.WinUI.Controls.SettingsControls` `8.2.251219`
-- Hashing: `System.IO.Hashing` `10.0.10`
+- Hashing: `System.IO.Hashing` `10.0.12`
 - Pakettiversiot ovat keskitettyna `Directory.Packages.props`-tiedostossa. Ala lisaa versioita suoraan yksittaisiin `.csproj`-tiedostoihin.
 
 ## Arkkitehtuurirajat
@@ -51,6 +51,12 @@
 - Lukittu varipaletti on `Colors.xaml`-tiedoston viisi `Palette*`-resurssia. Kontrollien hover-, pressed-, disabled-, focus- ja high-contrast-tilat kuuluvat WinUI:lle.
 - `AccentButtonStyle` kuuluu vain toimintoihin Start scan, Start analysis, Clean images ja Optimize videos. New scan/analysis, destructive-toiminnot ja Clear cache ovat tavallisia native-painikkeita.
 - Icon-only-kontrollilla on accessible name ja tooltip. Run/status-pinnat ovat polite live regioneita. Layout-elementteihin ei lisata tap-handleria; result-valinta kayttaa native `ListView`-semantiikkaa.
+- Setup-sivut (Scan/Analysis/EXIF/Video) ja Settings kayttavat yhta `ContentMaxWidth`-saraketta otsikolle, scopelle ja asetuksille; otsikko vierii sisallon mukana (`ScrollingPageContentPadding`). Ensisijainen toiminto on kiinteassa `ActionFooter`-alapalkissa (`PageFooterBorderStyle`) ScrollViewerin ulkopuolella, ja palkki nayttaa vihjeen, kun included paths on tyhja.
+- Analysis options nakyy vain tyokaluille, joilla on muokattavia asetuksia (Big files, Temporary files, Similar images, Similar videos). EXIF/Video-sivujen progress-osio nakyy vain ajon aikana ja tulososio vain kun sisaltoa on.
+- Tavukoot muokataan `ByteSizeBox`-kontrollilla (NumberBox + B/KB/MB/GB-ComboBox), jonka DataContext on ViewModelin `ByteSizeEditorViewModel`. Kanoninen arvo pysyy ViewModelin tavu-ominaisuudessa; editori paivitetaan sen `On...Changed`-hookista.
+- Navigaation ikonit maaritellaan vain `MainWindow.xaml`issa, ja jokaisella kohdalla on oma glyfinsa.
+- Enum-arvot sidotaan native `ComboBox.SelectedIndex`iin ViewModelin int-indeksiominaisuuden kautta (`EnumSelection`), ei suoraan enumiin.
+- Scan-, Analysis-, EXIF- ja Video-sivujen asetukset ovat litteita `SettingsExpander`/`SettingsCard`-riveja (ei sisakkaisia expandereita). `PathScopeEditor`in included paths -lista on kehystetyssa `DropZone`-kortissa, joka korostuu accentilla raahauksen aikana; Excluded paths on `SettingsExpander`.
 - `WrapGrid` kuuluu vain `ItemsPanelTemplate`-kayttoon. Kayta yleisessa layoutissa `VariableSizedWrapGrid`ia tai muuta tarkoitukseen sopivaa native-paneelia.
 - Results kayttaa grouped `ListView` -valintaa preview-kohteelle; poistovalinta sailyy erillisena `DuplicateFileViewModel.IsSelected`-tilana ja kanoninen ryhmalista pysyy `ResultsViewModel`issa.
 - Results-lista ei lyhennä hakemistopolkuja ViewModelissa. Lista saa rivittää polun enintään kahdelle riville, tooltip säilyttää koko tiedostopolun ja Preview näyttää valitun tiedoston koko polun ilman ellipsiä.
@@ -67,4 +73,4 @@
 - Wrapperit delegoivat yhteiseen `C:\Dev\Windows-check`-runkoon ja lukevat projektikohtaiset polut `tools/windows-check.config.psd1`-tiedostosta.
 - Windows-check-runko on vain WinUI/.NET-projekteille; ala kayta Android-checkin Gradle-, ktlint-, detekt-, Compose- tai MobSF-polkuja tassa projektissa.
 - Wrapperiraportit kirjoitetaan `reports/`-kansioon, joka pysyy gitignoressa.
-- Packaged Debug -launch edellyttaa Windows App Runtime 2.3 -paketteja nykyiselle kayttajalle. Asennusapu on `tools\Install-WindowsAppRuntime2.3.ps1`.
+- Packaged Debug -launch edellyttaa Windows App Runtime 2.5 -paketteja nykyiselle kayttajalle. Asennusapu on `tools\Install-WindowsAppRuntime2.5.ps1`.

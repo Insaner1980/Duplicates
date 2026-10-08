@@ -10,6 +10,13 @@ namespace Duplicates.Engine.Tests;
 
 public sealed class MusicDuplicateAnalyzerTests : IDisposable
 {
+    private static readonly string[] GroupMetadataKeys = ["Type", "Confidence", "MaximumDurationDifference"];
+    private static readonly string[] ItemMetadataKeys =
+    [
+        "Confidence", "Title", "Artist", "AlbumArtist", "Album", "TrackNumber", "Year", "Genres",
+        "Bitrate", "Duration", "DurationDifference",
+    ];
+
     private readonly string _root = Path.Combine(
         Path.GetTempPath(),
         "Duplicates.Engine.Tests",
@@ -108,7 +115,7 @@ public sealed class MusicDuplicateAnalyzerTests : IDisposable
                 null,
                 [candidates, new MusicDuplicateOptions(TimeSpan.FromSeconds(2)), cancellation.Token]));
 
-        Assert.IsAssignableFrom<OperationCanceledException>(failure.InnerException);
+        Assert.IsType<OperationCanceledException>(failure.InnerException, exactMatch: false);
     }
 
     [Fact]
@@ -142,12 +149,11 @@ public sealed class MusicDuplicateAnalyzerTests : IDisposable
     [Fact]
     public void Options_RejectNegativeAndAcceptZeroAndTimeSpanMaxValue()
     {
-        var analyzer = new MusicDuplicateAnalyzer(new FakeMusicMetadataProvider());
 
         Assert.Throws<ArgumentOutOfRangeException>(() =>
-            analyzer.Regroup([], new MusicDuplicateOptions(TimeSpan.FromTicks(-1))));
-        Assert.Empty(analyzer.Regroup([], new MusicDuplicateOptions(TimeSpan.Zero)));
-        Assert.Empty(analyzer.Regroup([], new MusicDuplicateOptions(TimeSpan.MaxValue)));
+            MusicDuplicateAnalyzer.Regroup([], new MusicDuplicateOptions(TimeSpan.FromTicks(-1))));
+        Assert.Empty(MusicDuplicateAnalyzer.Regroup([], new MusicDuplicateOptions(TimeSpan.Zero)));
+        Assert.Empty(MusicDuplicateAnalyzer.Regroup([], new MusicDuplicateOptions(TimeSpan.MaxValue)));
     }
 
     [Fact]
@@ -351,7 +357,7 @@ public sealed class MusicDuplicateAnalyzerTests : IDisposable
             [sameBitrateLarger.FullPath, low.FullPath, reference.FullPath],
             songGroup.Items.Select(static item => item.FullPath));
         Assert.Equal(
-            new[] { "Type", "Confidence", "MaximumDurationDifference" },
+            GroupMetadataKeys,
             songGroup.Metadata.Keys);
         Assert.Equal("Music metadata", songGroup.Metadata["Type"]);
         Assert.Equal("High", songGroup.Metadata["Confidence"]);
@@ -360,11 +366,7 @@ public sealed class MusicDuplicateAnalyzerTests : IDisposable
         SimilarityItem lowItem = songGroup.Items.Single(item => item.FullPath == low.FullPath);
         Assert.Equal(100, lowItem.SimilarityPercent);
         Assert.Equal(
-            new[]
-            {
-                "Confidence", "Title", "Artist", "AlbumArtist", "Album", "TrackNumber", "Year", "Genres",
-                "Bitrate", "Duration", "DurationDifference",
-            },
+            ItemMetadataKeys,
             lowItem.Metadata.Keys);
         Assert.Equal("High", lowItem.Metadata["Confidence"]);
         Assert.Equal("Song", lowItem.Metadata["Title"]);
@@ -551,7 +553,7 @@ public sealed class MusicDuplicateAnalyzerTests : IDisposable
 
         SimilarityItem wrongEvidence = item with
         {
-            Evidence = new ImageSimilarityEvidence(0, 1, 1, "JPEG"),
+            Evidence = new ImageSimilarityEvidence(0, 1, 1, "JPEG")
         };
         await Assert.ThrowsAsync<InvalidDataException>(() =>
             analyzer.RevalidateAsync(wrongEvidence, CancellationToken.None));
@@ -563,9 +565,8 @@ public sealed class MusicDuplicateAnalyzerTests : IDisposable
         SimilarityItem hundred = MusicItem(Path.Combine(_root, "100.mp3"), 100, bitrate: 100, size: 10);
         SimilarityItem hundredTwo = MusicItem(Path.Combine(_root, "102.mp3"), 102, bitrate: 200, size: 5);
         SimilarityItem hundredFour = MusicItem(Path.Combine(_root, "104.mp3"), 104, bitrate: 300, size: 5);
-        var analyzer = new MusicDuplicateAnalyzer(new FakeMusicMetadataProvider());
 
-        SimilarityGroup group = Assert.Single(analyzer.Regroup(
+        SimilarityGroup group = Assert.Single(MusicDuplicateAnalyzer.Regroup(
             [hundredFour, hundred, hundredTwo],
             new MusicDuplicateOptions(TimeSpan.FromSeconds(2))));
 
@@ -678,9 +679,14 @@ public sealed class MusicDuplicateAnalyzerTests : IDisposable
         }
     }
 
-    private sealed class BlockingMusicMetadataProvider(IEnumerable<string> paths) : IMusicMetadataProvider
+    private sealed class BlockingMusicMetadataProvider : IMusicMetadataProvider
     {
-        private readonly BlockingProviderGate<MusicMetadata> _gate = new(paths);
+        public BlockingMusicMetadataProvider(IEnumerable<string> paths)
+        {
+            _gate = new(paths);
+        }
+
+        private readonly BlockingProviderGate<MusicMetadata> _gate;
 
         public int MaximumObserved => _gate.MaximumObserved;
 

@@ -28,6 +28,8 @@ public sealed partial class ScanViewModel : ObservableObject
         PathScopeViewModel pathScope,
         IAppOperationCoordinator? operationCoordinator = null)
     {
+        MinSizeEditor = new ByteSizeEditorViewModel(() => MinSizeValue, value => MinSizeValue = value);
+        MaxSizeEditor = new ByteSizeEditorViewModel(() => MaxSizeValue, value => MaxSizeValue = value);
         _scanner = scanner;
         _settingsService = settingsService;
         _resultsStore = resultsStore;
@@ -54,6 +56,14 @@ public sealed partial class ScanViewModel : ObservableObject
 
     [ObservableProperty]
     public partial double MaxSizeValue { get; set; } = ByteSizeInput.NoMaximum;
+
+    public ByteSizeEditorViewModel MinSizeEditor { get; }
+
+    public ByteSizeEditorViewModel MaxSizeEditor { get; }
+
+    partial void OnMinSizeValueChanged(double value) => MinSizeEditor.Refresh();
+
+    partial void OnMaxSizeValueChanged(double value) => MaxSizeEditor.Refresh();
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(CategoryFiltersVisibility))]

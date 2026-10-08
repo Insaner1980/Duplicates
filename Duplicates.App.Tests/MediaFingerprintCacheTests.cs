@@ -5,7 +5,7 @@ using Duplicates.Services;
 
 namespace Duplicates.App.Tests;
 
-public sealed class MediaFingerprintCacheTests : IDisposable
+public sealed partial class MediaFingerprintCacheTests : IDisposable
 {
     private readonly string _root = Path.Combine(
         Path.GetTempPath(), "Duplicates.App.Tests", Guid.NewGuid().ToString("N"));
@@ -284,9 +284,9 @@ public sealed class MediaFingerprintCacheTests : IDisposable
     {
         string path = await WriteSourceAsync("changing.png", [1]);
         var cache = new MediaFingerprintCache(_cachePath);
-        ImageSample result = await cache.GetOrCreateImageAsync(path, async _ =>
+        ImageSample result = await cache.GetOrCreateImageAsync(path, async cancellationToken =>
         {
-            await File.WriteAllBytesAsync(path, [1, 2]);
+            await File.WriteAllBytesAsync(path, [1, 2], cancellationToken);
             return Image(4);
         }, CancellationToken.None);
 

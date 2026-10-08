@@ -1,6 +1,6 @@
 namespace Duplicates.Services;
 
-internal sealed class MainWindowOperationGuard : IDisposable
+internal sealed partial class MainWindowOperationGuard : IDisposable
 {
     private readonly IAppOperationCoordinator _coordinator;
     private readonly object _gate = new();

@@ -1,11 +1,12 @@
 using System.Globalization;
+using System.Diagnostics.CodeAnalysis;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Duplicates.Engine.Models;
 using Microsoft.UI.Xaml;
 
 namespace Duplicates.ViewModels;
 
-public sealed class DuplicateFileViewModel : ObservableObject
+public sealed partial class DuplicateFileViewModel : ObservableObject
 {
     private readonly DuplicateGroupViewModel _parent;
     private bool _isSelected;
@@ -52,6 +53,7 @@ public sealed class DuplicateFileViewModel : ObservableObject
 
     public bool CanBeLinkSurvivor => CanMutateSelection && !IsSelected;
 
+    [SuppressMessage("Sonar", "S4275", Justification = "The parent coordinates the single survivor and updates this field through SetLinkSurvivorCore.")]
     public bool IsLinkSurvivor
     {
         get => _isLinkSurvivor;
@@ -85,6 +87,7 @@ public sealed class DuplicateFileViewModel : ObservableObject
         }
     }
 
+    [SuppressMessage("Sonar", "S4275", Justification = "SetSelectedCore updates the backing field after the parent deletion and reentrancy guards.")]
     public bool IsSelected
     {
         get => _isSelected;

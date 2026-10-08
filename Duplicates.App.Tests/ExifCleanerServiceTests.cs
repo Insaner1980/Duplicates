@@ -3,7 +3,7 @@ using Duplicates.Services;
 
 namespace Duplicates.App.Tests;
 
-public sealed class ExifCleanerServiceTests
+public sealed partial class ExifCleanerServiceTests
 {
     [Fact]
     public void Contracts_PreserveTheExactRequestSnapshotAndRecoverySurface()
@@ -259,6 +259,30 @@ public sealed class ExifCleanerServiceTests
         Assert.True(File.Exists(result.RecoveryPaths[0]));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CleanAsync_RejectsEvenTheSmallestDpiMetadataChange(bool vertical)
+    {
+        using var fixture = new TempFixture();
+        string source = fixture.Write("dpi.jpg", [0xFF, 0xD8, 0xFF, 0xD9]);
+        var backend = new FakeWicMetadataBackend(WicContainerKind.Jpeg)
+        {
+            BreakRenderOnInspection = 2,
+            BreakRenderState = state => vertical
+                ? state with { DpiY = Math.BitIncrement(state.DpiY) }
+                : state with { DpiX = Math.BitIncrement(state.DpiX) },
+        };
+        var service = new ExifCleanerService(backend, new FakeIdentityFileTransactions(), new NoOpRecycleBinService());
+
+        ExifCleanResult result = await service.CleanAsync(Request(source, AllPrivacyOptions()), null, CancellationToken.None);
+
+        Assert.Equal(ExifCleanOutcome.VerificationFailed, result.Outcome);
+        Assert.Null(result.OutputPath);
+        Assert.Empty(result.RecoveryPaths);
+        Assert.Equal(source, Assert.Single(Directory.EnumerateFiles(fixture.Root)));
+    }
+
     [Fact]
     public async Task CleanAsync_ReplaceOriginalRecyclesRollbackOnlyAfterVerifiedCommit()
     {
@@ -280,8 +304,7 @@ public sealed class ExifCleanerServiceTests
 
         Assert.Equal(ExifCleanOutcome.Succeeded, result.Outcome);
         Assert.Equal(source, result.OutputPath);
-        Assert.Single(recycle.Calls);
-        Assert.Contains("duplicates-exif-rollback", recycle.Calls[0].Path, StringComparison.Ordinal);
+        Assert.Contains("duplicates-exif-rollback", Assert.Single(recycle.Calls).Path, StringComparison.Ordinal);
         Assert.NotEqual(originalBytes, await File.ReadAllBytesAsync(source, TestContext.Current.CancellationToken));
         Assert.Single(Directory.EnumerateFiles(fixture.Root));
     }
@@ -407,8 +430,7 @@ public sealed class ExifCleanerServiceTests
             CancellationToken.None);
 
         Assert.Equal(ExifCleanOutcome.RecoveryRequired, result.Outcome);
-        Assert.Single(result.RecoveryPaths);
-        Assert.Contains("duplicates-exif-temp", result.RecoveryPaths[0], StringComparison.Ordinal);
+        Assert.Contains("duplicates-exif-temp", Assert.Single(result.RecoveryPaths), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -970,6 +992,9 @@ public sealed class ExifCleanerServiceTests
 
         public int BreakRenderOnInspection { get; set; }
 
+        public Func<WicRenderState, WicRenderState> BreakRenderState { get; set; } =
+            static state => state with { PixelChecksum = "changed-pixels" };
+
         public int ThrowOnInspection { get; set; }
 
         public bool MutateEditedFile { get; set; }
@@ -998,7 +1023,7 @@ public sealed class ExifCleanerServiceTests
             {
                 inspection = inspection with
                 {
-                    RenderState = inspection.RenderState with { PixelChecksum = "changed-pixels" },
+                    RenderState = BreakRenderState(inspection.RenderState)
                 };
             }
 
@@ -1050,7 +1075,7 @@ public sealed class ExifCleanerServiceTests
         }
     }
 
-    private sealed class FakeIdentityFileTransactions : IIdentityFileTransactions
+    private sealed partial class FakeIdentityFileTransactions : IIdentityFileTransactions
     {
         private readonly Dictionary<string, FileSystemIdentity> _identities =
             new(StringComparer.OrdinalIgnoreCase);
@@ -1244,7 +1269,7 @@ public sealed class ExifCleanerServiceTests
             return new IdentityPathProbe(IdentityPathState.Present, Capture(path).Identity);
         }
 
-        private sealed class NoOpGuard : IDisposable
+        private sealed partial class NoOpGuard : IDisposable
         {
             public void Dispose()
             {
@@ -1283,7 +1308,7 @@ public sealed class ExifCleanerServiceTests
         }
     }
 
-    private sealed class TempFixture : IDisposable
+    private sealed partial class TempFixture : IDisposable
     {
         public TempFixture()
         {
@@ -1295,7 +1320,7 @@ public sealed class ExifCleanerServiceTests
 
         public string Write(string name, byte[] bytes)
         {
-            string path = Path.Combine(Root, name);
+            string path = Path.Combine(Root, Path.GetFileName(name));
             File.WriteAllBytes(path, bytes);
             return path;
         }

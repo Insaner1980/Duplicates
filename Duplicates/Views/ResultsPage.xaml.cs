@@ -354,12 +354,9 @@ public sealed partial class ResultsPage : Page
 
     private async void NewScan_Click(object sender, RoutedEventArgs e)
     {
-        if (ViewModel.CanStartNewScan)
+        if (ViewModel.CanStartNewScan && App.Current.MainWindow is MainWindow window)
         {
-            if (App.Current.MainWindow is MainWindow window)
-            {
-                await window.RequestNewScanAsync();
-            }
+            await window.RequestNewScanAsync();
         }
     }
 

@@ -201,7 +201,7 @@ public sealed class ResultExportService : IResultExportService
             Metadata = item.Metadata.ToDictionary(
                 static pair => pair.Key,
                 static pair => pair.Value,
-                StringComparer.Ordinal),
+                StringComparer.Ordinal)
         }).ToArray();
         SkippedPath[] skippedPaths = snapshot.SkippedPaths.Select(static skipped => new SkippedPath
         {
@@ -212,7 +212,7 @@ public sealed class ResultExportService : IResultExportService
         {
             GeneratedAtUtc = snapshot.GeneratedAtUtc.ToUniversalTime(),
             Items = items,
-            SkippedPaths = skippedPaths,
+            SkippedPaths = skippedPaths
         };
     }
 

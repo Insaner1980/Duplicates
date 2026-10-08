@@ -37,7 +37,7 @@ public sealed partial class ExifRemoverViewModel : ObservableObject
             fileActionService,
             operationCoordinator,
             static (scope, cancellationToken) =>
-                new FileInventoryBuilder().Build(scope, progress: null, cancellationToken))
+                FileInventoryBuilder.Build(scope, progress: null, cancellationToken))
     {
     }
 
@@ -55,11 +55,16 @@ public sealed partial class ExifRemoverViewModel : ObservableObject
         _inventoryBuilder = inventoryBuilder;
         PathScope.PropertyChanged += PathScopeChanged;
         _operationCoordinator.ActiveOperationChanged += OperationChanged;
+        Results.CollectionChanged += (_, _) => OnPropertyChanged(nameof(ResultsVisibility));
     }
 
     public PathScopeViewModel PathScope { get; }
 
     public ObservableCollection<ExifCleanResultViewModel> Results { get; } = [];
+
+    public Visibility ProgressVisibility => IsCleaning ? Visibility.Visible : Visibility.Collapsed;
+
+    public Visibility ResultsVisibility => Results.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
 
     public bool CanStartCleaning =>
         !IsCleaning &&
@@ -91,6 +96,7 @@ public sealed partial class ExifRemoverViewModel : ObservableObject
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(CanStartCleaning))]
+    [NotifyPropertyChangedFor(nameof(ProgressVisibility))]
     public partial bool IsCleaning { get; set; }
 
     [ObservableProperty]
@@ -210,12 +216,7 @@ public sealed partial class ExifRemoverViewModel : ObservableObject
 
             if (!recoveryRequired)
             {
-                int succeeded = Results.Count(static result => result.Outcome == ExifCleanOutcome.Succeeded);
-                int failed = Results.Count - succeeded;
-                StatusSeverity = failed == 0 ? InfoBarSeverity.Success : InfoBarSeverity.Warning;
-                StatusMessage = failed == 0
-                    ? $"{succeeded:N0} images cleaned."
-                    : $"{Results.Count:N0} images processed; {succeeded:N0} cleaned and {failed:N0} failed.";
+                PublishCleaningSummary();
             }
         }
         catch (OperationCanceledException)
@@ -241,6 +242,16 @@ public sealed partial class ExifRemoverViewModel : ObservableObject
 
     [RelayCommand]
     private void CancelCleaning() => _cleaningCancellation?.Cancel();
+
+    private void PublishCleaningSummary()
+    {
+        int succeeded = Results.Count(static result => result.Outcome == ExifCleanOutcome.Succeeded);
+        int failed = Results.Count - succeeded;
+        StatusSeverity = failed == 0 ? InfoBarSeverity.Success : InfoBarSeverity.Warning;
+        StatusMessage = failed == 0
+            ? $"{succeeded:N0} images cleaned."
+            : $"{Results.Count:N0} images processed; {succeeded:N0} cleaned and {failed:N0} failed.";
+    }
 
     [RelayCommand(CanExecute = nameof(CanUseOutput))]
     private void OpenOutput(ExifCleanResultViewModel? result)

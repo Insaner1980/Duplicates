@@ -1,5 +1,4 @@
 using Duplicates.Engine;
-using Duplicates.Engine.FileEnumeration;
 using Duplicates.Engine.Hashing;
 using Duplicates.Engine.Models;
 using System.Buffers;
@@ -7,7 +6,7 @@ using System.Runtime.InteropServices;
 
 namespace Duplicates.Engine.Tests;
 
-public sealed class DuplicateScannerTests : IDisposable
+public sealed partial class DuplicateScannerTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "Duplicates.Engine.Tests", Guid.NewGuid().ToString("N"));
 
@@ -22,6 +21,30 @@ public sealed class DuplicateScannerTests : IDisposable
         {
             Directory.Delete(_root, recursive: true);
         }
+    }
+
+    [Fact]
+    public async Task ScanAsync_NegativeMinimumSize_IdentifiesOptionsParameter()
+    {
+        var scanner = new DuplicateScanner();
+
+        ArgumentOutOfRangeException error = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
+            () => scanner.ScanAsync(NewOptions() with { MinSizeBytes = -1 }, progress: null, CancellationToken.None));
+
+        Assert.Equal("options", error.ParamName);
+        Assert.Equal(-1L, error.ActualValue);
+    }
+
+    [Fact]
+    public void GetEffectiveMaxHashingConcurrency_InvalidOverride_IdentifiesInputParameter()
+    {
+        var options = new ScanOptions { MaxHashingConcurrency = 3 };
+
+        ArgumentOutOfRangeException error = Assert.Throws<ArgumentOutOfRangeException>(
+            () => options.GetEffectiveMaxHashingConcurrency());
+
+        Assert.Equal("maxHashingConcurrency", error.ParamName);
+        Assert.Equal(3, error.ActualValue);
     }
 
     [Fact]
@@ -124,7 +147,7 @@ public sealed class DuplicateScannerTests : IDisposable
     {
         string failingPath = WriteFile("failing.bin", 80_000, 8);
         WriteFile("peer.bin", 80_000, 8);
-        var scanner = new DuplicateScanner(new FileWalker(), new FailingHasher(failingPath));
+        var scanner = new DuplicateScanner(new FailingHasher(failingPath));
 
         ScanResult result = await scanner.ScanAsync(NewOptions(), progress: null, CancellationToken.None);
 
@@ -153,7 +176,7 @@ public sealed class DuplicateScannerTests : IDisposable
         string firstB = WriteFile("first-b.bin", 80_000, 1);
         string secondA = WriteFile("second-a.bin", 80_000, 2);
         string secondB = WriteFile("second-b.bin", 80_000, 2);
-        var scanner = new DuplicateScanner(new FileWalker(), new ConstantHasher());
+        var scanner = new DuplicateScanner(new ConstantHasher());
 
         ScanResult result = await scanner.ScanAsync(NewOptions(), progress: null, CancellationToken.None);
 
@@ -176,7 +199,7 @@ public sealed class DuplicateScannerTests : IDisposable
                 File.Delete(reference);
             }
         });
-        var scanner = new DuplicateScanner(new FileWalker(), hasher);
+        var scanner = new DuplicateScanner(hasher);
 
         ScanResult result = await scanner.ScanAsync(
             NewOptions() with { MaxHashingConcurrency = 1 }, progress: null, CancellationToken.None);
@@ -234,7 +257,7 @@ public sealed class DuplicateScannerTests : IDisposable
         }
 
         var verificationPool = new CountingArrayPool();
-        var scanner = new DuplicateScanner(new FileWalker(), new FileHasher(), verificationPool);
+        var scanner = new DuplicateScanner(new FileHasher(), verificationPool);
 
         ScanResult result = await scanner.ScanAsync(
             NewOptions() with { VerifyByteByByte = true },
@@ -254,7 +277,7 @@ public sealed class DuplicateScannerTests : IDisposable
         WriteFile("first.bin", "same bytes");
         WriteFile("second.bin", "same bytes");
         var pool = new CountingArrayPool(failSecondRent: true);
-        var scanner = new DuplicateScanner(new FileWalker(), new FileHasher(), pool);
+        var scanner = new DuplicateScanner(new FileHasher(), pool);
 
         await Assert.ThrowsAsync<OutOfMemoryException>(
             () => scanner.ScanAsync(NewOptions(), progress: null, CancellationToken.None));
@@ -480,7 +503,7 @@ public sealed class DuplicateScannerTests : IDisposable
                 ExcludedPaths = [excluded],
                 MinSizeBytes = 10,
                 MaxSizeBytes = 10,
-                TypeFilter = FileTypeFilter.ForCustomExtensions(["txt"]),
+                TypeFilter = FileTypeFilter.ForCustomExtensions(["txt"])
             },
             progress: null,
             CancellationToken.None);
@@ -598,9 +621,16 @@ public sealed class DuplicateScannerTests : IDisposable
         };
     }
 
-    private sealed class InlineProgress<T>(Action<T> handler) : IProgress<T>
+    private sealed class InlineProgress<T> : IProgress<T>
     {
-        public void Report(T value) => handler(value);
+        private readonly Action<T> _handler;
+
+        public InlineProgress(Action<T> handler)
+        {
+            _handler = handler;
+        }
+
+        public void Report(T value) => _handler(value);
     }
 
     private string WriteFile(string relativePath, string contents)
@@ -623,11 +653,19 @@ public sealed class DuplicateScannerTests : IDisposable
         return WriteFile(relativePath, contents);
     }
 
-    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-    private static extern bool CreateHardLinkW(string lpFileName, string lpExistingFileName, IntPtr lpSecurityAttributes);
+    [LibraryImport("kernel32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool CreateHardLinkW(string lpFileName, string lpExistingFileName, IntPtr lpSecurityAttributes);
 
-    private sealed class ConstantHasher(Action<string>? onHash = null) : IFileHasher
+    private sealed class ConstantHasher : IFileHasher
     {
+        private readonly Action<string>? _onHash;
+
+        public ConstantHasher(Action<string>? onHash = null)
+        {
+            _onHash = onHash;
+        }
+
         public Task<ulong> HashAsync(
             string path,
             long expectedSizeBytes,
@@ -635,20 +673,35 @@ public sealed class DuplicateScannerTests : IDisposable
             Action<long>? bytesRead,
             CancellationToken cancellationToken)
         {
-            onHash?.Invoke(path);
+            _onHash?.Invoke(path);
             bytesRead?.Invoke(Math.Min(expectedSizeBytes, maxBytesToRead));
             return Task.FromResult(42UL);
         }
     }
 
-    private sealed class ShortReadStream(byte[] content, int chunkSize) : MemoryStream(content)
+    private sealed class ShortReadStream : MemoryStream
     {
+        private readonly int _chunkSize;
+
+        public ShortReadStream(byte[] content, int chunkSize)
+            : base(content)
+        {
+            _chunkSize = chunkSize;
+        }
+
         public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) =>
-            base.ReadAsync(buffer[..Math.Min(buffer.Length, chunkSize)], cancellationToken);
+            base.ReadAsync(buffer[..Math.Min(buffer.Length, _chunkSize)], cancellationToken);
     }
 
-    private sealed class CountingArrayPool(bool failSecondRent = false) : ArrayPool<byte>
+    private sealed class CountingArrayPool : ArrayPool<byte>
     {
+        private readonly bool _failSecondRent;
+
+        public CountingArrayPool(bool failSecondRent = false)
+        {
+            _failSecondRent = failSecondRent;
+        }
+
         public int RentCount { get; private set; }
 
         public int ReturnCount { get; private set; }
@@ -656,7 +709,7 @@ public sealed class DuplicateScannerTests : IDisposable
         public override byte[] Rent(int minimumLength)
         {
             RentCount++;
-            if (failSecondRent && RentCount == 2)
+            if (_failSecondRent && RentCount == 2)
             {
                 throw new OutOfMemoryException("Injected second rental failure.");
             }

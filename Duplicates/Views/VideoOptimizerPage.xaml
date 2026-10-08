@@ -5,6 +5,7 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:controls="using:Duplicates.Views.Controls"
+    xmlns:toolkit="using:CommunityToolkit.WinUI.Controls"
     Loaded="Page_Loaded"
     Unloaded="Page_Unloaded">
     <Page.Resources>
@@ -74,80 +75,30 @@
     </Page.Resources>
 
     <Grid Background="{ThemeResource BgBaseBrush}">
-        <VisualStateManager.VisualStateGroups>
-            <VisualStateGroup x:Name="WindowWidthStates">
-                <VisualState x:Name="Small">
-                    <VisualState.StateTriggers>
-                        <AdaptiveTrigger MinWindowWidth="0" />
-                    </VisualState.StateTriggers>
-                    <VisualState.Setters>
-                        <Setter Target="HeaderActionRail.(Grid.Row)" Value="1" />
-                    </VisualState.Setters>
-                </VisualState>
-                <VisualState x:Name="Medium">
-                    <VisualState.StateTriggers>
-                        <AdaptiveTrigger MinWindowWidth="641" />
-                    </VisualState.StateTriggers>
-                </VisualState>
-            </VisualStateGroup>
-        </VisualStateManager.VisualStateGroups>
-
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <Grid
-            MaxWidth="{StaticResource ContentMaxWidth}"
-            Padding="{StaticResource PageHeaderPadding}"
-            HorizontalAlignment="Stretch">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
-            </Grid.RowDefinitions>
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
-            <StackPanel Spacing="6">
-                <TextBlock
-                    AutomationProperties.HeadingLevel="Level1"
-                    Style="{ThemeResource TitleTextBlockStyle}"
-                    Text="Video optimizer" />
-                <TextBlock
-                    Style="{StaticResource MutedTextBlockStyle}"
-                    Text="Create smaller MP4 copies while preserving the original videos."
-                    TextWrapping="Wrap" />
-            </StackPanel>
-            <Grid
-                x:Name="HeaderActionRail"
-                Grid.ColumnSpan="2"
-                MaxWidth="{StaticResource ScanWorkAreaMaxWidth}"
-                HorizontalAlignment="Stretch">
-                <Button
-                    HorizontalAlignment="Right"
-                    VerticalAlignment="Center"
-                    AccessKey="O"
-                    AutomationProperties.Name="Optimize videos"
-                    Command="{Binding OptimizeVideosCommand}"
-                    Style="{StaticResource AccentButtonStyle}">
-                    <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpacingSmall}">
-                        <SymbolIcon Symbol="Play" />
-                        <TextBlock Text="Optimize videos" />
-                    </StackPanel>
-                </Button>
-            </Grid>
-        </Grid>
-
         <ScrollViewer
-            Grid.Row="1"
             HorizontalScrollBarVisibility="Disabled"
             HorizontalScrollMode="Disabled">
             <Grid
                 MaxWidth="{StaticResource ContentMaxWidth}"
-                Padding="{StaticResource PageContentPadding}"
+                Padding="{StaticResource ScrollingPageContentPadding}"
                 HorizontalAlignment="Stretch">
                 <StackPanel Spacing="{StaticResource SpacingExtraLarge}">
+                    <StackPanel Spacing="6">
+                        <TextBlock
+                            AutomationProperties.HeadingLevel="Level1"
+                            Style="{ThemeResource TitleTextBlockStyle}"
+                            Text="Video optimizer" />
+                        <TextBlock
+                            Style="{StaticResource MutedTextBlockStyle}"
+                            Text="Create smaller MP4 copies while preserving the original videos."
+                            TextWrapping="Wrap" />
+                    </StackPanel>
+
                     <InfoBar
                         AutomationProperties.LiveSetting="Polite"
                         AutomationProperties.Name="Video optimization status"
@@ -157,48 +108,60 @@
 
                     <controls:PathScopeEditor
                         x:Name="PathScopeEditor"
-                        MaxWidth="{StaticResource ScanWorkAreaMaxWidth}"
-                        HorizontalAlignment="Stretch"
                         DataContext="{Binding PathScope}"
                         FileTypeFilter=".mp4,.mkv,.mov,.avi,.wmv,.flv,.webm,.m4v,.mpg,.mpeg,.3gp,.ts"
                         IsEnabled="{Binding DataContext.CanEditQueue, ElementName=PageRoot}" />
 
-                    <StackPanel
-                        MaxWidth="{StaticResource ScanWorkAreaMaxWidth}"
-                        HorizontalAlignment="Stretch"
-                        Spacing="{StaticResource SpacingMedium}">
-                        <TextBlock
-                            AutomationProperties.HeadingLevel="Level2"
-                            Style="{StaticResource SectionHeaderTextBlockStyle}"
-                            Text="Optimization options" />
-                        <ComboBox
-                            Header="Quality preset"
-                            IsEnabled="{Binding CanEditQueue}"
-                            SelectedIndex="{Binding Preset, Mode=TwoWay}">
-                            <ComboBoxItem Content="Smaller" />
-                            <ComboBoxItem Content="Balanced" />
-                            <ComboBoxItem Content="High quality" />
-                        </ComboBox>
-                        <ToggleSwitch
-                            Header="Use hardware acceleration"
-                            IsEnabled="{Binding CanEditQueue}"
-                            IsOn="{Binding HardwareAccelerationEnabled, Mode=TwoWay}" />
-                        <ToggleSwitch
-                            Header="Keep output when it is not smaller"
-                            IsEnabled="{Binding CanEditQueue}"
-                            IsOn="{Binding KeepOutputWhenNotSmaller, Mode=TwoWay}" />
-                        <InfoBar
-                            IsClosable="False"
-                            IsOpen="{Binding KeepOutputWhenNotSmaller}"
-                            Message="An optimized copy may be the same size as the source or larger."
-                            Severity="Warning" />
-                    </StackPanel>
+                    <toolkit:SettingsExpander
+                        Header="Optimization options"
+                        Description="Optimized copies are saved as new MP4 files next to the originals."
+                        IsExpanded="True">
+                        <toolkit:SettingsExpander.HeaderIcon>
+                            <FontIcon Glyph="&#xE71C;" />
+                        </toolkit:SettingsExpander.HeaderIcon>
+                        <toolkit:SettingsExpander.Items>
+                            <toolkit:SettingsCard
+                                Header="Quality preset"
+                                Description="Smaller saves the most space. High quality keeps more detail.">
+                                <ComboBox
+                                    MinWidth="200"
+                                    AutomationProperties.Name="Quality preset"
+                                    IsEnabled="{Binding CanEditQueue}"
+                                    SelectedIndex="{Binding PresetIndex, Mode=TwoWay}">
+                                    <ComboBoxItem Content="Smaller" />
+                                    <ComboBoxItem Content="Balanced" />
+                                    <ComboBoxItem Content="High quality" />
+                                </ComboBox>
+                            </toolkit:SettingsCard>
+                            <toolkit:SettingsCard
+                                Header="Use hardware acceleration"
+                                Description="Use the graphics hardware when Windows supports it.">
+                                <ToggleSwitch
+                                    AutomationProperties.Name="Use hardware acceleration"
+                                    IsEnabled="{Binding CanEditQueue}"
+                                    IsOn="{Binding HardwareAccelerationEnabled, Mode=TwoWay}" />
+                            </toolkit:SettingsCard>
+                            <toolkit:SettingsCard
+                                Header="Keep output when it is not smaller">
+                                <ToggleSwitch
+                                    AutomationProperties.Name="Keep output when it is not smaller"
+                                    IsEnabled="{Binding CanEditQueue}"
+                                    IsOn="{Binding KeepOutputWhenNotSmaller, Mode=TwoWay}" />
+                            </toolkit:SettingsCard>
+                        </toolkit:SettingsExpander.Items>
+                        <toolkit:SettingsExpander.ItemsFooter>
+                            <InfoBar
+                                IsClosable="False"
+                                IsOpen="{Binding KeepOutputWhenNotSmaller}"
+                                Message="An optimized copy may be the same size as the source or larger."
+                                Severity="Warning" />
+                        </toolkit:SettingsExpander.ItemsFooter>
+                    </toolkit:SettingsExpander>
 
                     <StackPanel
                         AutomationProperties.LiveSetting="Polite"
-                        MaxWidth="{StaticResource ScanWorkAreaMaxWidth}"
-                        HorizontalAlignment="Stretch"
-                        Spacing="{StaticResource SpacingMedium}">
+                        Spacing="{StaticResource SpacingMedium}"
+                        Visibility="{Binding ProgressVisibility}">
                         <TextBlock
                             AutomationProperties.HeadingLevel="Level2"
                             Style="{StaticResource SectionHeaderTextBlockStyle}"
@@ -224,7 +187,7 @@
                         </Button>
                     </StackPanel>
 
-                    <StackPanel Spacing="{StaticResource SpacingMedium}">
+                    <StackPanel Spacing="{StaticResource SpacingMedium}" Visibility="{Binding QueueVisibility}">
                         <TextBlock
                             AutomationProperties.HeadingLevel="Level2"
                             Style="{StaticResource SectionHeaderTextBlockStyle}"
@@ -246,5 +209,36 @@
                 </StackPanel>
             </Grid>
         </ScrollViewer>
+
+        <Border
+            x:Name="ActionFooter"
+            Grid.Row="1"
+            Style="{StaticResource PageFooterBorderStyle}">
+            <Grid
+                MaxWidth="{StaticResource ContentMaxWidth}"
+                HorizontalAlignment="Stretch"
+                ColumnSpacing="{StaticResource SpacingLarge}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock
+                    VerticalAlignment="Center"
+                    Style="{StaticResource MutedTextBlockStyle}"
+                    Text="Add at least one folder or file to start."
+                    Visibility="{Binding PathScope.EmptyIncludedPathsVisibility}" />
+                <Button
+                    Grid.Column="1"
+                    AccessKey="O"
+                    AutomationProperties.Name="Optimize videos"
+                    Command="{Binding OptimizeVideosCommand}"
+                    Style="{StaticResource AccentButtonStyle}">
+                    <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpacingSmall}">
+                        <SymbolIcon Symbol="Play" />
+                        <TextBlock Text="Optimize videos" />
+                    </StackPanel>
+                </Button>
+            </Grid>
+        </Border>
     </Grid>
 </Page>

@@ -28,7 +28,7 @@ public sealed partial class MainWindow : Window
         AppWindow.SetIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "AppIcon.ico"));
         AppWindow.Resize(new SizeInt32(1200, 800));
 
-        _services.ThemeService.Apply(this, Root, _services.SettingsService.Current);
+        ThemeService.Apply(this, Root, _services.SettingsService.Current);
         _services.SettingsService.SettingsChanged += SettingsChanged;
         AppWindow.Closing += AppWindow_Closing;
         Closed += MainWindow_Closed;
@@ -47,7 +47,7 @@ public sealed partial class MainWindow : Window
 
     private void SettingsChanged(object? sender, AppSettings settings)
     {
-        _services.ThemeService.Apply(this, Root, settings);
+        ThemeService.Apply(this, Root, settings);
     }
 
     private void AppTitleBar_PaneToggleRequested(TitleBar sender, object args)

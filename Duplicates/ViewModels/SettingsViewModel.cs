@@ -16,6 +16,12 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     public SettingsViewModel(ISettingsService settingsService)
     {
+        DefaultMinSizeEditor = new ByteSizeEditorViewModel(
+            () => DefaultMinSizeValue,
+            value => DefaultMinSizeValue = value);
+        DefaultLargeFileMinimumEditor = new ByteSizeEditorViewModel(
+            () => DefaultLargeFileMinimumValue,
+            value => DefaultLargeFileMinimumValue = value);
         _settingsService = settingsService;
         LoadFromSettings(settingsService.Current);
         AboutText = BuildAboutText();
@@ -35,10 +41,6 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     public IReadOnlyList<AppThemeMode> ThemeModes { get; } = Enum.GetValues<AppThemeMode>();
 
-    public IReadOnlyList<BackdropMode> BackdropModes { get; } = Enum.GetValues<BackdropMode>();
-
-    public IReadOnlyList<DeletionMode> DeletionModes { get; } = Enum.GetValues<DeletionMode>();
-
     public IReadOnlyList<string> ConcurrencyOptions { get; } = ["Auto", "1", "2", "4", "8"];
 
     public IReadOnlyList<SimilarityPreset> SimilarityPresets { get; } = Enum.GetValues<SimilarityPreset>();
@@ -49,7 +51,20 @@ public sealed partial class SettingsViewModel : ObservableObject
     public partial AppThemeMode SelectedThemeMode { get; set; }
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(SelectedBackdropModeIndex))]
     public partial BackdropMode SelectedBackdropMode { get; set; }
+
+    public int SelectedBackdropModeIndex
+    {
+        get => EnumSelection.ToIndex(SelectedBackdropMode);
+        set
+        {
+            if (EnumSelection.TryFromIndex(value, out BackdropMode mode))
+            {
+                SelectedBackdropMode = mode;
+            }
+        }
+    }
 
     [ObservableProperty]
     public partial double DefaultMinSizeValue { get; set; } = 1d;
@@ -89,13 +104,26 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(PermanentDeleteWarningVisibility))]
+    [NotifyPropertyChangedFor(nameof(SelectedDeletionModeIndex))]
     public partial DeletionMode SelectedDeletionMode { get; set; }
+
+    public int SelectedDeletionModeIndex
+    {
+        get => EnumSelection.ToIndex(SelectedDeletionMode);
+        set
+        {
+            if (EnumSelection.TryFromIndex(value, out DeletionMode mode))
+            {
+                SelectedDeletionMode = mode;
+            }
+        }
+    }
 
     [ObservableProperty]
     public partial bool ConfirmBeforeDelete { get; set; }
 
     [ObservableProperty]
-    public partial string AboutText { get; set; } = string.Empty;
+    public partial string AboutText { get; set; }
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsSettingsInfoOpen))]
@@ -122,7 +150,15 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     partial void OnSelectedBackdropModeChanged(BackdropMode value) => QueueSave();
 
-    partial void OnDefaultMinSizeValueChanged(double value) => QueueSave();
+    public ByteSizeEditorViewModel DefaultMinSizeEditor { get; }
+
+    public ByteSizeEditorViewModel DefaultLargeFileMinimumEditor { get; }
+
+    partial void OnDefaultMinSizeValueChanged(double value)
+    {
+        DefaultMinSizeEditor.Refresh();
+        QueueSave();
+    }
 
     partial void OnVerifyByteByByteChanged(bool value) => QueueSave();
 
@@ -132,7 +168,11 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     partial void OnDefaultIncludeSubfoldersChanged(bool value) => QueueSave();
 
-    partial void OnDefaultLargeFileMinimumValueChanged(double value) => QueueSave();
+    partial void OnDefaultLargeFileMinimumValueChanged(double value)
+    {
+        DefaultLargeFileMinimumEditor.Refresh();
+        QueueSave();
+    }
 
     partial void OnDefaultTemporaryFileMinimumAgeDaysChanged(double value) => QueueSave();
 
@@ -344,6 +384,6 @@ public sealed partial class SettingsViewModel : ObservableObject
     private static string BuildAboutText()
     {
         string version = typeof(SettingsViewModel).Assembly.GetName().Version?.ToString() ?? "unknown";
-        return $"Duplicates {version} by Finnvek - .NET 10 - Windows App SDK 2.3";
+        return $"Duplicates {version} \u00B7 Finnvek \u00B7 .NET 10 \u00B7 Windows App SDK 2.5";
     }
 }

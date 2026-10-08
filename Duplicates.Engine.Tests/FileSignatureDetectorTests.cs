@@ -6,7 +6,7 @@ namespace Duplicates.Engine.Tests;
 
 public sealed class FileSignatureDetectorTests
 {
-    public static IEnumerable<object[]> SignatureCases()
+    public static IEnumerable<TheoryDataRow<string, byte[], byte[], string[], string?>> SignatureCases()
     {
         yield return Case("JPEG", [0xFF, 0xD8, 0xFF], [0xFF, 0xD8, 0xFE], [".jpg", ".jpeg"], ".jpg");
         yield return Case("PNG", [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A], [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0B], [".png"], ".png");
@@ -35,8 +35,8 @@ public sealed class FileSignatureDetectorTests
         yield return Case("AVI", Riff("AVI "), Riff("AVI!"), [".avi"], ".avi");
     }
 
-    public static IEnumerable<object[]> MinimumHeaders() => SignatureCases()
-        .Select(static item => new[] { item[1] });
+    public static IEnumerable<TheoryDataRow<byte[]>> MinimumHeaders() => SignatureCases()
+        .Select(static item => new TheoryDataRow<byte[]>(item.Data.Item2));
 
     [Theory]
     [MemberData(nameof(SignatureCases))]
@@ -174,16 +174,16 @@ public sealed class FileSignatureDetectorTests
     [
         ".zip", ".docx", ".docm", ".dotx", ".dotm", ".xlsx", ".xlsm", ".xltx", ".xltm", ".xlsb",
         ".xlam", ".pptx", ".pptm", ".potx", ".potm", ".ppsx", ".ppsm", ".ppam", ".sldx", ".sldm",
-        ".odt", ".ott", ".ods", ".ots", ".odp", ".otp", ".odg", ".otg", ".odf",
+        ".odt", ".ott", ".ods", ".ots", ".odp", ".otp", ".odg", ".otg", ".odf"
     ];
 
-    private static object[] Case(
+    private static TheoryDataRow<string, byte[], byte[], string[], string?> Case(
         string name,
         byte[] positive,
         byte[] negative,
         string[] allowedExtensions,
         string? recommendedExtension) =>
-        [name, positive, negative, allowedExtensions, recommendedExtension!];
+        new(name, positive, negative, allowedExtensions, recommendedExtension);
 
     private static byte[] Bytes(string text) => Encoding.ASCII.GetBytes(text);
 
@@ -196,7 +196,7 @@ public sealed class FileSignatureDetectorTests
         return
         [
             .. UInt32BigEndian((uint)size), .. Bytes("ftyp"), .. Bytes(majorBrand), 0, 0, 0, 0,
-            .. compatibleBrands.SelectMany(Bytes),
+            .. compatibleBrands.SelectMany(Bytes)
         ];
     }
 
@@ -220,7 +220,7 @@ public sealed class FileSignatureDetectorTests
         return
         [
             0, 0, 0, 1, .. Bytes("ftyp"), .. UInt64BigEndian(declaredSize ?? actualSize),
-            .. Bytes(majorBrand), 0, 0, 0, 0,
+            .. Bytes(majorBrand), 0, 0, 0, 0
         ];
     }
 
@@ -247,11 +247,18 @@ public sealed class FileSignatureDetectorTests
     private static byte[] UInt64BigEndian(ulong value) =>
     [
         (byte)(value >> 56), (byte)(value >> 48), (byte)(value >> 40), (byte)(value >> 32),
-        (byte)(value >> 24), (byte)(value >> 16), (byte)(value >> 8), (byte)value,
+        (byte)(value >> 24), (byte)(value >> 16), (byte)(value >> 8), (byte)value
     ];
 
-    private sealed class CountingStream(long length) : Stream
+    private sealed class CountingStream : Stream
     {
+        private readonly long _length;
+
+        public CountingStream(long length)
+        {
+            _length = length;
+        }
+
         private long _position;
 
         public long BytesRead { get; private set; }
@@ -264,7 +271,7 @@ public sealed class FileSignatureDetectorTests
 
         public override bool CanWrite => false;
 
-        public override long Length => length;
+        public override long Length => _length;
 
         public override long Position
         {
@@ -280,7 +287,7 @@ public sealed class FileSignatureDetectorTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             LargestRequestedEnd = Math.Max(LargestRequestedEnd, _position + buffer.Length);
-            int read = (int)Math.Min(buffer.Length, length - _position);
+            int read = (int)Math.Min(buffer.Length, _length - _position);
             buffer.Span[..read].Fill(0x11);
             _position += read;
             BytesRead += read;

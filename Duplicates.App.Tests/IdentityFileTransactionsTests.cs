@@ -3,7 +3,7 @@ using Duplicates.Services;
 
 namespace Duplicates.App.Tests;
 
-public sealed class IdentityFileTransactionsTests : IDisposable
+public sealed partial class IdentityFileTransactionsTests : IDisposable
 {
     private readonly string _root = Path.Combine(
         Path.GetTempPath(),
@@ -191,7 +191,7 @@ public sealed class IdentityFileTransactionsTests : IDisposable
 
         Assert.NotNull(failure);
         Assert.False(File.Exists(actualPath));
-        Assert.IsAssignableFrom<IOException>(failure);
+        Assert.IsType<IOException>(failure, exactMatch: false);
     }
 
     [Fact]
@@ -288,8 +288,15 @@ public sealed class IdentityFileTransactionsTests : IDisposable
         return path;
     }
 
-    private sealed class InlineProgress(Action<double> action) : IProgress<double>
+    private sealed class InlineProgress : IProgress<double>
     {
-        public void Report(double value) => action(value);
+        private readonly Action<double> _action;
+
+        public InlineProgress(Action<double> action)
+        {
+            _action = action;
+        }
+
+        public void Report(double value) => _action(value);
     }
 }

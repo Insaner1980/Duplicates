@@ -33,11 +33,11 @@ public sealed class StorageAnalyzerTests : IDisposable
             files:
             [
                 NewFile(@"C:\scan\below.bin", 999),
-                NewFile(@"C:\scan\exact.ISO", 1_000, modifiedUtc),
+                NewFile(@"C:\scan\exact.ISO", 1_000, modifiedUtc)
             ],
             skippedPaths: [new SkippedPath { Path = @"C:\scan\locked", Reason = "Access denied" }]);
 
-        AnalysisResult result = await new LargeFileAnalyzer().AnalyzeAsync(
+        AnalysisResult result = await LargeFileAnalyzer.AnalyzeAsync(
             inventory,
             1_000,
             CancellationToken.None);
@@ -64,10 +64,10 @@ public sealed class StorageAnalyzerTests : IDisposable
                 NewFile(@"C:\scan\z.bin", 200),
                 NewFile(@"C:\scan\a.bin", 300),
                 NewFile(@"C:\scan\A.bin", 200),
-                NewFile(@"C:\scan\a.bin", 200),
+                NewFile(@"C:\scan\a.bin", 200)
             ]);
 
-        AnalysisResult result = await new LargeFileAnalyzer().AnalyzeAsync(
+        AnalysisResult result = await LargeFileAnalyzer.AnalyzeAsync(
             inventory,
             0,
             CancellationToken.None);
@@ -86,7 +86,7 @@ public sealed class StorageAnalyzerTests : IDisposable
         string included = WriteBytes(Path.Combine(includedFolder, "included.bin"), 12);
         string excluded = WriteBytes(Path.Combine(includedFolder, "excluded.bin"), 12);
         string explicitFile = WriteBytes(Path.Combine(_root, "explicit.bin"), 12);
-        FileInventory inventory = new FileInventoryBuilder().Build(
+        FileInventory inventory = FileInventoryBuilder.Build(
             new AnalysisScope
             {
                 IncludedFolders = [includedFolder],
@@ -96,7 +96,7 @@ public sealed class StorageAnalyzerTests : IDisposable
             progress: null,
             CancellationToken.None);
 
-        AnalysisResult result = await new LargeFileAnalyzer().AnalyzeAsync(
+        AnalysisResult result = await LargeFileAnalyzer.AnalyzeAsync(
             inventory,
             12,
             CancellationToken.None);
@@ -111,18 +111,17 @@ public sealed class StorageAnalyzerTests : IDisposable
     [Fact]
     public async Task LargeFiles_RejectsNegativeThresholdAndCancellation()
     {
-        var analyzer = new LargeFileAnalyzer();
         FileInventory inventory = NewInventory(files: [NewFile(@"C:\scan\large.bin", 100)]);
 
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
-            analyzer.AnalyzeAsync(inventory, -1, CancellationToken.None));
+            LargeFileAnalyzer.AnalyzeAsync(inventory, -1, CancellationToken.None));
         using var cancellationSource = new CancellationTokenSource();
         FileInventory cancelBetweenEntries = NewInventory(
             files: new CancelBeforeSecondItemList<InventoryFile>(
                 [NewFile(@"C:\scan\first.bin", 100), NewFile(@"C:\scan\second.bin", 100)],
                 cancellationSource));
         await Assert.ThrowsAsync<OperationCanceledException>(() =>
-            analyzer.AnalyzeAsync(cancelBetweenEntries, 0, cancellationSource.Token));
+            LargeFileAnalyzer.AnalyzeAsync(cancelBetweenEntries, 0, cancellationSource.Token));
     }
 
     [Fact]
@@ -133,7 +132,7 @@ public sealed class StorageAnalyzerTests : IDisposable
             directories: [NewDirectory(@"C:\scan\folder")],
             reparsePointPaths: [@"C:\scan\linked.bin"]);
 
-        AnalysisResult result = await new LargeFileAnalyzer().AnalyzeAsync(
+        AnalysisResult result = await LargeFileAnalyzer.AnalyzeAsync(
             inventory,
             0,
             CancellationToken.None);
@@ -149,11 +148,11 @@ public sealed class StorageAnalyzerTests : IDisposable
             files:
             [
                 NewFile(@"C:\scan\nonempty.txt", 1),
-                NewFile(@"C:\scan\empty.TXT", 0, modifiedUtc),
+                NewFile(@"C:\scan\empty.TXT", 0, modifiedUtc)
             ],
             skippedPaths: [new SkippedPath { Path = @"C:\scan\locked", Reason = "Access denied" }]);
 
-        AnalysisResult result = await new EmptyFileAnalyzer().AnalyzeAsync(
+        AnalysisResult result = await EmptyFileAnalyzer.AnalyzeAsync(
             inventory,
             CancellationToken.None);
 
@@ -179,12 +178,12 @@ public sealed class StorageAnalyzerTests : IDisposable
                 NewFile(@"C:\scan\z.txt", 0),
                 NewFile(@"C:\scan\a.txt", 0),
                 NewFile(@"C:\scan\A.txt", 0),
-                NewFile(@"C:\scan\linked.txt", 0, attributes: FileAttributes.ReparsePoint),
+                NewFile(@"C:\scan\linked.txt", 0, attributes: FileAttributes.ReparsePoint)
             ],
             directories: [NewDirectory(@"C:\scan\empty-directory")],
             reparsePointPaths: [@"C:\scan\linked.txt"]);
 
-        AnalysisResult result = await new EmptyFileAnalyzer().AnalyzeAsync(
+        AnalysisResult result = await EmptyFileAnalyzer.AnalyzeAsync(
             inventory,
             CancellationToken.None);
 
@@ -203,7 +202,7 @@ public sealed class StorageAnalyzerTests : IDisposable
                 cancellationSource));
 
         await Assert.ThrowsAsync<OperationCanceledException>(() =>
-            new EmptyFileAnalyzer().AnalyzeAsync(inventory, cancellationSource.Token));
+            EmptyFileAnalyzer.AnalyzeAsync(inventory, cancellationSource.Token));
     }
 
     [Fact]
@@ -215,12 +214,12 @@ public sealed class StorageAnalyzerTests : IDisposable
                 NewDirectory(@"C:\scan", depth: 0, physicalChildCount: 1),
                 NewDirectory(@"C:\scan\parent", depth: 1, physicalChildCount: 1),
                 NewDirectory(@"C:\scan\parent\empty", depth: 2, physicalChildCount: 0),
-                NewDirectory(@"C:\scan\inaccessible", depth: 1, physicalChildCount: -1),
+                NewDirectory(@"C:\scan\inaccessible", depth: 1, physicalChildCount: -1)
             ],
             includedRootPaths: [@"C:\scan"],
             skippedPaths: [new SkippedPath { Path = @"C:\scan\inaccessible", Reason = "Access denied" }]);
 
-        AnalysisResult result = await new EmptyFolderAnalyzer().AnalyzeAsync(
+        AnalysisResult result = await EmptyFolderAnalyzer.AnalyzeAsync(
             inventory,
             CancellationToken.None);
 
@@ -241,7 +240,7 @@ public sealed class StorageAnalyzerTests : IDisposable
     {
         string candidate = Path.Combine(_root, "candidate");
         string excluded = WriteBytes(Path.Combine(candidate, "excluded.txt"), 1);
-        FileInventory inventory = new FileInventoryBuilder().Build(
+        FileInventory inventory = FileInventoryBuilder.Build(
             new AnalysisScope
             {
                 IncludedFolders = [_root],
@@ -250,7 +249,7 @@ public sealed class StorageAnalyzerTests : IDisposable
             progress: null,
             CancellationToken.None);
 
-        AnalysisResult result = await new EmptyFolderAnalyzer().AnalyzeAsync(
+        AnalysisResult result = await EmptyFolderAnalyzer.AnalyzeAsync(
             inventory,
             CancellationToken.None);
 
@@ -267,12 +266,12 @@ public sealed class StorageAnalyzerTests : IDisposable
         string parent = Path.Combine(_root, "parent");
         string emptyChild = Path.Combine(parent, "empty");
         Directory.CreateDirectory(emptyChild);
-        FileInventory inventory = new FileInventoryBuilder().Build(
+        FileInventory inventory = FileInventoryBuilder.Build(
             new AnalysisScope { IncludedFolders = [_root] },
             progress: null,
             CancellationToken.None);
 
-        AnalysisResult result = await new EmptyFolderAnalyzer().AnalyzeAsync(
+        AnalysisResult result = await EmptyFolderAnalyzer.AnalyzeAsync(
             inventory,
             CancellationToken.None);
 
@@ -294,11 +293,11 @@ public sealed class StorageAnalyzerTests : IDisposable
                     @"C:\scan\linked",
                     depth: 4,
                     physicalChildCount: 0,
-                    attributes: FileAttributes.Directory | FileAttributes.ReparsePoint),
+                    attributes: FileAttributes.Directory | FileAttributes.ReparsePoint)
             ],
             reparsePointPaths: [@"C:\scan\linked"]);
 
-        AnalysisResult result = await new EmptyFolderAnalyzer().AnalyzeAsync(
+        AnalysisResult result = await EmptyFolderAnalyzer.AnalyzeAsync(
             inventory,
             CancellationToken.None);
 
@@ -315,12 +314,12 @@ public sealed class StorageAnalyzerTests : IDisposable
             directories: new CancelBeforeSecondItemList<InventoryDirectory>(
                 [
                     NewDirectory(@"C:\scan\first", physicalChildCount: 0),
-                    NewDirectory(@"C:\scan\second", physicalChildCount: 0),
+                    NewDirectory(@"C:\scan\second", physicalChildCount: 0)
                 ],
                 cancellationSource));
 
         await Assert.ThrowsAsync<OperationCanceledException>(() =>
-            new EmptyFolderAnalyzer().AnalyzeAsync(inventory, cancellationSource.Token));
+            EmptyFolderAnalyzer.AnalyzeAsync(inventory, cancellationSource.Token));
     }
 
     [Theory]
@@ -340,7 +339,7 @@ public sealed class StorageAnalyzerTests : IDisposable
         InventoryFile file = NewFile($@"C:\scan\{fileName}", 25, utcNow.AddDays(-7));
         FileInventory inventory = NewInventory(files: [file]);
 
-        AnalysisResult result = await new TemporaryFileAnalyzer().AnalyzeAsync(
+        AnalysisResult result = await TemporaryFileAnalyzer.AnalyzeAsync(
             inventory,
             new TemporaryFileOptions(TimeSpan.FromDays(7), utcNow),
             CancellationToken.None);
@@ -373,11 +372,11 @@ public sealed class StorageAnalyzerTests : IDisposable
                     @"C:\scan\linked.tmp",
                     1,
                     utcNow.AddDays(-30),
-                    FileAttributes.ReparsePoint),
+                    FileAttributes.ReparsePoint)
             ],
             skippedPaths: [new SkippedPath { Path = @"C:\scan\locked", Reason = "Access denied" }]);
 
-        AnalysisResult result = await new TemporaryFileAnalyzer().AnalyzeAsync(
+        AnalysisResult result = await TemporaryFileAnalyzer.AnalyzeAsync(
             inventory,
             new TemporaryFileOptions(TimeSpan.FromDays(7), utcNow),
             CancellationToken.None);
@@ -395,10 +394,10 @@ public sealed class StorageAnalyzerTests : IDisposable
             [
                 NewFile(@"C:\scan\z.tmp", 1, utcNow),
                 NewFile(@"C:\scan\a.tmp", 1, utcNow),
-                NewFile(@"C:\scan\A.tmp", 1, utcNow),
+                NewFile(@"C:\scan\A.tmp", 1, utcNow)
             ]);
 
-        AnalysisResult result = await new TemporaryFileAnalyzer().AnalyzeAsync(
+        AnalysisResult result = await TemporaryFileAnalyzer.AnalyzeAsync(
             inventory,
             new TemporaryFileOptions(TimeSpan.Zero, utcNow),
             CancellationToken.None);
@@ -415,10 +414,9 @@ public sealed class StorageAnalyzerTests : IDisposable
     public async Task TemporaryFiles_RejectsNegativeAgeAndHonorsCancellation()
     {
         DateTime utcNow = new(2026, 8, 14, 12, 0, 0, DateTimeKind.Utc);
-        var analyzer = new TemporaryFileAnalyzer();
         FileInventory inventory = NewInventory(files: [NewFile(@"C:\scan\one.tmp", 1, utcNow)]);
 
-        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => analyzer.AnalyzeAsync(
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => TemporaryFileAnalyzer.AnalyzeAsync(
             inventory,
             new TemporaryFileOptions(TimeSpan.FromTicks(-1), utcNow),
             CancellationToken.None));
@@ -428,7 +426,7 @@ public sealed class StorageAnalyzerTests : IDisposable
             files: new CancelBeforeSecondItemList<InventoryFile>(
                 [NewFile(@"C:\scan\first.tmp", 1, utcNow), NewFile(@"C:\scan\second.tmp", 1, utcNow)],
                 cancellationSource));
-        await Assert.ThrowsAsync<OperationCanceledException>(() => analyzer.AnalyzeAsync(
+        await Assert.ThrowsAsync<OperationCanceledException>(() => TemporaryFileAnalyzer.AnalyzeAsync(
             cancelBetweenEntries,
             new TemporaryFileOptions(TimeSpan.Zero, utcNow),
             cancellationSource.Token));
@@ -438,9 +436,8 @@ public sealed class StorageAnalyzerTests : IDisposable
     public async Task TemporaryFiles_RejectsAgeThatWouldUnderflowCapturedUtcNow()
     {
         DateTime utcNow = new(2026, 8, 8, 12, 0, 0, DateTimeKind.Utc);
-        var analyzer = new TemporaryFileAnalyzer();
 
-        ArgumentOutOfRangeException exception = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => analyzer.AnalyzeAsync(
+        ArgumentOutOfRangeException exception = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => TemporaryFileAnalyzer.AnalyzeAsync(
             NewInventory(),
             new TemporaryFileOptions(TimeSpan.FromDays(1_000_000), utcNow),
             CancellationToken.None));
@@ -492,13 +489,22 @@ public sealed class StorageAnalyzerTests : IDisposable
         return Path.GetFullPath(path);
     }
 
-    private sealed class CancelBeforeSecondItemList<T>(
-        IReadOnlyList<T> items,
-        CancellationTokenSource cancellationSource) : IReadOnlyList<T>
+    private sealed class CancelBeforeSecondItemList<T> : IReadOnlyList<T>
     {
-        public int Count => items.Count;
+        private readonly IReadOnlyList<T> _items;
+        private readonly CancellationTokenSource _cancellationSource;
 
-        public T this[int index] => items[index];
+        public CancelBeforeSecondItemList(
+        IReadOnlyList<T> items,
+        CancellationTokenSource cancellationSource)
+        {
+            _items = items;
+            _cancellationSource = cancellationSource;
+        }
+
+        public int Count => _items.Count;
+
+        public T this[int index] => _items[index];
 
         public IEnumerator<T> GetEnumerator() => Enumerate().GetEnumerator();
 
@@ -506,11 +512,11 @@ public sealed class StorageAnalyzerTests : IDisposable
 
         private IEnumerable<T> Enumerate()
         {
-            yield return items[0];
-            cancellationSource.Cancel();
-            for (int index = 1; index < items.Count; index++)
+            yield return _items[0];
+            _cancellationSource.Cancel();
+            for (int index = 1; index < _items.Count; index++)
             {
-                yield return items[index];
+                yield return _items[index];
             }
         }
     }

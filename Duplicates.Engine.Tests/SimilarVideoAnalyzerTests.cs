@@ -358,7 +358,7 @@ public sealed class SimilarVideoAnalyzerTests : IDisposable
     [InlineData(13, 14, false)]
     public void Regroup_UsesEveryPresetInclusiveBoundary(int maximumDistance, int actualMean, bool grouped)
     {
-        IReadOnlyList<SimilarityGroup> groups = new SimilarVideoAnalyzer(new FakeVideoSampleProvider()).Regroup(
+        IReadOnlyList<SimilarityGroup> groups = SimilarVideoAnalyzer.Regroup(
             [EvidenceItem(@"C:\videos\a.mp4", hashes: Hashes(0)), EvidenceItem(@"C:\videos\b.mp4", hashes: Hashes(LowBits(actualMean)))],
             new SimilarVideoOptions(maximumDistance));
 
@@ -368,21 +368,20 @@ public sealed class SimilarVideoAnalyzerTests : IDisposable
     [Fact]
     public void Regroup_UsesIntegerStableTwoSecondAndTwoPercentDurationGates()
     {
-        var analyzer = new SimilarVideoAnalyzer(new FakeVideoSampleProvider());
         SimilarityItem oneSecond = EvidenceItem(@"C:\videos\one.mp4", duration: TimeSpan.FromSeconds(1));
 
-        Assert.Single(analyzer.Regroup(
+        Assert.Single(SimilarVideoAnalyzer.Regroup(
             [oneSecond, EvidenceItem(@"C:\videos\three.mp4", duration: TimeSpan.FromSeconds(3))],
             new SimilarVideoOptions(0)));
-        Assert.Empty(analyzer.Regroup(
+        Assert.Empty(SimilarVideoAnalyzer.Regroup(
             [oneSecond, EvidenceItem(@"C:\videos\beyond-two.mp4", duration: TimeSpan.FromSeconds(3) + TimeSpan.FromTicks(1))],
             new SimilarVideoOptions(0)));
 
         SimilarityItem shorter = EvidenceItem(@"C:\videos\shorter.mp4", duration: TimeSpan.FromSeconds(196));
-        Assert.Single(analyzer.Regroup(
+        Assert.Single(SimilarVideoAnalyzer.Regroup(
             [shorter, EvidenceItem(@"C:\videos\longer.mp4", duration: TimeSpan.FromSeconds(200))],
             new SimilarVideoOptions(0)));
-        Assert.Empty(analyzer.Regroup(
+        Assert.Empty(SimilarVideoAnalyzer.Regroup(
             [shorter, EvidenceItem(@"C:\videos\beyond-percent.mp4", duration: TimeSpan.FromSeconds(200) + TimeSpan.FromTicks(1))],
             new SimilarVideoOptions(0)));
     }
@@ -390,20 +389,19 @@ public sealed class SimilarVideoAnalyzerTests : IDisposable
     [Fact]
     public void Regroup_UsesDisplayAspectRatioIncludingExactBoundaryInsteadOfOrientedPixelRatio()
     {
-        var analyzer = new SimilarVideoAnalyzer(new FakeVideoSampleProvider());
         SimilarityItem anamorphic = EvidenceItem(
             @"C:\videos\anamorphic.mp4",
             width: 720,
             height: 480,
             displayAspectRatio: 4d / 3d);
 
-        Assert.Single(analyzer.Regroup(
+        Assert.Single(SimilarVideoAnalyzer.Regroup(
             [anamorphic, EvidenceItem(@"C:\videos\square-pixels.mp4", width: 640, height: 480, displayAspectRatio: 4d / 3d)],
             new SimilarVideoOptions(0)));
-        Assert.Single(analyzer.Regroup(
+        Assert.Single(SimilarVideoAnalyzer.Regroup(
             [EvidenceItem(@"C:\videos\boundary-a.mp4", displayAspectRatio: 19), EvidenceItem(@"C:\videos\boundary-b.mp4", displayAspectRatio: 20)],
             new SimilarVideoOptions(0)));
-        Assert.Empty(analyzer.Regroup(
+        Assert.Empty(SimilarVideoAnalyzer.Regroup(
             [EvidenceItem(@"C:\videos\beyond-a.mp4", displayAspectRatio: 18.999), EvidenceItem(@"C:\videos\beyond-b.mp4", displayAspectRatio: 20)],
             new SimilarVideoOptions(0)));
     }
@@ -411,13 +409,12 @@ public sealed class SimilarVideoAnalyzerTests : IDisposable
     [Fact]
     public void Regroup_UsesOnlyAlignedFramesAndDisplaysTheirExactMean()
     {
-        var analyzer = new SimilarVideoAnalyzer(new FakeVideoSampleProvider());
         SimilarityItem reference = EvidenceItem(@"C:\videos\reference.mp4", hashes: Hashes(0));
         SimilarityItem candidate = EvidenceItem(
             @"C:\videos\candidate.mp4",
             hashes: [LowBits(1), LowBits(2), LowBits(3), LowBits(4), LowBits(5)]);
 
-        SimilarityGroup group = Assert.Single(analyzer.Regroup(
+        SimilarityGroup group = Assert.Single(SimilarVideoAnalyzer.Regroup(
             [candidate, reference],
             new SimilarVideoOptions(3)));
 
@@ -430,7 +427,7 @@ public sealed class SimilarVideoAnalyzerTests : IDisposable
         SimilarityItem shifted = EvidenceItem(
             @"C:\videos\shifted.mp4",
             hashes: [2, 4, 8, 16, 1]);
-        Assert.Empty(analyzer.Regroup([ordered, shifted], new SimilarVideoOptions(0)));
+        Assert.Empty(SimilarVideoAnalyzer.Regroup([ordered, shifted], new SimilarVideoOptions(0)));
     }
 
     [Fact]
@@ -522,7 +519,7 @@ public sealed class SimilarVideoAnalyzerTests : IDisposable
             displayAspectRatio: 1.1025,
             duration: TimeSpan.FromSeconds(104));
 
-        SimilarityGroup group = Assert.Single(new SimilarVideoAnalyzer(new FakeVideoSampleProvider()).Regroup(
+        SimilarityGroup group = Assert.Single(SimilarVideoAnalyzer.Regroup(
             [tail, reference, bridge],
             new SimilarVideoOptions(9)));
 
@@ -584,7 +581,7 @@ public sealed class SimilarVideoAnalyzerTests : IDisposable
             bitrate: 100,
             size: 100);
 
-        IReadOnlyList<SimilarityGroup> groups = new SimilarVideoAnalyzer(new FakeVideoSampleProvider()).Regroup(
+        IReadOnlyList<SimilarityGroup> groups = SimilarVideoAnalyzer.Regroup(
             [zLowPixels, aCandidate, zPathTie, zLowSize, zReference, aReference, zLowBitrate],
             new SimilarVideoOptions(5));
 
@@ -616,13 +613,12 @@ public sealed class SimilarVideoAnalyzerTests : IDisposable
     [Fact]
     public void Regroup_SplitsAChainAndChoosesAReplacementReference()
     {
-        var analyzer = new SimilarVideoAnalyzer(new FakeVideoSampleProvider());
         SimilarityItem oldReference = EvidenceItem(@"C:\videos\a.mp4", hashes: Hashes(0), width: 300, height: 300);
         SimilarityItem bridge = EvidenceItem(@"C:\videos\b.mp4", hashes: Hashes(LowBits(9)), width: 200, height: 200, bitrate: 30);
         SimilarityItem tail = EvidenceItem(@"C:\videos\c.mp4", hashes: Hashes(LowBits(18)), width: 100, height: 100, bitrate: 40);
 
-        Assert.Empty(analyzer.Regroup([oldReference, tail], new SimilarVideoOptions(9)));
-        SimilarityGroup regrouped = Assert.Single(analyzer.Regroup([bridge, tail], new SimilarVideoOptions(9)));
+        Assert.Empty(SimilarVideoAnalyzer.Regroup([oldReference, tail], new SimilarVideoOptions(9)));
+        SimilarityGroup regrouped = Assert.Single(SimilarVideoAnalyzer.Regroup([bridge, tail], new SimilarVideoOptions(9)));
 
         Assert.Equal(bridge.FullPath, regrouped.ReferenceItem.FullPath);
         Assert.Equal("0", regrouped.ReferenceItem.Metadata["MeanFrameDistance"]);
@@ -876,9 +872,14 @@ public sealed class SimilarVideoAnalyzerTests : IDisposable
         }
     }
 
-    private sealed class BlockingVideoSampleProvider(IEnumerable<string> paths) : IVideoSampleProvider
+    private sealed class BlockingVideoSampleProvider : IVideoSampleProvider
     {
-        private readonly BlockingProviderGate<VideoSample> _gate = new(paths);
+        public BlockingVideoSampleProvider(IEnumerable<string> paths)
+        {
+            _gate = new(paths);
+        }
+
+        private readonly BlockingProviderGate<VideoSample> _gate;
 
         public int MaximumObserved => _gate.MaximumObserved;
 

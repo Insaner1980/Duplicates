@@ -3,38 +3,29 @@
     x:Class="Duplicates.Views.SettingsPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:Duplicates.Views.Controls"
     xmlns:toolkit="using:CommunityToolkit.WinUI.Controls"
     Loaded="SettingsPage_Loaded">
     <Grid Background="{ThemeResource BgBaseBrush}">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" />
-        </Grid.RowDefinitions>
-
-        <StackPanel
-            MaxWidth="{StaticResource SettingsContentMaxWidth}"
-            Padding="{StaticResource PageHeaderPadding}"
-            HorizontalAlignment="Stretch"
-            Spacing="6">
-            <TextBlock
-                AutomationProperties.HeadingLevel="Level1"
-                Style="{ThemeResource TitleTextBlockStyle}"
-                Foreground="{ThemeResource TextPrimaryBrush}"
-                Text="Settings" />
-            <TextBlock
-                Style="{StaticResource MutedTextBlockStyle}"
-                Text="Defaults are saved locally. Scan folders and results are not stored." />
-        </StackPanel>
-
         <ScrollViewer
-            Grid.Row="1"
             HorizontalScrollBarVisibility="Disabled"
             HorizontalScrollMode="Disabled">
             <Grid
-                MaxWidth="{StaticResource SettingsContentMaxWidth}"
-                Padding="{StaticResource PageContentPadding}"
+                MaxWidth="{StaticResource ContentMaxWidth}"
+                Padding="{StaticResource ScrollingPageContentPadding}"
                 HorizontalAlignment="Stretch">
                 <StackPanel Spacing="{StaticResource SpacingMedium}">
+                    <StackPanel Margin="0,0,0,12" Spacing="6">
+                        <TextBlock
+                            AutomationProperties.HeadingLevel="Level1"
+                            Style="{ThemeResource TitleTextBlockStyle}"
+                            Foreground="{ThemeResource TextPrimaryBrush}"
+                            Text="Settings" />
+                        <TextBlock
+                            Style="{StaticResource MutedTextBlockStyle}"
+                            Text="Defaults are saved locally. Scan folders and results are not stored." />
+                    </StackPanel>
+
                     <toolkit:SettingsExpander
                         Header="Appearance"
                         Description="Theme and window material."
@@ -53,8 +44,13 @@
                                 Description="Choose the material used behind the app content.">
                                 <ComboBox
                                     MinWidth="180"
-                                    ItemsSource="{Binding BackdropModes}"
-                                    SelectedItem="{Binding SelectedBackdropMode, Mode=TwoWay}" />
+                                    AutomationProperties.Name="Window background"
+                                    SelectedIndex="{Binding SelectedBackdropModeIndex, Mode=TwoWay}">
+                                    <ComboBoxItem Content="Mica" />
+                                    <ComboBoxItem Content="Mica Alt" />
+                                    <ComboBoxItem Content="Acrylic" />
+                                    <ComboBoxItem Content="Solid" />
+                                </ComboBox>
                             </toolkit:SettingsCard>
                         </toolkit:SettingsExpander.Items>
                     </toolkit:SettingsExpander>
@@ -68,12 +64,9 @@
                                 Header="Default minimum file size"
                                 Description="Skip files smaller than this value.">
                                 <StackPanel Spacing="{StaticResource SpacingSmall}">
-                                    <NumberBox
-                                        MinWidth="220"
-                                        Minimum="0"
-                                        SpinButtonPlacementMode="Compact"
-                                        ValidationMode="InvalidInputOverwritten"
-                                        Value="{Binding DefaultMinSizeValue, Mode=TwoWay}" />
+                                    <controls:ByteSizeBox
+                                        AccessibleName="Default minimum file size"
+                                        DataContext="{Binding DefaultMinSizeEditor}" />
                                     <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpacingSmall}">
                                         <Button
                                             Content="Any"
@@ -125,14 +118,10 @@
                             </toolkit:SettingsCard>
                             <toolkit:SettingsCard
                                 Header="Big-file threshold"
-                                Description="Default minimum size in bytes for Big files.">
-                                <NumberBox
-                                    MinWidth="220"
-                                    AutomationProperties.Name="Default big-file minimum size in bytes"
-                                    Minimum="0"
-                                    SpinButtonPlacementMode="Compact"
-                                    ValidationMode="InvalidInputOverwritten"
-                                    Value="{Binding DefaultLargeFileMinimumValue, Mode=TwoWay}" />
+                                Description="Default minimum size for Big files.">
+                                <controls:ByteSizeBox
+                                    AccessibleName="Default big-file minimum size"
+                                    DataContext="{Binding DefaultLargeFileMinimumEditor}" />
                             </toolkit:SettingsCard>
                             <toolkit:SettingsCard
                                 Header="Temporary-file minimum age"
@@ -188,19 +177,18 @@
                                     AutomationProperties.Name="Use media fingerprint cache"
                                     IsOn="{Binding UseMediaFingerprintCache, Mode=TwoWay}" />
                             </toolkit:SettingsCard>
-                            <toolkit:SettingsCard
-                                Header="Cache status"
-                                Description="Derived fingerprints only; scan results are never stored.">
+                            <toolkit:SettingsCard Header="Cache status">
+                                <toolkit:SettingsCard.Description>
+                                    <TextBlock
+                                        AutomationProperties.Name="{Binding CachePath}"
+                                        Text="{Binding CachePath}"
+                                        TextWrapping="Wrap" />
+                                </toolkit:SettingsCard.Description>
                                 <StackPanel Spacing="{StaticResource SpacingSmall}">
                                     <TextBlock
                                         AutomationProperties.LiveSetting="Polite"
                                         AutomationProperties.Name="{Binding CacheStatusText}"
                                         Text="{Binding CacheStatusText}" />
-                                    <TextBlock
-                                        AutomationProperties.Name="{Binding CachePath}"
-                                        Style="{StaticResource MutedTextBlockStyle}"
-                                        Text="{Binding CachePath}"
-                                        TextWrapping="Wrap" />
                                     <Button
                                         AutomationProperties.Name="Clear media fingerprint cache"
                                         Command="{Binding ClearCacheCommand}"
@@ -220,8 +208,11 @@
                                 Description="Recycle Bin is recommended because deleted files can be restored.">
                                 <ComboBox
                                     MinWidth="180"
-                                    ItemsSource="{Binding DeletionModes}"
-                                    SelectedItem="{Binding SelectedDeletionMode, Mode=TwoWay}" />
+                                    AutomationProperties.Name="Default delete action"
+                                    SelectedIndex="{Binding SelectedDeletionModeIndex, Mode=TwoWay}">
+                                    <ComboBoxItem Content="Recycle Bin" />
+                                    <ComboBoxItem Content="Permanent delete" />
+                                </ComboBox>
                             </toolkit:SettingsCard>
                             <toolkit:SettingsCard
                                 Header="Confirm before deleting"
@@ -248,13 +239,14 @@
                         Severity="Warning"
                         Visibility="{Binding PermanentDeleteWarningVisibility}" />
 
-                    <StackPanel Margin="4,12,4,0" Spacing="4">
-                        <TextBlock
-                            AutomationProperties.HeadingLevel="Level2"
-                            Style="{StaticResource SectionHeaderTextBlockStyle}"
-                            Text="About" />
-                        <TextBlock Style="{StaticResource MutedTextBlockStyle}" Text="{Binding AboutText}" />
-                    </StackPanel>
+                    <toolkit:SettingsCard
+                        Margin="0,12,0,0"
+                        Header="About"
+                        Description="{Binding AboutText}">
+                        <toolkit:SettingsCard.HeaderIcon>
+                            <FontIcon Glyph="&#xE946;" />
+                        </toolkit:SettingsCard.HeaderIcon>
+                    </toolkit:SettingsCard>
                 </StackPanel>
             </Grid>
         </ScrollViewer>

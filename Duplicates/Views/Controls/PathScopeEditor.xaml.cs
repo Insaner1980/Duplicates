@@ -89,14 +89,14 @@ public sealed partial class PathScopeEditor : UserControl
 
         IReadOnlyList<PickFileResult> results = await picker.PickMultipleFilesAsync();
         bool added = false;
-        foreach (PickFileResult result in results)
+        foreach (string path in results.Select(static result => result.Path))
         {
-            if (!IsFileTypeAllowed(result.Path, FileTypeFilter))
+            if (!IsFileTypeAllowed(path, FileTypeFilter))
             {
                 continue;
             }
 
-            added |= excluded ? Scope.ExcludePath(result.Path) : Scope.AddFile(result.Path);
+            added |= excluded ? Scope.ExcludePath(path) : Scope.AddFile(path);
         }
 
         if (added && !excluded)
@@ -110,11 +110,16 @@ public sealed partial class PathScopeEditor : UserControl
         if (e.DataView.Contains(StandardDataFormats.StorageItems))
         {
             e.AcceptedOperation = DataPackageOperation.Copy;
+            VisualStateManager.GoToState(this, "DropTarget", useTransitions: true);
         }
     }
 
+    private void IncludedPathsRegion_DragLeave(object sender, DragEventArgs e) =>
+        VisualStateManager.GoToState(this, "DropIdle", useTransitions: true);
+
     private async void IncludedPathsRegion_Drop(object sender, DragEventArgs e)
     {
+        VisualStateManager.GoToState(this, "DropIdle", useTransitions: true);
         if (Scope is null || !e.DataView.Contains(StandardDataFormats.StorageItems))
         {
             return;
@@ -127,12 +132,9 @@ public sealed partial class PathScopeEditor : UserControl
             added |= Scope.AddFolder(folder.Path);
         }
 
-        foreach (StorageFile file in items.OfType<StorageFile>())
+        foreach (StorageFile file in items.OfType<StorageFile>().Where(file => IsFileTypeAllowed(file.Path, FileTypeFilter)))
         {
-            if (IsFileTypeAllowed(file.Path, FileTypeFilter))
-            {
-                added |= Scope.AddFile(file.Path);
-            }
+            added |= Scope.AddFile(file.Path);
         }
 
         if (added)
@@ -145,9 +147,15 @@ public sealed partial class PathScopeEditor : UserControl
     {
         string[] values = (filter ?? string.Empty)
             .Split([',', ';', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Select(static value => value == "*"
-                ? value
-                : value.StartsWith('.') ? value.ToLowerInvariant() : $".{value.ToLowerInvariant()}")
+            .Select(static value =>
+            {
+                if (value == "*")
+                {
+                    return value;
+                }
+
+                return value.StartsWith('.') ? value.ToLowerInvariant() : $".{value.ToLowerInvariant()}";
+            })
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
         return values.Length == 0 || values.Contains("*", StringComparer.Ordinal)

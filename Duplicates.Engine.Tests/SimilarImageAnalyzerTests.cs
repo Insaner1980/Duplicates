@@ -108,7 +108,7 @@ public sealed class SimilarImageAnalyzerTests : IDisposable
                 null,
                 [candidates, new SimilarImageOptions(8), cancellation.Token]));
 
-        Assert.IsAssignableFrom<OperationCanceledException>(failure.InnerException);
+        Assert.IsType<OperationCanceledException>(failure.InnerException, exactMatch: false);
     }
 
     [Fact]
@@ -257,6 +257,35 @@ public sealed class SimilarImageAnalyzerTests : IDisposable
         Assert.Equal("File changed since scan.", skipped.Reason);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AnalyzeAsync_RemovedFileIsSkippedBeforeOrAfterSuccessfulSampling(bool removeDuringSampling)
+    {
+        InventoryFile file = WriteInventoryFile("removed.jpg", 1);
+        var provider = new FakeImageSampleProvider();
+        provider.Cached[file.FullPath] = (path, _) =>
+        {
+            File.Delete(path);
+            return Task.FromResult(Sample(100, 100, Filled(1), "JPEG"));
+        };
+        if (!removeDuringSampling)
+        {
+            File.Delete(file.FullPath);
+        }
+
+        AnalysisResult result = await new SimilarImageAnalyzer(provider).AnalyzeAsync(
+            NewInventory([file]),
+            new SimilarImageOptions(8),
+            CancellationToken.None);
+
+        Assert.Empty(result.Groups);
+        SkippedPath skipped = Assert.Single(result.SkippedPaths);
+        Assert.Equal(file.FullPath, skipped.Path);
+        Assert.Equal("File changed since scan.", skipped.Reason);
+        Assert.Equal(removeDuringSampling ? 1 : 0, provider.CachedPaths.Count);
+    }
+
     [Fact]
     public async Task AnalyzeAsync_PropagatesCancellationBeforeAndAfterProviderCall()
     {
@@ -314,7 +343,7 @@ public sealed class SimilarImageAnalyzerTests : IDisposable
     [InlineData(12, 13, false)]
     public void Regroup_UsesEveryPresetBoundary(int maximumDistance, int actualDistance, bool grouped)
     {
-        IReadOnlyList<SimilarityGroup> groups = new SimilarImageAnalyzer(new FakeImageSampleProvider()).Regroup(
+        IReadOnlyList<SimilarityGroup> groups = SimilarImageAnalyzer.Regroup(
             [EvidenceItem(@"C:\images\a.jpg", 0), EvidenceItem(@"C:\images\b.jpg", LowBits(actualDistance))],
             new SimilarImageOptions(maximumDistance));
 
@@ -324,13 +353,12 @@ public sealed class SimilarImageAnalyzerTests : IDisposable
     [Fact]
     public void Regroup_IncludesTheExactSymmetricAspectBoundaryAndExcludesBeyondIt()
     {
-        var analyzer = new SimilarImageAnalyzer(new FakeImageSampleProvider());
         SimilarityItem square = EvidenceItem(@"C:\images\square.jpg", 0, width: 19, height: 19);
 
-        Assert.Single(analyzer.Regroup(
+        Assert.Single(SimilarImageAnalyzer.Regroup(
             [square, EvidenceItem(@"C:\images\boundary.jpg", 0, width: 20, height: 19)],
             new SimilarImageOptions(0)));
-        Assert.Empty(analyzer.Regroup(
+        Assert.Empty(SimilarImageAnalyzer.Regroup(
             [square, EvidenceItem(@"C:\images\beyond.jpg", 0, width: 21, height: 19)],
             new SimilarImageOptions(0)));
     }
@@ -344,7 +372,7 @@ public sealed class SimilarImageAnalyzerTests : IDisposable
             oneBitPerFiveBitBand |= 1UL << bit;
         }
 
-        SimilarityGroup group = Assert.Single(new SimilarImageAnalyzer(new FakeImageSampleProvider()).Regroup(
+        SimilarityGroup group = Assert.Single(SimilarImageAnalyzer.Regroup(
             [EvidenceItem(@"C:\images\a.jpg", 0), EvidenceItem(@"C:\images\b.jpg", oneBitPerFiveBitBand)],
             new SimilarImageOptions(12)));
 
@@ -358,7 +386,7 @@ public sealed class SimilarImageAnalyzerTests : IDisposable
         SimilarityItem bridge = EvidenceItem(@"C:\images\b.jpg", LowBits(8), width: 200, height: 200);
         SimilarityItem tail = EvidenceItem(@"C:\images\c.jpg", LowBits(16), width: 100, height: 100);
 
-        SimilarityGroup group = Assert.Single(new SimilarImageAnalyzer(new FakeImageSampleProvider()).Regroup(
+        SimilarityGroup group = Assert.Single(SimilarImageAnalyzer.Regroup(
             [tail, reference, bridge],
             new SimilarImageOptions(8)));
 
@@ -376,7 +404,7 @@ public sealed class SimilarImageAnalyzerTests : IDisposable
         SimilarityItem aBySize = EvidenceItem(@"C:\a\large.png", 0xFFFF000000000000, width: 100, height: 100, size: 200, format: "PNG");
         SimilarityItem aSmaller = EvidenceItem(@"C:\a\small.jpg", 0xFFFF000000000001, width: 100, height: 100, size: 100, format: "JPEG");
 
-        IReadOnlyList<SimilarityGroup> groups = new SimilarImageAnalyzer(new FakeImageSampleProvider()).Regroup(
+        IReadOnlyList<SimilarityGroup> groups = SimilarImageAnalyzer.Regroup(
             [zFar, aSmaller, zNear, zReference, aBySize],
             new SimilarImageOptions(4));
 
@@ -401,13 +429,12 @@ public sealed class SimilarImageAnalyzerTests : IDisposable
     [Fact]
     public void Regroup_SplitsAChainAndChoosesAReplacementReferenceFromSurvivors()
     {
-        var analyzer = new SimilarImageAnalyzer(new FakeImageSampleProvider());
         SimilarityItem oldReference = EvidenceItem(@"C:\images\a.jpg", 0, width: 300, height: 300);
         SimilarityItem bridge = EvidenceItem(@"C:\images\b.jpg", LowBits(8), width: 200, height: 200, size: 30);
         SimilarityItem tail = EvidenceItem(@"C:\images\c.jpg", LowBits(16), width: 100, height: 100, size: 40);
 
-        Assert.Empty(analyzer.Regroup([oldReference, tail], new SimilarImageOptions(8)));
-        SimilarityGroup regrouped = Assert.Single(analyzer.Regroup([bridge, tail], new SimilarImageOptions(8)));
+        Assert.Empty(SimilarImageAnalyzer.Regroup([oldReference, tail], new SimilarImageOptions(8)));
+        SimilarityGroup regrouped = Assert.Single(SimilarImageAnalyzer.Regroup([bridge, tail], new SimilarImageOptions(8)));
 
         Assert.Equal(bridge.FullPath, regrouped.ReferenceItem.FullPath);
         Assert.Equal("0", regrouped.ReferenceItem.Metadata["HammingDistance"]);
@@ -549,9 +576,14 @@ public sealed class SimilarImageAnalyzerTests : IDisposable
         }
     }
 
-    private sealed class BlockingImageSampleProvider(IEnumerable<string> paths) : IImageSampleProvider
+    private sealed class BlockingImageSampleProvider : IImageSampleProvider
     {
-        private readonly BlockingProviderGate<ImageSample> _gate = new(paths);
+        public BlockingImageSampleProvider(IEnumerable<string> paths)
+        {
+            _gate = new(paths);
+        }
+
+        private readonly BlockingProviderGate<ImageSample> _gate;
 
         public int MaximumObserved => _gate.MaximumObserved;
 
@@ -571,12 +603,17 @@ public sealed class SimilarImageAnalyzerTests : IDisposable
     }
 }
 
-internal sealed class BlockingProviderGate<T>(IEnumerable<string> paths)
+internal sealed class BlockingProviderGate<T>
 {
-    private readonly IReadOnlyDictionary<string, TaskCompletionSource<T>> _completions = paths.ToDictionary(
+    public BlockingProviderGate(IEnumerable<string> paths)
+    {
+        _completions = paths.ToDictionary(
         static path => path,
         static _ => new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously),
         StringComparer.OrdinalIgnoreCase);
+    }
+
+    private readonly Dictionary<string, TaskCompletionSource<T>> _completions;
     private readonly SemaphoreSlim _entries = new(0);
     private int _active;
     private int _cancellationCount;

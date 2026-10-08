@@ -45,43 +45,8 @@ public sealed class BrokenFileAnalyzer
                 continue;
             }
 
-            DetectedFileType? detectedType = null;
-            FileProbeResult? probeResult = null;
-            bool providerFailed = false;
-            try
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                detectedType = await FileSignatureDetector.DetectFileAsync(
-                    file.FullPath,
-                    cancellationToken).ConfigureAwait(false);
-                cancellationToken.ThrowIfCancellationRequested();
-            }
-            catch (Exception ex) when (IsHeaderReadFailure(ex))
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                probeResult = new FileProbeResult(
-                    FileProbeStatus.Invalid,
-                    "HeaderReadFailure",
-                    null);
-            }
-
-            if (probeResult is null)
-            {
-                try
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    probeResult = await _probe.ProbeAsync(
-                        file.FullPath,
-                        detectedType,
-                        cancellationToken).ConfigureAwait(false);
-                    cancellationToken.ThrowIfCancellationRequested();
-                }
-                catch (Exception ex) when (IsProviderFailure(ex))
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    providerFailed = true;
-                }
-            }
+            (DetectedFileType? detectedType, FileProbeResult? probeResult, bool providerFailed) =
+                await ProbeFileAsync(file.FullPath, cancellationToken).ConfigureAwait(false);
 
             if (!TryReadSnapshot(file.FullPath, out FileSnapshot after) ||
                 after != before ||
@@ -107,28 +72,7 @@ public sealed class BrokenFileAnalyzer
                 continue;
             }
 
-            var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["Validator"] = GetValidator(detectedType),
-                ["ErrorType"] = validatedResult.ErrorType ?? string.Empty,
-            };
-            if (detectedType is not null)
-            {
-                metadata["DetectedType"] = detectedType.Name;
-            }
-
-            findings.Add(new PathFinding
-            {
-                FullPath = file.FullPath,
-                Kind = PathFindingKind.File,
-                Reason = validatedResult.Status == FileProbeStatus.Invalid
-                    ? "Unreadable or malformed file."
-                    : "Unsupported or protected.",
-                SizeBytes = file.SizeBytes,
-                CreatedUtc = file.CreatedUtc,
-                ModifiedUtc = file.ModifiedUtc,
-                Metadata = metadata,
-            });
+            findings.Add(BuildFinding(file, detectedType, validatedResult));
         }
 
         stopwatch.Stop();
@@ -140,6 +84,77 @@ public sealed class BrokenFileAnalyzer
                 ? inventory.SkippedPaths
                 : [.. inventory.SkippedPaths, .. analyzerSkips],
             Elapsed = stopwatch.Elapsed,
+        };
+    }
+
+    private async Task<(DetectedFileType? DetectedType, FileProbeResult? ProbeResult, bool ProviderFailed)> ProbeFileAsync(
+        string path,
+        CancellationToken cancellationToken)
+    {
+        DetectedFileType? detectedType = null;
+        FileProbeResult? probeResult = null;
+        bool providerFailed = false;
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            detectedType = await FileSignatureDetector.DetectFileAsync(
+                path,
+                cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+        catch (Exception ex) when (IsHeaderReadFailure(ex))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            probeResult = new FileProbeResult(
+                FileProbeStatus.Invalid,
+                "HeaderReadFailure",
+                null);
+        }
+
+        if (probeResult is null)
+        {
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                probeResult = await _probe.ProbeAsync(
+                    path,
+                    detectedType,
+                    cancellationToken).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+            catch (Exception ex) when (IsProviderFailure(ex))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                providerFailed = true;
+            }
+        }
+
+        return (detectedType, probeResult, providerFailed);
+    }
+
+    private static PathFinding BuildFinding(InventoryFile file, DetectedFileType? detectedType, FileProbeResult validatedResult)
+    {
+        var metadata = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["Validator"] = GetValidator(detectedType),
+            ["ErrorType"] = validatedResult.ErrorType ?? string.Empty,
+        };
+        if (detectedType is not null)
+        {
+            metadata["DetectedType"] = detectedType.Name;
+        }
+
+        return new PathFinding
+        {
+            FullPath = file.FullPath,
+            Kind = PathFindingKind.File,
+            Reason = validatedResult.Status == FileProbeStatus.Invalid
+                ? "Unreadable or malformed file."
+                : "Unsupported or protected.",
+            SizeBytes = file.SizeBytes,
+            CreatedUtc = file.CreatedUtc,
+            ModifiedUtc = file.ModifiedUtc,
+            Metadata = metadata,
         };
     }
 

@@ -8,7 +8,7 @@ using Microsoft.Win32.SafeHandles;
 
 namespace Duplicates.Services;
 
-internal sealed class FileLinkNative : IFileLinkPlatform
+internal sealed partial class FileLinkNative : IFileLinkPlatform
 {
     private const uint GenericRead = 0x80000000;
     private const uint DeleteAccess = 0x00010000;
@@ -184,8 +184,8 @@ internal sealed class FileLinkNative : IFileLinkPlatform
     {
         FileSystemIdentity leftIdentity = GetInfo(leftHandle).Identity;
         FileSystemIdentity rightIdentity = GetInfo(rightHandle).Identity;
-        IReadOnlyDictionary<string, long> leftStreams = EnumerateStreams(leftPath);
-        IReadOnlyDictionary<string, long> rightStreams = EnumerateStreams(rightPath);
+        Dictionary<string, long> leftStreams = EnumerateStreams(leftPath);
+        Dictionary<string, long> rightStreams = EnumerateStreams(rightPath);
 
         if (leftStreams.Count != rightStreams.Count)
         {
@@ -513,7 +513,7 @@ internal sealed class FileLinkNative : IFileLinkPlatform
         return new NativeFileLinkHandle(canonical, safeHandle);
     }
 
-    private static IReadOnlyDictionary<string, long> EnumerateStreams(string path)
+    private static Dictionary<string, long> EnumerateStreams(string path)
     {
         var streams = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
         nint find = FindFirstStreamW(Path.GetFullPath(path), 0, out Win32FindStreamData data, 0);
@@ -629,11 +629,17 @@ internal sealed class FileLinkNative : IFileLinkPlatform
         handle as NativeFileLinkHandle ??
         throw new ArgumentException("The handle was not created by the native link platform.", nameof(handle));
 
-    private sealed class NativeFileLinkHandle(string path, SafeFileHandle safeHandle) : IFileLinkHandle
+    private sealed partial class NativeFileLinkHandle : IFileLinkHandle
     {
-        public string Path { get; set; } = path;
+        public NativeFileLinkHandle(string path, SafeFileHandle safeHandle)
+        {
+            Path = path;
+            SafeHandle = safeHandle;
+        }
 
-        public SafeFileHandle SafeHandle { get; } = safeHandle;
+        public string Path { get; set; }
+
+        public SafeFileHandle SafeHandle { get; }
 
         public void Dispose() => SafeHandle.Dispose();
     }
@@ -660,9 +666,12 @@ internal sealed class FileLinkNative : IFileLinkPlatform
     private struct ByHandleFileInformation
     {
         public uint FileAttributes;
-        public System.Runtime.InteropServices.ComTypes.FILETIME CreationTime;
-        public System.Runtime.InteropServices.ComTypes.FILETIME LastAccessTime;
-        public System.Runtime.InteropServices.ComTypes.FILETIME LastWriteTime;
+        public uint CreationTimeLow;
+        public uint CreationTimeHigh;
+        public uint LastAccessTimeLow;
+        public uint LastAccessTimeHigh;
+        public uint LastWriteTimeLow;
+        public uint LastWriteTimeHigh;
         public uint VolumeSerialNumber;
         public uint FileSizeHigh;
         public uint FileSizeLow;
@@ -684,8 +693,25 @@ internal sealed class FileLinkNative : IFileLinkPlatform
     {
         public long StreamSize;
 
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 296)]
-        public string StreamName;
+        private StreamNameBuffer _streamName;
+
+        public string StreamName
+        {
+            get
+            {
+                ReadOnlySpan<ushort> codeUnits = _streamName;
+                ReadOnlySpan<char> characters = MemoryMarshal.Cast<ushort, char>(codeUnits);
+                int terminator = characters.IndexOf('\0');
+                return new string(terminator < 0 ? characters : characters[..terminator]);
+            }
+        }
+    }
+
+    [System.Runtime.CompilerServices.InlineArray(296)]
+    private struct StreamNameBuffer
+    {
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Sonar", "S1144", Justification = "InlineArray requires one element field; the compiler uses it for span conversion and native layout.")]
+        public ushort Element0;
     }
 
     private enum SeObjectType
@@ -702,6 +728,7 @@ internal sealed class FileLinkNative : IFileLinkPlatform
     [ComImport]
     [Guid("43826D1E-E718-42EE-BC55-A1E261C37BFE")]
     [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Interoperability", "SYSLIB1096", Justification = "Runtime COM wrappers are required by Marshal COM activation and deterministic release APIs.")]
     private interface IShellItem
     {
     }
@@ -716,6 +743,7 @@ internal sealed class FileLinkNative : IFileLinkPlatform
     [ComImport]
     [Guid("947AAB5F-0A5C-4C13-B4D6-4BF7836FC9F8")]
     [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Interoperability", "SYSLIB1096", Justification = "Runtime COM wrappers are required by Marshal COM activation and deterministic release APIs.")]
     private interface IFileOperation
     {
         [PreserveSig]
@@ -795,8 +823,8 @@ internal sealed class FileLinkNative : IFileLinkPlatform
         int GetAnyOperationsAborted(out int anyOperationsAborted);
     }
 
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern SafeFileHandle CreateFileW(
+    [LibraryImport("kernel32.dll", StringMarshalling = StringMarshalling.Utf16, SetLastError = true)]
+    private static partial SafeFileHandle CreateFileW(
         string fileName,
         uint desiredAccess,
         uint shareMode,
@@ -812,31 +840,31 @@ internal sealed class FileLinkNative : IFileLinkPlatform
         ref Guid interfaceId,
         [MarshalAs(UnmanagedType.Interface)] out IShellItem item);
 
-    [DllImport("kernel32.dll", SetLastError = true)]
+    [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GetFileInformationByHandleEx(
+    private static partial bool GetFileInformationByHandleEx(
         SafeFileHandle file,
         int informationClass,
         out FileIdInformation information,
         uint bufferSize);
 
-    [DllImport("kernel32.dll", SetLastError = true)]
+    [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GetFileInformationByHandleEx(
+    private static partial bool GetFileInformationByHandleEx(
         SafeFileHandle file,
         int informationClass,
         out FileBasicInformation information,
         uint bufferSize);
 
-    [DllImport("kernel32.dll", SetLastError = true)]
+    [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GetFileInformationByHandle(
+    private static partial bool GetFileInformationByHandle(
         SafeFileHandle file,
         out ByHandleFileInformation information);
 
-    [DllImport("kernel32.dll", SetLastError = true)]
+    [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GetFileSizeEx(SafeFileHandle file, out long fileSize);
+    private static partial bool GetFileSizeEx(SafeFileHandle file, out long fileSize);
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
@@ -850,36 +878,36 @@ internal sealed class FileLinkNative : IFileLinkPlatform
         StringBuilder fileSystemName,
         int fileSystemNameSize);
 
-    [DllImport("kernel32.dll", SetLastError = true)]
+    [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool SetFileInformationByHandle(
+    private static partial bool SetFileInformationByHandle(
         SafeFileHandle file,
         int informationClass,
         nint information,
         uint bufferSize);
 
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [LibraryImport("kernel32.dll", StringMarshalling = StringMarshalling.Utf16, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool CreateHardLinkW(string fileName, string existingFileName, nint securityAttributes);
+    private static partial bool CreateHardLinkW(string fileName, string existingFileName, nint securityAttributes);
 
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [LibraryImport("kernel32.dll", StringMarshalling = StringMarshalling.Utf16, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool CreateSymbolicLinkW(string symlinkFileName, string targetFileName, uint flags);
+    private static partial bool CreateSymbolicLinkW(string symlinkFileName, string targetFileName, uint flags);
 
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern nint FindFirstStreamW(
+    [LibraryImport("kernel32.dll", StringMarshalling = StringMarshalling.Utf16, SetLastError = true)]
+    private static partial nint FindFirstStreamW(
         string fileName,
         int infoLevel,
         out Win32FindStreamData findStreamData,
         uint flags);
 
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [LibraryImport("kernel32.dll", StringMarshalling = StringMarshalling.Utf16, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool FindNextStreamW(nint findStream, out Win32FindStreamData findStreamData);
+    private static partial bool FindNextStreamW(nint findStream, out Win32FindStreamData findStreamData);
 
-    [DllImport("kernel32.dll", SetLastError = true)]
+    [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool FindClose(nint findFile);
+    private static partial bool FindClose(nint findFile);
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern uint GetFinalPathNameByHandleW(
@@ -895,11 +923,11 @@ internal sealed class FileLinkNative : IFileLinkPlatform
         StringBuilder volumePathName,
         uint bufferLength);
 
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
-    private static extern uint GetDriveTypeW(string rootPathName);
+    [LibraryImport("kernel32.dll", StringMarshalling = StringMarshalling.Utf16)]
+    private static partial uint GetDriveTypeW(string rootPathName);
 
-    [DllImport("advapi32.dll", EntryPoint = "GetSecurityInfo", SetLastError = true)]
-    private static extern uint GetSecurityInfoNative(
+    [LibraryImport("advapi32.dll", EntryPoint = "GetSecurityInfo", SetLastError = true)]
+    private static partial uint GetSecurityInfoNative(
         SafeFileHandle handle,
         SeObjectType objectType,
         uint securityInformation,
@@ -909,32 +937,32 @@ internal sealed class FileLinkNative : IFileLinkPlatform
         out nint sacl,
         out nint securityDescriptor);
 
-    [DllImport("advapi32.dll", SetLastError = true)]
+    [LibraryImport("advapi32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GetSecurityDescriptorDacl(
+    private static partial bool GetSecurityDescriptorDacl(
         nint securityDescriptor,
         [MarshalAs(UnmanagedType.Bool)] out bool daclPresent,
         out nint dacl,
         [MarshalAs(UnmanagedType.Bool)] out bool daclDefaulted);
 
-    [DllImport("advapi32.dll", SetLastError = true)]
+    [LibraryImport("advapi32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GetSecurityDescriptorControl(
+    private static partial bool GetSecurityDescriptorControl(
         nint securityDescriptor,
         out ushort control,
         out uint revision);
 
-    [DllImport("advapi32.dll", SetLastError = true)]
-    private static extern int GetLengthSid(nint sid);
+    [LibraryImport("advapi32.dll", SetLastError = true)]
+    private static partial int GetLengthSid(nint sid);
 
-    [DllImport("advapi32.dll", SetLastError = true)]
+    [LibraryImport("advapi32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GetAclInformation(
+    private static partial bool GetAclInformation(
         nint acl,
         out AclSizeInformation aclInformation,
         uint aclInformationLength,
         AclInformationClass aclInformationClass);
 
-    [DllImport("kernel32.dll")]
-    private static extern nint LocalFree(nint memory);
+    [LibraryImport("kernel32.dll")]
+    private static partial nint LocalFree(nint memory);
 }

@@ -13,7 +13,7 @@ using Windows.UI;
 
 namespace Duplicates.App.Tests;
 
-public sealed class WindowsFileFormatProbeTests : IDisposable
+public sealed partial class WindowsFileFormatProbeTests : IDisposable
 {
     private readonly string _root = Path.Combine(
         Path.GetTempPath(),
@@ -41,11 +41,116 @@ public sealed class WindowsFileFormatProbeTests : IDisposable
         { "archive.7z", [0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C] },
     };
 
+    [Fact]
+    public async Task ProbeAsync_MissingFileReturnsHeaderReadFailure()
+    {
+        FileProbeResult result = await new WindowsFileFormatProbe().ProbeAsync(
+            Path.Combine(_root, "missing.bin"), null, TestContext.Current.CancellationToken);
+
+        Assert.Equal(FileProbeStatus.Invalid, result.Status);
+        Assert.Equal("HeaderReadFailure", result.ErrorType);
+    }
+
+    [Fact]
+    public async Task ProbeAsync_ExclusiveLockReturnsHeaderReadFailureWithoutChangingFile()
+    {
+        byte[] content = [1, 2, 3];
+        string path = await WriteFixtureAsync("locked.bin", content);
+        FileProbeResult result;
+        await using (FileStream locked = new(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            result = await new WindowsFileFormatProbe().ProbeAsync(
+                path, null, TestContext.Current.CancellationToken);
+        }
+
+        Assert.Equal(FileProbeStatus.Invalid, result.Status);
+        Assert.Equal("HeaderReadFailure", result.ErrorType);
+        Assert.Equal(content, await File.ReadAllBytesAsync(path, TestContext.Current.CancellationToken));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ProbeAsync_DirectoryOrInvalidPathReturnsHeaderReadFailure(bool invalidPath)
+    {
+        string path = invalidPath ? Path.Combine(_root, "invalid\0.bin") : _root;
+
+        FileProbeResult result = await new WindowsFileFormatProbe().ProbeAsync(
+            path, null, TestContext.Current.CancellationToken);
+
+        Assert.Equal(FileProbeStatus.Invalid, result.Status);
+        Assert.Equal("HeaderReadFailure", result.ErrorType);
+    }
+
+    [Theory]
+    [InlineData("TryClassifyImage", unchecked((int)0x88982F50), FileProbeStatus.UnsupportedOrProtected, "CodecUnavailable")]
+    [InlineData("TryClassifyImage", unchecked((int)0x88982F80), FileProbeStatus.UnsupportedOrProtected, "CodecUnavailable")]
+    [InlineData("TryClassifyImage", unchecked((int)0x88982F81), FileProbeStatus.UnsupportedOrProtected, "UnsupportedContainer")]
+    [InlineData("TryClassifyImage", unchecked((int)0x88982F07), FileProbeStatus.Invalid, "ImageDecodeFailure")]
+    [InlineData("TryClassifyImage", unchecked((int)0x88982F60), FileProbeStatus.Invalid, "ImageDecodeFailure")]
+    [InlineData("TryClassifyImage", unchecked((int)0x88982F61), FileProbeStatus.Invalid, "ImageDecodeFailure")]
+    [InlineData("TryClassifyImage", unchecked((int)0x88982F62), FileProbeStatus.Invalid, "ImageDecodeFailure")]
+    [InlineData("TryClassifyImage", unchecked((int)0x88982F63), FileProbeStatus.Invalid, "ImageDecodeFailure")]
+    [InlineData("TryClassifyImage", unchecked((int)0x88982F70), FileProbeStatus.Invalid, "ImageDecodeFailure")]
+    [InlineData("TryClassifyImage", unchecked((int)0x88982F72), FileProbeStatus.Invalid, "ImageDecodeFailure")]
+    [InlineData("TryClassifyImage", unchecked((int)0xC00D36BE), FileProbeStatus.Invalid, "ImageDecodeFailure")]
+    [InlineData("TryClassifyMedia", unchecked((int)0xC00D5212), FileProbeStatus.UnsupportedOrProtected, "CodecUnavailable")]
+    [InlineData("TryClassifyMedia", unchecked((int)0xC00D36C4), FileProbeStatus.UnsupportedOrProtected, "UnsupportedContainer")]
+    [InlineData("TryClassifyMedia", unchecked((int)0xC00D3700), FileProbeStatus.UnsupportedOrProtected, "PasswordProtected")]
+    [InlineData("TryClassifyMedia", unchecked((int)0xC00D714A), FileProbeStatus.UnsupportedOrProtected, "PasswordProtected")]
+    [InlineData("TryClassifyMedia", unchecked((int)0xC00D36BE), FileProbeStatus.Invalid, "MediaOpenFailure")]
+    [InlineData("TryClassifyMedia", unchecked((int)0xC00D3E84), FileProbeStatus.Invalid, "MediaOpenFailure")]
+    public void NativeFailureClassificationDistinguishesMissingCodecProtectionAndCorruption(
+        string classifierName, int hresult, FileProbeStatus expectedStatus, string expectedError)
+    {
+        var exception = new COMException("Native decode failed", hresult);
+
+        (bool classified, FileProbeResult? result) = ClassifyFailure(classifierName, exception);
+
+        Assert.True(classified);
+        Assert.NotNull(result);
+        Assert.Equal(expectedStatus, result.Status);
+        Assert.Equal(expectedError, result.ErrorType);
+    }
+
+    [Theory]
+    [InlineData("TryClassifyImage", typeof(InvalidDataException), FileProbeStatus.Invalid, "ImageDecodeFailure")]
+    [InlineData("TryClassifyImage", typeof(ArgumentException), FileProbeStatus.Invalid, "ImageDecodeFailure")]
+    [InlineData("TryClassifyImage", typeof(NotSupportedException), FileProbeStatus.UnsupportedOrProtected, "UnsupportedContainer")]
+    [InlineData("TryClassifyImage", typeof(COMException), FileProbeStatus.UnsupportedOrProtected, "UnsupportedContainer")]
+    [InlineData("TryClassifyMedia", typeof(InvalidDataException), FileProbeStatus.Invalid, "MediaOpenFailure")]
+    [InlineData("TryClassifyMedia", typeof(ArgumentException), FileProbeStatus.Invalid, "MediaOpenFailure")]
+    [InlineData("TryClassifyMedia", typeof(NotSupportedException), FileProbeStatus.UnsupportedOrProtected, "UnsupportedContainer")]
+    public void ManagedDecodeFailureRetainsStableClassification(
+        string classifierName, Type exceptionType, FileProbeStatus expectedStatus, string expectedError)
+    {
+        Exception exception = Assert.IsType<Exception>(Activator.CreateInstance(exceptionType), exactMatch: false);
+
+        (bool classified, FileProbeResult? result) = ClassifyFailure(classifierName, exception);
+
+        Assert.True(classified);
+        Assert.NotNull(result);
+        Assert.Equal(expectedStatus, result.Status);
+        Assert.Equal(expectedError, result.ErrorType);
+    }
+
+    [Theory]
+    [InlineData("TryClassifyImage")]
+    [InlineData("TryClassifyMedia")]
+    public void UnexpectedFailureIsNotMisreportedAsFileCorruption(string classifierName)
+    {
+        (bool classified, FileProbeResult? result) = ClassifyFailure(
+            classifierName, new InvalidOperationException("Programming failure"));
+
+        Assert.False(classified);
+        Assert.Null(result);
+    }
+
     [Theory]
     [MemberData(nameof(GenericReadableFixtures))]
     public async Task ProbeAsync_GenericReadableTypesAreValidAndRemainUnchanged(string fileName, byte[] bytes)
     {
-        string path = Path.Combine(_root, fileName);
+        string path = Path.Combine(_root, Path.GetFileName(fileName));
         await File.WriteAllBytesAsync(path, bytes, TestContext.Current.CancellationToken);
         DetectedFileType? detected = await FileSignatureDetector.DetectFileAsync(path, CancellationToken.None);
         DateTime modified = File.GetLastWriteTimeUtc(path);
@@ -359,7 +464,17 @@ public sealed class WindowsFileFormatProbeTests : IDisposable
             new WindowsFileFormatProbe().ProbeAsync(path, null, cancellationSource.Token));
     }
 
-    private async Task<FileProbeResult> ProbeDetectedAsync(string path)
+    private static (bool Classified, FileProbeResult? Result) ClassifyFailure(string classifierName, Exception exception)
+    {
+        MethodInfo classifier = typeof(WindowsFileFormatProbe).GetMethod(
+            classifierName, BindingFlags.NonPublic | BindingFlags.Static) ??
+            throw new InvalidOperationException($"{classifierName} was not found.");
+        object?[] arguments = [exception, null];
+        bool classified = Assert.IsType<bool>(classifier.Invoke(null, arguments));
+        return (classified, arguments[1] as FileProbeResult);
+    }
+
+    private static async Task<FileProbeResult> ProbeDetectedAsync(string path)
     {
         DetectedFileType detected = Assert.IsType<DetectedFileType>(
             await FileSignatureDetector.DetectFileAsync(path, CancellationToken.None));

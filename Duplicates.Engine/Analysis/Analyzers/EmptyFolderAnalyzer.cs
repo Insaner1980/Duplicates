@@ -3,9 +3,9 @@ using System.Globalization;
 
 namespace Duplicates.Engine.Analysis.Analyzers;
 
-public sealed class EmptyFolderAnalyzer
+public static class EmptyFolderAnalyzer
 {
-    public Task<AnalysisResult> AnalyzeAsync(
+    public static Task<AnalysisResult> AnalyzeAsync(
         FileInventory inventory,
         CancellationToken cancellationToken)
     {

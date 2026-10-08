@@ -4,7 +4,7 @@ using Duplicates.Services;
 
 namespace Duplicates.App.Tests;
 
-public sealed class VideoOptimizerServiceTests : IDisposable
+public sealed partial class VideoOptimizerServiceTests : IDisposable
 {
     private readonly string _root = Path.Combine(
         Path.GetTempPath(),
@@ -251,7 +251,7 @@ public sealed class VideoOptimizerServiceTests : IDisposable
         {
             ContainerCodec = container,
             VideoCodec = videoCodec,
-            Duration = TimeSpan.FromSeconds(durationSeconds),
+            Duration = TimeSpan.FromSeconds(durationSeconds)
         };
         var service = CreateService(probe, backend);
 
@@ -268,6 +268,7 @@ public sealed class VideoOptimizerServiceTests : IDisposable
     [Theory]
     [InlineData("coded-width")]
     [InlineData("display-width")]
+    [InlineData("display-width-smallest-change")]
     [InlineData("aspect")]
     [InlineData("frame-rate")]
     [InlineData("audio-codec")]
@@ -288,6 +289,7 @@ public sealed class VideoOptimizerServiceTests : IDisposable
             {
                 "coded-width" => output with { Width = output.Width - 2 },
                 "display-width" => output with { SquarePixelDisplayWidth = output.SquarePixelDisplayWidth - 2 },
+                "display-width-smallest-change" => output with { SquarePixelDisplayWidth = Math.BitIncrement(output.SquarePixelDisplayWidth) },
                 "aspect" => output with { DisplayAspectRatio = 1 },
                 "frame-rate" => output with { FramesPerSecondNumerator = output.FramesPerSecondNumerator - 1 },
                 "audio-codec" => output with { AudioCodec = "AacAdts" },
@@ -326,13 +328,13 @@ public sealed class VideoOptimizerServiceTests : IDisposable
                 TotalBitrate = 6_000_000,
                 AudioCodec = null,
                 AudioBitrate = 0,
-                AudioTrackCount = 0,
+                AudioTrackCount = 0
             },
         };
         probe.OutputFactory = () => OutputMedia(backend.LastProfile!) with
         {
             PixelAspectRatioNumerator = 2,
-            PixelAspectRatioDenominator = 2,
+            PixelAspectRatioDenominator = 2
         };
         var service = CreateService(probe, backend);
 
@@ -791,10 +793,10 @@ public sealed class VideoOptimizerServiceTests : IDisposable
         Assert.True(cancellation.IsCancellationRequested);
     }
 
-    private VideoOptimizerService CreateService(FakeProbe probe, FakeBackend backend) =>
+    private static VideoOptimizerService CreateService(FakeProbe probe, FakeBackend backend) =>
         new(probe, backend, new IdentityFileTransactions());
 
-    private VideoOptimizationRequest Request(
+    private static VideoOptimizationRequest Request(
         string sourcePath,
         long? expectedLength = null,
         string? destinationPath = null,
@@ -947,38 +949,54 @@ public sealed class VideoOptimizerServiceTests : IDisposable
         }
     }
 
-    private sealed class InlineProgress(Action<double> callback) : IProgress<double>
+    private sealed class InlineProgress : IProgress<double>
     {
-        public void Report(double value) => callback(value);
+        private readonly Action<double> _callback;
+
+        public InlineProgress(Action<double> callback)
+        {
+            _callback = callback;
+        }
+
+        public void Report(double value) => _callback(value);
     }
 
-    private sealed class CancelAfterMoveTransactions(
-        IIdentityFileTransactions inner,
-        CancellationTokenSource cancellation) : IIdentityFileTransactions
+    private sealed class CancelAfterMoveTransactions : IIdentityFileTransactions
     {
-        public IdentityTrackedFile Capture(string path) => inner.Capture(path);
+        private readonly IIdentityFileTransactions _inner;
+        private readonly CancellationTokenSource _cancellation;
+
+        public CancelAfterMoveTransactions(
+        IIdentityFileTransactions inner,
+        CancellationTokenSource cancellation)
+        {
+            _inner = inner;
+            _cancellation = cancellation;
+        }
+
+        public IdentityTrackedFile Capture(string path) => _inner.Capture(path);
 
         public IdentityTrackedFile CreateOwnedNew(string destinationPath) =>
-            inner.CreateOwnedNew(destinationPath);
+            _inner.CreateOwnedNew(destinationPath);
 
         public Task<IdentityTrackedFile> CopyAndFlushAsync(
             IdentityTrackedFile source,
             IdentityTrackedFile destination,
             IProgress<double>? progress,
             CancellationToken cancellationToken) =>
-            inner.CopyAndFlushAsync(source, destination, progress, cancellationToken);
+            _inner.CopyAndFlushAsync(source, destination, progress, cancellationToken);
 
-        public IDisposable GuardOwnedPath(IdentityTrackedFile file) => inner.GuardOwnedPath(file);
+        public IDisposable GuardOwnedPath(IdentityTrackedFile file) => _inner.GuardOwnedPath(file);
 
         public IDisposable GuardSourceSnapshot(IdentityTrackedFile source) =>
-            inner.GuardSourceSnapshot(source);
+            _inner.GuardSourceSnapshot(source);
 
-        public bool EntryExistsCaseInsensitive(string path) => inner.EntryExistsCaseInsensitive(path);
+        public bool EntryExistsCaseInsensitive(string path) => _inner.EntryExistsCaseInsensitive(path);
 
         public IdentityMoveResult MoveNoOverwrite(IdentityTrackedFile source, string destinationPath)
         {
-            IdentityMoveResult result = inner.MoveNoOverwrite(source, destinationPath);
-            cancellation.Cancel();
+            IdentityMoveResult result = _inner.MoveNoOverwrite(source, destinationPath);
+            _cancellation.Cancel();
             return result;
         }
 
@@ -986,30 +1004,41 @@ public sealed class VideoOptimizerServiceTests : IDisposable
             IdentityTrackedFile source,
             string destinationPath)
         {
-            IdentityMoveResult result = inner.MoveSourceNoOverwrite(source, destinationPath);
-            cancellation.Cancel();
+            IdentityMoveResult result = _inner.MoveSourceNoOverwrite(source, destinationPath);
+            _cancellation.Cancel();
             return result;
         }
 
-        public void DeleteOwned(IdentityTrackedFile file) => inner.DeleteOwned(file);
+        public void DeleteOwned(IdentityTrackedFile file) => _inner.DeleteOwned(file);
 
-        public IdentityPathProbe Probe(string path) => inner.Probe(path);
+        public IdentityPathProbe Probe(string path) => _inner.Probe(path);
     }
 
-    private sealed class CancelAfterOutputVerificationTransactions(
+    private sealed class CancelAfterOutputVerificationTransactions : IIdentityFileTransactions
+    {
+        private readonly IIdentityFileTransactions _inner;
+        private readonly string _destinationPath;
+        private readonly CancellationTokenSource _cancellation;
+
+        public CancelAfterOutputVerificationTransactions(
         IIdentityFileTransactions inner,
         string destinationPath,
-        CancellationTokenSource cancellation) : IIdentityFileTransactions
-    {
+        CancellationTokenSource cancellation)
+        {
+            _inner = inner;
+            _destinationPath = destinationPath;
+            _cancellation = cancellation;
+        }
+
         private int _destinationChecks;
 
         public string? TempPath { get; private set; }
 
-        public IdentityTrackedFile Capture(string path) => inner.Capture(path);
+        public IdentityTrackedFile Capture(string path) => _inner.Capture(path);
 
         public IdentityTrackedFile CreateOwnedNew(string path)
         {
-            IdentityTrackedFile created = inner.CreateOwnedNew(path);
+            IdentityTrackedFile created = _inner.CreateOwnedNew(path);
             TempPath = created.Path;
             return created;
         }
@@ -1019,41 +1048,50 @@ public sealed class VideoOptimizerServiceTests : IDisposable
             IdentityTrackedFile destination,
             IProgress<double>? progress,
             CancellationToken cancellationToken) =>
-            inner.CopyAndFlushAsync(source, destination, progress, cancellationToken);
+            _inner.CopyAndFlushAsync(source, destination, progress, cancellationToken);
 
-        public IDisposable GuardOwnedPath(IdentityTrackedFile file) => inner.GuardOwnedPath(file);
+        public IDisposable GuardOwnedPath(IdentityTrackedFile file) => _inner.GuardOwnedPath(file);
 
         public IDisposable GuardSourceSnapshot(IdentityTrackedFile source) =>
-            inner.GuardSourceSnapshot(source);
+            _inner.GuardSourceSnapshot(source);
 
         public bool EntryExistsCaseInsensitive(string path)
         {
-            if (string.Equals(path, destinationPath, StringComparison.OrdinalIgnoreCase) &&
+            if (string.Equals(path, _destinationPath, StringComparison.OrdinalIgnoreCase) &&
                 ++_destinationChecks == 2)
             {
                 ReplaceWithForeignOccupant(TempPath!);
-                cancellation.Cancel();
+                _cancellation.Cancel();
             }
 
-            return inner.EntryExistsCaseInsensitive(path);
+            return _inner.EntryExistsCaseInsensitive(path);
         }
 
         public IdentityMoveResult MoveNoOverwrite(IdentityTrackedFile source, string destination) =>
-            inner.MoveNoOverwrite(source, destination);
+            _inner.MoveNoOverwrite(source, destination);
 
         public IdentityMoveResult MoveSourceNoOverwrite(
             IdentityTrackedFile source,
-            string destination) => inner.MoveSourceNoOverwrite(source, destination);
+            string destination) => _inner.MoveSourceNoOverwrite(source, destination);
 
-        public void DeleteOwned(IdentityTrackedFile file) => inner.DeleteOwned(file);
+        public void DeleteOwned(IdentityTrackedFile file) => _inner.DeleteOwned(file);
 
-        public IdentityPathProbe Probe(string path) => inner.Probe(path);
+        public IdentityPathProbe Probe(string path) => _inner.Probe(path);
     }
 
-    private sealed class ReplaceTempOnCaptureTransactions(
-        IIdentityFileTransactions inner,
-        Action<string> replace) : IIdentityFileTransactions
+    private sealed class ReplaceTempOnCaptureTransactions : IIdentityFileTransactions
     {
+        private readonly IIdentityFileTransactions _inner;
+        private readonly Action<string> _replace;
+
+        public ReplaceTempOnCaptureTransactions(
+        IIdentityFileTransactions inner,
+        Action<string> replace)
+        {
+            _inner = inner;
+            _replace = replace;
+        }
+
         private bool _replaced;
 
         public IdentityTrackedFile Capture(string path)
@@ -1062,55 +1100,62 @@ public sealed class VideoOptimizerServiceTests : IDisposable
                 .Contains(".duplicates-video-", StringComparison.OrdinalIgnoreCase))
             {
                 _replaced = true;
-                replace(path);
+                _replace(path);
             }
 
-            return inner.Capture(path);
+            return _inner.Capture(path);
         }
 
         public IdentityTrackedFile CreateOwnedNew(string destinationPath) =>
-            inner.CreateOwnedNew(destinationPath);
+            _inner.CreateOwnedNew(destinationPath);
 
         public Task<IdentityTrackedFile> CopyAndFlushAsync(
             IdentityTrackedFile source,
             IdentityTrackedFile destination,
             IProgress<double>? progress,
             CancellationToken cancellationToken) =>
-            inner.CopyAndFlushAsync(source, destination, progress, cancellationToken);
+            _inner.CopyAndFlushAsync(source, destination, progress, cancellationToken);
 
-        public IDisposable GuardOwnedPath(IdentityTrackedFile file) => inner.GuardOwnedPath(file);
+        public IDisposable GuardOwnedPath(IdentityTrackedFile file) => _inner.GuardOwnedPath(file);
 
         public IDisposable GuardSourceSnapshot(IdentityTrackedFile source) =>
-            inner.GuardSourceSnapshot(source);
+            _inner.GuardSourceSnapshot(source);
 
-        public bool EntryExistsCaseInsensitive(string path) => inner.EntryExistsCaseInsensitive(path);
+        public bool EntryExistsCaseInsensitive(string path) => _inner.EntryExistsCaseInsensitive(path);
 
         public IdentityMoveResult MoveNoOverwrite(IdentityTrackedFile source, string destinationPath) =>
-            inner.MoveNoOverwrite(source, destinationPath);
+            _inner.MoveNoOverwrite(source, destinationPath);
 
         public IdentityMoveResult MoveSourceNoOverwrite(
             IdentityTrackedFile source,
-            string destinationPath) => inner.MoveSourceNoOverwrite(source, destinationPath);
+            string destinationPath) => _inner.MoveSourceNoOverwrite(source, destinationPath);
 
-        public void DeleteOwned(IdentityTrackedFile file) => inner.DeleteOwned(file);
+        public void DeleteOwned(IdentityTrackedFile file) => _inner.DeleteOwned(file);
 
-        public IdentityPathProbe Probe(string path) => inner.Probe(path);
+        public IdentityPathProbe Probe(string path) => _inner.Probe(path);
     }
 
-    private sealed class CreationRecoveryTransactions(IIdentityFileTransactions inner) : IIdentityFileTransactions
+    private sealed class CreationRecoveryTransactions : IIdentityFileTransactions
     {
+        private readonly IIdentityFileTransactions _inner;
+
+        public CreationRecoveryTransactions(IIdentityFileTransactions inner)
+        {
+            _inner = inner;
+        }
+
         public int CreateCallCount { get; private set; }
 
         public string RecoveryPath { get; private set; } = string.Empty;
 
-        public IdentityTrackedFile Capture(string path) => inner.Capture(path);
+        public IdentityTrackedFile Capture(string path) => _inner.Capture(path);
 
         public IdentityTrackedFile CreateOwnedNew(string destinationPath)
         {
             CreateCallCount++;
             if (CreateCallCount != 1)
             {
-                return inner.CreateOwnedNew(destinationPath);
+                return _inner.CreateOwnedNew(destinationPath);
             }
 
             RecoveryPath = destinationPath;
@@ -1126,54 +1171,61 @@ public sealed class VideoOptimizerServiceTests : IDisposable
             IdentityTrackedFile destination,
             IProgress<double>? progress,
             CancellationToken cancellationToken) =>
-            inner.CopyAndFlushAsync(source, destination, progress, cancellationToken);
+            _inner.CopyAndFlushAsync(source, destination, progress, cancellationToken);
 
-        public IDisposable GuardOwnedPath(IdentityTrackedFile file) => inner.GuardOwnedPath(file);
+        public IDisposable GuardOwnedPath(IdentityTrackedFile file) => _inner.GuardOwnedPath(file);
 
         public IDisposable GuardSourceSnapshot(IdentityTrackedFile source) =>
-            inner.GuardSourceSnapshot(source);
+            _inner.GuardSourceSnapshot(source);
 
-        public bool EntryExistsCaseInsensitive(string path) => inner.EntryExistsCaseInsensitive(path);
+        public bool EntryExistsCaseInsensitive(string path) => _inner.EntryExistsCaseInsensitive(path);
 
         public IdentityMoveResult MoveNoOverwrite(IdentityTrackedFile source, string destinationPath) =>
-            inner.MoveNoOverwrite(source, destinationPath);
+            _inner.MoveNoOverwrite(source, destinationPath);
 
         public IdentityMoveResult MoveSourceNoOverwrite(
             IdentityTrackedFile source,
-            string destinationPath) => inner.MoveSourceNoOverwrite(source, destinationPath);
+            string destinationPath) => _inner.MoveSourceNoOverwrite(source, destinationPath);
 
-        public void DeleteOwned(IdentityTrackedFile file) => inner.DeleteOwned(file);
+        public void DeleteOwned(IdentityTrackedFile file) => _inner.DeleteOwned(file);
 
-        public IdentityPathProbe Probe(string path) => inner.Probe(path);
+        public IdentityPathProbe Probe(string path) => _inner.Probe(path);
     }
 
-    private sealed class MutateBeforeMoveTransactions(IIdentityFileTransactions inner) : IIdentityFileTransactions
+    private sealed class MutateBeforeMoveTransactions : IIdentityFileTransactions
     {
+        private readonly IIdentityFileTransactions _inner;
+
+        public MutateBeforeMoveTransactions(IIdentityFileTransactions inner)
+        {
+            _inner = inner;
+        }
+
         public bool Mutated { get; private set; }
 
-        public IdentityTrackedFile Capture(string path) => inner.Capture(path);
+        public IdentityTrackedFile Capture(string path) => _inner.Capture(path);
 
         public IdentityTrackedFile CreateOwnedNew(string destinationPath) =>
-            inner.CreateOwnedNew(destinationPath);
+            _inner.CreateOwnedNew(destinationPath);
 
         public Task<IdentityTrackedFile> CopyAndFlushAsync(
             IdentityTrackedFile source,
             IdentityTrackedFile destination,
             IProgress<double>? progress,
             CancellationToken cancellationToken) =>
-            inner.CopyAndFlushAsync(source, destination, progress, cancellationToken);
+            _inner.CopyAndFlushAsync(source, destination, progress, cancellationToken);
 
-        public IDisposable GuardOwnedPath(IdentityTrackedFile file) => inner.GuardOwnedPath(file);
+        public IDisposable GuardOwnedPath(IdentityTrackedFile file) => _inner.GuardOwnedPath(file);
 
         public IDisposable GuardSourceSnapshot(IdentityTrackedFile source) =>
-            inner.GuardSourceSnapshot(source);
+            _inner.GuardSourceSnapshot(source);
 
-        public bool EntryExistsCaseInsensitive(string path) => inner.EntryExistsCaseInsensitive(path);
+        public bool EntryExistsCaseInsensitive(string path) => _inner.EntryExistsCaseInsensitive(path);
 
         public IdentityMoveResult MoveNoOverwrite(IdentityTrackedFile source, string destinationPath)
         {
             Mutate(source);
-            return inner.MoveNoOverwrite(source, destinationPath);
+            return _inner.MoveNoOverwrite(source, destinationPath);
         }
 
         public IdentityMoveResult MoveSourceNoOverwrite(
@@ -1181,12 +1233,12 @@ public sealed class VideoOptimizerServiceTests : IDisposable
             string destinationPath)
         {
             Mutate(source);
-            return inner.MoveSourceNoOverwrite(source, destinationPath);
+            return _inner.MoveSourceNoOverwrite(source, destinationPath);
         }
 
-        public void DeleteOwned(IdentityTrackedFile file) => inner.DeleteOwned(file);
+        public void DeleteOwned(IdentityTrackedFile file) => _inner.DeleteOwned(file);
 
-        public IdentityPathProbe Probe(string path) => inner.Probe(path);
+        public IdentityPathProbe Probe(string path) => _inner.Probe(path);
 
         private void Mutate(IdentityTrackedFile source)
         {
@@ -1201,8 +1253,15 @@ public sealed class VideoOptimizerServiceTests : IDisposable
         }
     }
 
-    private sealed class ThrowOnFinalCaptureTransactions(IIdentityFileTransactions inner) : IIdentityFileTransactions
+    private sealed class ThrowOnFinalCaptureTransactions : IIdentityFileTransactions
     {
+        private readonly IIdentityFileTransactions _inner;
+
+        public ThrowOnFinalCaptureTransactions(IIdentityFileTransactions inner)
+        {
+            _inner = inner;
+        }
+
         public string? FinalPath { get; private set; }
 
         public IdentityTrackedFile Capture(string path)
@@ -1212,56 +1271,63 @@ public sealed class VideoOptimizerServiceTests : IDisposable
                 throw new IOException("Injected final capture failure.");
             }
 
-            return inner.Capture(path);
+            return _inner.Capture(path);
         }
 
-        public IdentityTrackedFile CreateOwnedNew(string destinationPath) => inner.CreateOwnedNew(destinationPath);
+        public IdentityTrackedFile CreateOwnedNew(string destinationPath) => _inner.CreateOwnedNew(destinationPath);
 
         public Task<IdentityTrackedFile> CopyAndFlushAsync(
             IdentityTrackedFile source,
             IdentityTrackedFile destination,
             IProgress<double>? progress,
             CancellationToken cancellationToken) =>
-            inner.CopyAndFlushAsync(source, destination, progress, cancellationToken);
+            _inner.CopyAndFlushAsync(source, destination, progress, cancellationToken);
 
-        public IDisposable GuardOwnedPath(IdentityTrackedFile file) => inner.GuardOwnedPath(file);
+        public IDisposable GuardOwnedPath(IdentityTrackedFile file) => _inner.GuardOwnedPath(file);
 
-        public IDisposable GuardSourceSnapshot(IdentityTrackedFile source) => inner.GuardSourceSnapshot(source);
+        public IDisposable GuardSourceSnapshot(IdentityTrackedFile source) => _inner.GuardSourceSnapshot(source);
 
-        public bool EntryExistsCaseInsensitive(string path) => inner.EntryExistsCaseInsensitive(path);
+        public bool EntryExistsCaseInsensitive(string path) => _inner.EntryExistsCaseInsensitive(path);
 
         public IdentityMoveResult MoveNoOverwrite(IdentityTrackedFile source, string destinationPath)
         {
-            IdentityMoveResult result = inner.MoveNoOverwrite(source, destinationPath);
+            IdentityMoveResult result = _inner.MoveNoOverwrite(source, destinationPath);
             FinalPath = destinationPath;
             return result;
         }
 
         public IdentityMoveResult MoveSourceNoOverwrite(IdentityTrackedFile source, string destinationPath)
         {
-            IdentityMoveResult result = inner.MoveSourceNoOverwrite(source, destinationPath);
+            IdentityMoveResult result = _inner.MoveSourceNoOverwrite(source, destinationPath);
             FinalPath = destinationPath;
             return result;
         }
 
-        public void DeleteOwned(IdentityTrackedFile file) => inner.DeleteOwned(file);
+        public void DeleteOwned(IdentityTrackedFile file) => _inner.DeleteOwned(file);
 
-        public IdentityPathProbe Probe(string path) => inner.Probe(path);
+        public IdentityPathProbe Probe(string path) => _inner.Probe(path);
     }
 
-    private sealed class DualOwnedMoveTransactions(IIdentityFileTransactions inner) : IIdentityFileTransactions
+    private sealed class DualOwnedMoveTransactions : IIdentityFileTransactions
     {
+        private readonly IIdentityFileTransactions _inner;
+
+        public DualOwnedMoveTransactions(IIdentityFileTransactions inner)
+        {
+            _inner = inner;
+        }
+
         private FileSystemIdentity? _identity;
 
         public string? TempPath { get; private set; }
 
         public string? DestinationPath { get; private set; }
 
-        public IdentityTrackedFile Capture(string path) => inner.Capture(path);
+        public IdentityTrackedFile Capture(string path) => _inner.Capture(path);
 
         public IdentityTrackedFile CreateOwnedNew(string destinationPath)
         {
-            IdentityTrackedFile created = inner.CreateOwnedNew(destinationPath);
+            IdentityTrackedFile created = _inner.CreateOwnedNew(destinationPath);
             TempPath = created.Path;
             _identity = created.Identity;
             return created;
@@ -1272,13 +1338,13 @@ public sealed class VideoOptimizerServiceTests : IDisposable
             IdentityTrackedFile destination,
             IProgress<double>? progress,
             CancellationToken cancellationToken) =>
-            inner.CopyAndFlushAsync(source, destination, progress, cancellationToken);
+            _inner.CopyAndFlushAsync(source, destination, progress, cancellationToken);
 
-        public IDisposable GuardOwnedPath(IdentityTrackedFile file) => inner.GuardOwnedPath(file);
+        public IDisposable GuardOwnedPath(IdentityTrackedFile file) => _inner.GuardOwnedPath(file);
 
-        public IDisposable GuardSourceSnapshot(IdentityTrackedFile source) => inner.GuardSourceSnapshot(source);
+        public IDisposable GuardSourceSnapshot(IdentityTrackedFile source) => _inner.GuardSourceSnapshot(source);
 
-        public bool EntryExistsCaseInsensitive(string path) => inner.EntryExistsCaseInsensitive(path);
+        public bool EntryExistsCaseInsensitive(string path) => _inner.EntryExistsCaseInsensitive(path);
 
         public IdentityMoveResult MoveNoOverwrite(IdentityTrackedFile source, string destinationPath)
         {
@@ -1302,7 +1368,7 @@ public sealed class VideoOptimizerServiceTests : IDisposable
                 source.Identity);
         }
 
-        public void DeleteOwned(IdentityTrackedFile file) => inner.DeleteOwned(file);
+        public void DeleteOwned(IdentityTrackedFile file) => _inner.DeleteOwned(file);
 
         public IdentityPathProbe Probe(string path)
         {
@@ -1312,7 +1378,7 @@ public sealed class VideoOptimizerServiceTests : IDisposable
                 return new IdentityPathProbe(IdentityPathState.Present, _identity);
             }
 
-            return inner.Probe(path);
+            return _inner.Probe(path);
         }
     }
 }

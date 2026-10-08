@@ -9,23 +9,13 @@ public sealed class WindowsVideoMediaProbeTests
     public void BuildInfo_NormalizesCodecsMissingParAndAnisotropicDisplayGeometry()
     {
         VideoMediaInfo info = WindowsVideoMediaProbe.BuildInfo(
-            720,
-            480,
-            VideoOrientation.Normal,
+            (720, 480, VideoOrientation.Normal),
             TimeSpan.FromSeconds(12),
-            5_128_000,
-            5_000_000,
-            30000,
-            1001,
-            8,
-            9,
-            "H264Es",
-            "Mpeg4",
-            "Aac",
-            128_000,
-            1,
-            1,
-            0);
+            (5_128_000, 5_000_000, 128_000),
+            (30000, 1001),
+            (8, 9),
+            ("H264Es", "Mpeg4", "Aac"),
+            (1, 1, 0));
 
         Assert.Equal(720, info.Width);
         Assert.Equal(480, info.Height);
@@ -43,23 +33,13 @@ public sealed class WindowsVideoMediaProbeTests
     public void BuildInfo_Rotate270SwapsCodedAndSquarePixelExtents()
     {
         VideoMediaInfo info = WindowsVideoMediaProbe.BuildInfo(
-            720,
-            480,
-            VideoOrientation.Rotate270,
+            (720, 480, VideoOrientation.Rotate270),
             TimeSpan.FromSeconds(12),
-            5_000_000,
-            4_900_000,
-            30,
-            1,
-            8,
-            9,
-            "H264",
-            "Mpeg4",
-            null,
-            0,
-            1,
-            0,
-            0);
+            (5_000_000, 4_900_000, 0),
+            (30, 1),
+            (8, 9),
+            ("H264", "Mpeg4", null),
+            (1, 0, 0));
 
         Assert.Equal(480, info.Width);
         Assert.Equal(720, info.Height);
@@ -72,23 +52,13 @@ public sealed class WindowsVideoMediaProbeTests
     public void BuildInfo_NormalizesActuallyMissingParToOneToOne()
     {
         VideoMediaInfo info = WindowsVideoMediaProbe.BuildInfo(
-            640,
-            480,
-            VideoOrientation.Normal,
+            (640, 480, VideoOrientation.Normal),
             TimeSpan.FromSeconds(1),
-            1,
-            1,
-            24,
-            1,
-            0,
-            0,
-            "H264",
-            "Mpeg4",
-            null,
-            0,
-            1,
-            0,
-            0);
+            (1, 1, 0),
+            (24, 1),
+            (0, 0),
+            ("H264", "Mpeg4", null),
+            (1, 0, 0));
 
         Assert.Equal(1u, info.PixelAspectRatioNumerator);
         Assert.Equal(1u, info.PixelAspectRatioDenominator);
@@ -110,22 +80,12 @@ public sealed class WindowsVideoMediaProbeTests
         int timedTracks)
     {
         Assert.Throws<InvalidDataException>(() => WindowsVideoMediaProbe.BuildInfo(
-            640,
-            480,
-            VideoOrientation.Normal,
+            (640, 480, VideoOrientation.Normal),
             TimeSpan.FromSeconds(1),
-            1,
-            1,
-            24,
-            1,
-            parNumerator,
-            parDenominator,
-            "H264",
-            "Mpeg4",
-            audioTracks == 0 ? null : "Aac",
-            audioTracks == 0 ? 0u : 128_000u,
-            videoTracks,
-            audioTracks,
-            timedTracks));
+            (1, 1, audioTracks == 0 ? 0u : 128_000u),
+            (24, 1),
+            (parNumerator, parDenominator),
+            ("H264", "Mpeg4", audioTracks == 0 ? null : "Aac"),
+            (videoTracks, audioTracks, timedTracks)));
     }
 }

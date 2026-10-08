@@ -231,6 +231,7 @@ public sealed class MediaFingerprintCache : IMediaFingerprintCacheControl
             }
             catch (DirectoryNotFoundException)
             {
+                // A missing cache directory already represents a cleared cache.
             }
 
             DeleteOwnedTemporaryFiles(cancellationToken);
@@ -295,31 +296,7 @@ public sealed class MediaFingerprintCache : IMediaFingerprintCacheControl
                     cancellationToken).ConfigureAwait(false);
                 if (document?.SchemaVersion == DocumentSchemaVersion)
                 {
-                    foreach (ImageCacheEntry entry in document.ImageEntries ?? [])
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        if (TryAccept(entry, out string? canonicalPath))
-                        {
-                            images[canonicalPath] = entry with
-                            {
-                                Path = canonicalPath,
-                                Sample = Clone(entry.Sample),
-                            };
-                        }
-                    }
-
-                    foreach (VideoCacheEntry entry in document.VideoEntries ?? [])
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        if (TryAccept(entry, out string? canonicalPath))
-                        {
-                            videos[canonicalPath] = entry with
-                            {
-                                Path = canonicalPath,
-                                Sample = Clone(entry.Sample),
-                            };
-                        }
-                    }
+                    AcceptEntries(document, images, videos, cancellationToken);
                 }
             }
         }
@@ -337,6 +314,31 @@ public sealed class MediaFingerprintCache : IMediaFingerprintCacheControl
         _imageEntries = images;
         _videoEntries = videos;
         _loaded = true;
+    }
+
+    private static void AcceptEntries(
+        CacheDocument document,
+        Dictionary<string, ImageCacheEntry> images,
+        Dictionary<string, VideoCacheEntry> videos,
+        CancellationToken cancellationToken)
+    {
+        foreach (ImageCacheEntry entry in document.ImageEntries ?? [])
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (TryAccept(entry, out string? canonicalPath))
+            {
+                images[canonicalPath] = entry with { Path = canonicalPath, Sample = Clone(entry.Sample) };
+            }
+        }
+
+        foreach (VideoCacheEntry entry in document.VideoEntries ?? [])
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (TryAccept(entry, out string? canonicalPath))
+            {
+                videos[canonicalPath] = entry with { Path = canonicalPath, Sample = Clone(entry.Sample) };
+            }
+        }
     }
 
     private async Task<bool> TrySaveAsync(CacheDocument document, CancellationToken cancellationToken)
@@ -488,14 +490,14 @@ public sealed class MediaFingerprintCache : IMediaFingerprintCacheControl
 
     private static ImageSample Clone(ImageSample sample) => sample with
     {
-        Luminance32x32 = sample.Luminance32x32.ToArray(),
+        Luminance32x32 = sample.Luminance32x32.ToArray()
     };
 
     private static VideoSample Clone(VideoSample sample) => sample with
     {
         LuminanceFrames32x32 = sample.LuminanceFrames32x32
             .Select(frame => frame.ToArray())
-            .ToArray(),
+            .ToArray()
     };
 
     private static FileSnapshot? TryGetSnapshot(string path)
@@ -547,6 +549,7 @@ public sealed class MediaFingerprintCache : IMediaFingerprintCacheControl
         }
         catch (Exception ex) when (IsCacheFailure(ex))
         {
+            // Failed cache writes are optional; leave an inaccessible temporary file for ClearAsync.
         }
     }
 

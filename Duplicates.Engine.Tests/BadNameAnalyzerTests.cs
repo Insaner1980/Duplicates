@@ -143,7 +143,7 @@ public sealed class BadNameAnalyzerTests
                 "Contains bidirectional control characters",
                 "Contains invalid Windows characters",
                 "Has leading or trailing whitespace",
-                "Ends with a dot",
+                "Ends with a dot"
             ],
             finding.Reasons);
         Assert.Equal("bad_", finding.SuggestedName);
@@ -238,7 +238,7 @@ public sealed class BadNameAnalyzerTests
         var skipped = new SkippedPath { Path = @"C:\scan\locked", Reason = "Access denied" };
         FileInventory inventory = NewInventory(files: [file], skippedPaths: [skipped]);
 
-        AnalysisResult result = await new BadNameAnalyzer().AnalyzeAsync(inventory, CancellationToken.None);
+        AnalysisResult result = await BadNameAnalyzer.AnalyzeAsync(inventory, CancellationToken.None);
 
         PathFinding finding = Assert.Single(result.Findings);
         Assert.Equal(file.FullPath, finding.FullPath);
@@ -263,7 +263,7 @@ public sealed class BadNameAnalyzerTests
             [
                 NewFile(@"C:\scan\ ordinary.txt", " ordinary.txt"),
                 NewFile(@"C:\scan\ reparse.txt", " reparse.txt", attributes: FileAttributes.ReparsePoint),
-                NewFile(@"C:\scan\ directory.txt", " directory.txt", attributes: FileAttributes.Directory),
+                NewFile(@"C:\scan\ directory.txt", " directory.txt", attributes: FileAttributes.Directory)
             ],
             directories:
             [
@@ -273,10 +273,10 @@ public sealed class BadNameAnalyzerTests
                     @"C:\scan",
                     1,
                     0,
-                    FileAttributes.Directory),
+                    FileAttributes.Directory)
             ]);
 
-        AnalysisResult result = await new BadNameAnalyzer().AnalyzeAsync(inventory, CancellationToken.None);
+        AnalysisResult result = await BadNameAnalyzer.AnalyzeAsync(inventory, CancellationToken.None);
 
         Assert.Equal(@"C:\scan\ ordinary.txt", Assert.Single(result.Findings).FullPath);
     }
@@ -288,10 +288,10 @@ public sealed class BadNameAnalyzerTests
         [
             NewFile(@"C:\scan\ z.txt", " z.txt"),
             NewFile(@"C:\scan\ a.txt", " a.txt"),
-            NewFile(@"C:\scan\ A.txt", " A.txt"),
+            NewFile(@"C:\scan\ A.txt", " A.txt")
         ]);
 
-        AnalysisResult result = await new BadNameAnalyzer().AnalyzeAsync(inventory, CancellationToken.None);
+        AnalysisResult result = await BadNameAnalyzer.AnalyzeAsync(inventory, CancellationToken.None);
 
         Assert.Equal(
             [@"C:\scan\ A.txt", @"C:\scan\ a.txt", @"C:\scan\ z.txt"],
@@ -305,12 +305,12 @@ public sealed class BadNameAnalyzerTests
         FileInventory inventory = NewInventory(files: new CancelBeforeSecondItemList<InventoryFile>(
             [
                 NewFile(@"C:\scan\ first.txt", " first.txt"),
-                NewFile(@"C:\scan\ second.txt", " second.txt"),
+                NewFile(@"C:\scan\ second.txt", " second.txt")
             ],
             cancellationSource));
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            new BadNameAnalyzer().AnalyzeAsync(inventory, cancellationSource.Token));
+            BadNameAnalyzer.AnalyzeAsync(inventory, cancellationSource.Token));
     }
 
     [Fact]
@@ -322,10 +322,10 @@ public sealed class BadNameAnalyzerTests
         [
             NewFile(@"C:\scan\high.txt", highSurrogateName),
             NewFile(@"C:\scan\low.txt", lowSurrogateName),
-            NewFile(@"C:\scan\ bad.txt", " bad.txt"),
+            NewFile(@"C:\scan\ bad.txt", " bad.txt")
         ]);
 
-        AnalysisResult result = await new BadNameAnalyzer().AnalyzeAsync(inventory, CancellationToken.None);
+        AnalysisResult result = await BadNameAnalyzer.AnalyzeAsync(inventory, CancellationToken.None);
 
         Assert.Equal(@"C:\scan\ bad.txt", Assert.Single(result.Findings).FullPath);
     }
@@ -360,13 +360,22 @@ public sealed class BadNameAnalyzerTests
             [],
             skippedPaths ?? []);
 
-    private sealed class CancelBeforeSecondItemList<T>(
-        IReadOnlyList<T> items,
-        CancellationTokenSource cancellationSource) : IReadOnlyList<T>
+    private sealed class CancelBeforeSecondItemList<T> : IReadOnlyList<T>
     {
-        public int Count => items.Count;
+        private readonly IReadOnlyList<T> _items;
+        private readonly CancellationTokenSource _cancellationSource;
 
-        public T this[int index] => items[index];
+        public CancelBeforeSecondItemList(
+        IReadOnlyList<T> items,
+        CancellationTokenSource cancellationSource)
+        {
+            _items = items;
+            _cancellationSource = cancellationSource;
+        }
+
+        public int Count => _items.Count;
+
+        public T this[int index] => _items[index];
 
         public IEnumerator<T> GetEnumerator() => Enumerate().GetEnumerator();
 
@@ -374,11 +383,11 @@ public sealed class BadNameAnalyzerTests
 
         private IEnumerable<T> Enumerate()
         {
-            yield return items[0];
-            cancellationSource.Cancel();
-            for (int index = 1; index < items.Count; index++)
+            yield return _items[0];
+            _cancellationSource.Cancel();
+            for (int index = 1; index < _items.Count; index++)
             {
-                yield return items[index];
+                yield return _items[index];
             }
         }
     }

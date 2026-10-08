@@ -16,6 +16,7 @@ namespace Duplicates.ViewModels;
 
 public sealed partial class ResultsViewModel : ObservableObject
 {
+    private const string OperationAlreadyRunningMessage = "Another file operation is already running.";
     private readonly ResultsStore _resultsStore;
     private readonly IFileActionService _fileActionService;
     private readonly ISettingsService _settingsService;
@@ -184,7 +185,7 @@ public sealed partial class ResultsViewModel : ObservableObject
 
     public Visibility DeleteFailureDetailsVisibility => string.IsNullOrWhiteSpace(DeleteFailureDetailsText) ? Visibility.Collapsed : Visibility.Visible;
 
-    public IReadOnlyList<DuplicateFileViewModel> SelectedFiles => _allGroups.SelectMany(static group => group.Files).Where(static file => file.IsSelected).ToArray();
+    public IReadOnlyList<DuplicateFileViewModel> GetSelectedFiles() => _allGroups.SelectMany(static group => group.Files).Where(static file => file.IsSelected).ToArray();
 
     public bool CanUndoSelection => _selectionSnapshot is not null && CanMutateSelection;
 
@@ -395,7 +396,7 @@ public sealed partial class ResultsViewModel : ObservableObject
     {
         ExactResultsSession session = _resultsStore.CurrentSession ??
             throw new InvalidOperationException("Run a scan before deleting duplicate files.");
-        DuplicateFileViewModel[] files = file is null ? SelectedFiles.ToArray() : [file];
+        DuplicateFileViewModel[] files = file is null ? GetSelectedFiles().ToArray() : [file];
         if (file is null ? !CanDelete : IsDeleting || !_allGroups.Any(group => group.Files.Count > 1 && group.Files.Contains(file)))
         {
             throw new InvalidOperationException("The file selection is no longer available for deletion.");
@@ -408,7 +409,7 @@ public sealed partial class ResultsViewModel : ObservableObject
         !IsDeleting && _operationCoordinator.ActiveOperation is null &&
         _settingsService.Current.DeletionMode == snapshot.Mode &&
         IsCurrentAction(snapshot.Session, snapshot.Files) &&
-        (!snapshot.IsBatch || SelectedFiles.SequenceEqual(snapshot.Files));
+        (!snapshot.IsBatch || GetSelectedFiles().SequenceEqual(snapshot.Files));
 
     internal async Task<DeleteSummary> DeleteConfirmedAsync(ExactDeleteSnapshot snapshot, CancellationToken cancellationToken)
     {
@@ -507,7 +508,7 @@ public sealed partial class ResultsViewModel : ObservableObject
             .SelectMany(static state => state.Duplicates)
             .Select(static file => file.FullPath)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        HashSet<string> currentSelection = SelectedFiles
+        HashSet<string> currentSelection = GetSelectedFiles()
             .Select(static file => file.FullPath)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         return expectedSelection.SetEquals(currentSelection);
@@ -529,7 +530,7 @@ public sealed partial class ResultsViewModel : ObservableObject
                 actionCancellation.Cancel,
                 out IAppOperationLease? lease))
         {
-            throw new InvalidOperationException("Another file operation is already running.");
+            throw new InvalidOperationException(OperationAlreadyRunningMessage);
         }
 
         _actionCancellation = actionCancellation;
@@ -587,7 +588,7 @@ public sealed partial class ResultsViewModel : ObservableObject
     {
         ExactResultsSession session = _resultsStore.CurrentSession ??
             throw new InvalidOperationException("Run a scan before moving duplicate files.");
-        IReadOnlyList<DuplicateFileViewModel> files = SelectedFiles;
+        IReadOnlyList<DuplicateFileViewModel> files = GetSelectedFiles();
         EnsureSurvivorInvariant(files);
         using CancellationTokenSource actionCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         if (!_operationCoordinator.TryAcquire(
@@ -595,7 +596,7 @@ public sealed partial class ResultsViewModel : ObservableObject
                 actionCancellation.Cancel,
                 out IAppOperationLease? lease))
         {
-            throw new InvalidOperationException("Another file operation is already running.");
+            throw new InvalidOperationException(OperationAlreadyRunningMessage);
         }
 
         _actionCancellation = actionCancellation;
@@ -658,11 +659,14 @@ public sealed partial class ResultsViewModel : ObservableObject
             .Select(static result => result.Failure!)
             .ToArray();
         int movedCount = summary.Results.Count(static result => result.Succeeded);
-        DeleteStatusMessage = wasCancelled
-            ? $"Move cancelled after {movedCount:N0} {(movedCount == 1 ? "file" : "files")} moved."
-            : failures.Length == 0
-                ? movedCount == 1 ? "1 file moved." : $"{movedCount:N0} files moved."
-                : $"{movedCount:N0} files moved, {failures.Length:N0} could not be moved.";
+        DeleteStatusMessage = (wasCancelled, failures.Length, movedCount) switch
+        {
+            (true, _, 1) => "Move cancelled after 1 file moved.",
+            (true, _, _) => $"Move cancelled after {movedCount:N0} files moved.",
+            (false, 0, 1) => "1 file moved.",
+            (false, 0, _) => $"{movedCount:N0} files moved.",
+            _ => $"{movedCount:N0} files moved, {failures.Length:N0} could not be moved.",
+        };
         DeleteFailureDetailsText = BuildFailureDetailsText(failures);
         ApplySearchAndSort();
         RefreshAllComputedProperties();
@@ -705,7 +709,7 @@ public sealed partial class ResultsViewModel : ObservableObject
                 actionCancellation.Cancel,
                 out IAppOperationLease? lease))
         {
-            throw new InvalidOperationException("Another file operation is already running.");
+            throw new InvalidOperationException(OperationAlreadyRunningMessage);
         }
 
         _actionCancellation = actionCancellation;
@@ -741,7 +745,7 @@ public sealed partial class ResultsViewModel : ObservableObject
                 actionCancellation.Cancel,
                 out IAppOperationLease? lease))
         {
-            throw new InvalidOperationException("Another file operation is already running.");
+            throw new InvalidOperationException(OperationAlreadyRunningMessage);
         }
 
         _actionCancellation = actionCancellation;
@@ -980,14 +984,14 @@ public sealed partial class ResultsViewModel : ObservableObject
                 string.Equals(failure.Path, file.FullPath, StringComparison.OrdinalIgnoreCase)))
             .Select(static file => file.FullPath);
         RemoveSuccessfulPaths(deletedPaths.ToHashSet(StringComparer.OrdinalIgnoreCase));
-        DeleteStatusMessage = wasCancelled
-            ? $"Delete cancelled after {summary.DeletedCount:N0} " +
-                (summary.DeletedCount == 1 ? "file deleted." : "files deleted.")
-            : summary.Failures.Count == 0
-                ? summary.DeletedCount == 1
-                    ? "1 file deleted."
-                    : $"{summary.DeletedCount:N0} files deleted."
-                : $"{summary.DeletedCount:N0} files deleted, {summary.Failures.Count:N0} could not be deleted.";
+        DeleteStatusMessage = (wasCancelled, summary.Failures.Count, summary.DeletedCount) switch
+        {
+            (true, _, 1) => "Delete cancelled after 1 file deleted.",
+            (true, _, _) => $"Delete cancelled after {summary.DeletedCount:N0} files deleted.",
+            (false, 0, 1) => "1 file deleted.",
+            (false, 0, _) => $"{summary.DeletedCount:N0} files deleted.",
+            _ => $"{summary.DeletedCount:N0} files deleted, {summary.Failures.Count:N0} could not be deleted.",
+        };
         DeleteFailureDetailsText = BuildFailureDetailsText(summary.Failures);
         ApplySearchAndSort();
         RefreshAllComputedProperties();
@@ -1014,11 +1018,14 @@ public sealed partial class ResultsViewModel : ObservableObject
             .Select(static result => result.Failure!)
             .ToArray();
         int succeeded = summary.Results.Count(static result => result.Succeeded);
-        DeleteStatusMessage = wasCancelled
-            ? $"Link replacement cancelled after {succeeded:N0} {(succeeded == 1 ? "file" : "files")} committed."
-            : failures.Length == 0
-                ? succeeded == 1 ? "1 duplicate replaced with a link." : $"{succeeded:N0} duplicates replaced with links."
-                : $"{succeeded:N0} duplicates replaced, {failures.Length:N0} could not be replaced.";
+        DeleteStatusMessage = (wasCancelled, failures.Length, succeeded) switch
+        {
+            (true, _, 1) => "Link replacement cancelled after 1 file committed.",
+            (true, _, _) => $"Link replacement cancelled after {succeeded:N0} files committed.",
+            (false, 0, 1) => "1 duplicate replaced with a link.",
+            (false, 0, _) => $"{succeeded:N0} duplicates replaced with links.",
+            _ => $"{succeeded:N0} duplicates replaced, {failures.Length:N0} could not be replaced.",
+        };
         DeleteFailureDetailsText = BuildFailureDetailsText(failures);
     }
 
@@ -1049,14 +1056,14 @@ public sealed partial class ResultsViewModel : ObservableObject
     {
         HashSet<DuplicateFileViewModel> requested = files.ToHashSet();
         var targets = new List<FileActionTarget>(files.Count);
-        foreach (DuplicateGroupViewModel group in _allGroups)
+        foreach (ObservableCollection<DuplicateFileViewModel> groupFiles in _allGroups.Select(static group => group.Files))
         {
-            DuplicateFileViewModel[] groupTargets = group.Files.Where(requested.Contains).ToArray();
+            DuplicateFileViewModel[] groupTargets = groupFiles.Where(requested.Contains).ToArray();
             if (groupTargets.Length == 0)
             {
                 continue;
             }
-            ExactFileConstraint[] survivors = group.Files.Where(file => !requested.Contains(file))
+            ExactFileConstraint[] survivors = groupFiles.Where(file => !requested.Contains(file))
                 .Select(static file => new ExactFileConstraint(file.FullPath, file.SizeBytes, file.File.ModifiedUtc)).ToArray();
             targets.AddRange(groupTargets.Select(file => new FileActionTarget(
                 file.FullPath,
@@ -1073,7 +1080,7 @@ public sealed partial class ResultsViewModel : ObservableObject
         file.SizeBytes,
         file.File.ModifiedUtc);
 
-    private void RemoveSuccessfulPaths(IReadOnlySet<string> paths)
+    private void RemoveSuccessfulPaths(HashSet<string> paths)
     {
         for (int index = _allGroups.Count - 1; index >= 0; index--)
         {
@@ -1175,7 +1182,7 @@ public sealed partial class ResultsViewModel : ObservableObject
         RefreshSelectionTotals();
     }
 
-    private IProgress<T> CreateActionProgress<T>(
+    private ActionProgress<T> CreateActionProgress<T>(
         ExactResultsSession session,
         CancellationTokenSource cancellation,
         Action<T> handler) => new ActionProgress<T>(value =>

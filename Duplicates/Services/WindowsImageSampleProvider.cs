@@ -215,6 +215,7 @@ internal static class WinRtAsync
                 }
                 catch
                 {
+                    // Native cancellation or completion may fail; preserve the caller's cancellation.
                 }
 
                 try
@@ -223,6 +224,7 @@ internal static class WinRtAsync
                 }
                 catch
                 {
+                    // Native cancellation or completion may fail; preserve the caller's cancellation.
                 }
 
                 throw new OperationCanceledException(cancellationToken);
@@ -238,7 +240,7 @@ internal static class WinRtAsync
         Windows.Foundation.IAsyncOperation<T> operation,
         CancellationToken cancellationToken)
     {
-        Task<T> nativeTask = operation.AsTask();
+        Task<T> nativeTask = operation.AsTask(CancellationToken.None);
         try
         {
             try
@@ -253,6 +255,7 @@ internal static class WinRtAsync
                 }
                 catch
                 {
+                    // Native cancellation or completion may fail; preserve the caller's cancellation.
                 }
 
                 try
@@ -265,6 +268,7 @@ internal static class WinRtAsync
                 }
                 catch
                 {
+                    // Native cancellation or completion may fail; preserve the caller's cancellation.
                 }
 
                 throw new OperationCanceledException(cancellationToken);

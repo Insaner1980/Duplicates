@@ -8,7 +8,7 @@ using Xunit.Sdk;
 
 namespace Duplicates.App.Tests;
 
-public sealed class FileLinkNativeTests
+public sealed partial class FileLinkNativeTests
 {
     [Fact]
     [Trait("Category", "Task16RealUat")]
@@ -424,7 +424,7 @@ public sealed class FileLinkNativeTests
             File.WriteAllBytes(survivor, [6, 2, 6]);
             File.WriteAllBytes(duplicate, [6, 2, 6]);
             ApplyNativeAttribute(duplicate, fixture);
-            Assert.True((File.GetAttributes(duplicate) & expectedAttribute) != 0);
+            Assert.NotEqual((FileAttributes)0, File.GetAttributes(duplicate) & expectedAttribute);
             var platform = new FileLinkNative();
             var service = new FileLinkService(platform, new DispositionRecycleBinService(platform));
 
@@ -602,9 +602,9 @@ public sealed class FileLinkNativeTests
         Offline,
     }
 
-    [DllImport("kernel32.dll", SetLastError = true)]
+    [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool DeviceIoControl(
+    private static partial bool DeviceIoControl(
         SafeFileHandle device,
         uint controlCode,
         nint inputBuffer,
@@ -614,21 +614,28 @@ public sealed class FileLinkNativeTests
         out uint bytesReturned,
         nint overlapped);
 
-    private sealed class DispositionRecycleBinService(IFileLinkPlatform platform) : IRecycleBinService
+    private sealed class DispositionRecycleBinService : IRecycleBinService
     {
+        private readonly IFileLinkPlatform _platform;
+
+        public DispositionRecycleBinService(IFileLinkPlatform platform)
+        {
+            _platform = platform;
+        }
+
         public Task RecycleFileAsync(
             string path,
             FileSystemIdentity expectedIdentity,
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            using IFileLinkHandle handle = platform.OpenNoFollow(path, requestDelete: true);
-            if (platform.GetInfo(handle).Identity != expectedIdentity)
+            using IFileLinkHandle handle = _platform.OpenNoFollow(path, requestDelete: true);
+            if (_platform.GetInfo(handle).Identity != expectedIdentity)
             {
                 throw new InvalidOperationException("The real UAT rollback identity changed.");
             }
 
-            platform.DeleteByHandle(handle);
+            _platform.DeleteByHandle(handle);
             return Task.CompletedTask;
         }
     }

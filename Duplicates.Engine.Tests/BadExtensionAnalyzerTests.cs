@@ -33,7 +33,7 @@ public sealed class BadExtensionAnalyzerTests : IDisposable
             files: [file],
             skippedPaths: [new SkippedPath { Path = "already-skipped", Reason = "Existing reason" }]);
 
-        AnalysisResult result = await new BadExtensionAnalyzer().AnalyzeAsync(
+        AnalysisResult result = await BadExtensionAnalyzer.AnalyzeAsync(
             inventory,
             CancellationToken.None);
 
@@ -59,7 +59,7 @@ public sealed class BadExtensionAnalyzerTests : IDisposable
     {
         InventoryFile file = WriteInventoryFile("photo", PngBytes);
 
-        AnalysisResult result = await new BadExtensionAnalyzer().AnalyzeAsync(
+        AnalysisResult result = await BadExtensionAnalyzer.AnalyzeAsync(
             NewInventory(files: [file]),
             CancellationToken.None);
 
@@ -76,7 +76,7 @@ public sealed class BadExtensionAnalyzerTests : IDisposable
         InventoryFile ambiguousBmff = WriteInventoryFile("clip.bin", Ftyp("isom", "qt  "));
         InventoryFile ambiguousEbml = WriteInventoryFile("movie.bin", EbmlWithoutDocType());
 
-        AnalysisResult result = await new BadExtensionAnalyzer().AnalyzeAsync(
+        AnalysisResult result = await BadExtensionAnalyzer.AnalyzeAsync(
             NewInventory(files: [png, docx, ambiguousBmff, ambiguousEbml]),
             CancellationToken.None);
 
@@ -100,7 +100,7 @@ public sealed class BadExtensionAnalyzerTests : IDisposable
             FileAttributes.Normal);
         var existingSkip = new SkippedPath { Path = "first", Reason = "Existing reason" };
 
-        AnalysisResult result = await new BadExtensionAnalyzer().AnalyzeAsync(
+        AnalysisResult result = await BadExtensionAnalyzer.AnalyzeAsync(
             NewInventory(files: [reparse, directory, missing], skippedPaths: [existingSkip]),
             CancellationToken.None);
 
@@ -118,7 +118,7 @@ public sealed class BadExtensionAnalyzerTests : IDisposable
         InventoryFile upper = WriteInventoryFile("A.txt", PngBytes);
         InventoryFile zed = WriteInventoryFile("z.txt", PngBytes);
 
-        AnalysisResult result = await new BadExtensionAnalyzer().AnalyzeAsync(
+        AnalysisResult result = await BadExtensionAnalyzer.AnalyzeAsync(
             NewInventory(files: [zed, lower, upper]),
             CancellationToken.None);
 
@@ -137,7 +137,7 @@ public sealed class BadExtensionAnalyzerTests : IDisposable
             files: new CancelBeforeSecondItemList<InventoryFile>([first, second], cancellationSource));
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            new BadExtensionAnalyzer().AnalyzeAsync(inventory, cancellationSource.Token));
+            BadExtensionAnalyzer.AnalyzeAsync(inventory, cancellationSource.Token));
     }
 
     private static readonly byte[] PngBytes = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
@@ -186,20 +186,29 @@ public sealed class BadExtensionAnalyzerTests : IDisposable
         return
         [
             (byte)(size >> 24), (byte)(size >> 16), (byte)(size >> 8), (byte)size,
-            0x66, 0x74, 0x79, 0x70, .. major, 0, 0, 0, 0, .. compatible,
+            0x66, 0x74, 0x79, 0x70, .. major, 0, 0, 0, 0, .. compatible
         ];
     }
 
     private static byte[] EbmlWithoutDocType() =>
         [0x1A, 0x45, 0xDF, 0xA3, 0x82, 0xEC, 0x80];
 
-    private sealed class CancelBeforeSecondItemList<T>(
-        IReadOnlyList<T> items,
-        CancellationTokenSource cancellationSource) : IReadOnlyList<T>
+    private sealed class CancelBeforeSecondItemList<T> : IReadOnlyList<T>
     {
-        public int Count => items.Count;
+        private readonly IReadOnlyList<T> _items;
+        private readonly CancellationTokenSource _cancellationSource;
 
-        public T this[int index] => items[index];
+        public CancelBeforeSecondItemList(
+        IReadOnlyList<T> items,
+        CancellationTokenSource cancellationSource)
+        {
+            _items = items;
+            _cancellationSource = cancellationSource;
+        }
+
+        public int Count => _items.Count;
+
+        public T this[int index] => _items[index];
 
         public IEnumerator<T> GetEnumerator() => Enumerate().GetEnumerator();
 
@@ -207,11 +216,11 @@ public sealed class BadExtensionAnalyzerTests : IDisposable
 
         private IEnumerable<T> Enumerate()
         {
-            yield return items[0];
-            cancellationSource.Cancel();
-            for (int index = 1; index < items.Count; index++)
+            yield return _items[0];
+            _cancellationSource.Cancel();
+            for (int index = 1; index < _items.Count; index++)
             {
-                yield return items[index];
+                yield return _items[index];
             }
         }
     }

@@ -29,7 +29,7 @@ public sealed partial class ScanPage : Page
         ViewModel.ScanCompleted -= ScanCompleted;
     }
 
-    private void ScanCompleted(object? sender, ScanResult e)
+    private static void ScanCompleted(object? sender, ScanResult e)
     {
         App.Current.MainWindow?.ShowResultsPage();
     }

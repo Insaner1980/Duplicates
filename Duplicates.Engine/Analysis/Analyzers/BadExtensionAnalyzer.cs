@@ -4,9 +4,9 @@ using Duplicates.Engine.Models;
 
 namespace Duplicates.Engine.Analysis.Analyzers;
 
-public sealed class BadExtensionAnalyzer
+public static class BadExtensionAnalyzer
 {
-    public async Task<AnalysisResult> AnalyzeAsync(
+    public static async Task<AnalysisResult> AnalyzeAsync(
         FileInventory inventory,
         CancellationToken cancellationToken)
     {

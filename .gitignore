@@ -2,6 +2,7 @@ bin/
 obj/
 .vs/
 .sonar/
+.sonarqube/
 .idea/
 *.user
 *.suo

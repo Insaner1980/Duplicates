@@ -9,6 +9,269 @@ namespace Duplicates.App.Tests;
 
 public sealed class ScanViewModelTests
 {
+    private static readonly string[] ExpectedCustomExtensions = [".mp3", ".png", ".txt"];
+
+    [Theory]
+    [InlineData(FileTypeCategory.Images, ".png")]
+    [InlineData(FileTypeCategory.Video, ".mp4")]
+    [InlineData(FileTypeCategory.Audio, ".wav")]
+    [InlineData(FileTypeCategory.Documents, ".txt")]
+    [InlineData(FileTypeCategory.Archives, ".zip")]
+    [InlineData(FileTypeCategory.Code, ".cs")]
+    public async Task StartScan_CategoryFilterIncludesOnlySelectedCategory(FileTypeCategory category, string extension)
+    {
+        string root = CreateTempRoot();
+        try
+        {
+            foreach (string candidateExtension in new[] { ".png", ".mp4", ".wav", ".txt", ".zip", ".cs", ".bin" })
+            {
+                File.WriteAllText(Path.Combine(root, "candidate" + candidateExtension), "same");
+            }
+
+            string duplicatePath = Path.Combine(root, "duplicate" + extension);
+            File.WriteAllText(duplicatePath, "same");
+            var scope = new PathScopeViewModel();
+            scope.AddFolder(root);
+            var store = new ResultsStore();
+            var viewModel = new ScanViewModel(new DuplicateScanner(), new FakeSettingsService(), store, scope)
+            {
+                SelectedFileFilterIndex = 1,
+                ImagesSelected = category == FileTypeCategory.Images,
+                VideoSelected = category == FileTypeCategory.Video,
+                AudioSelected = category == FileTypeCategory.Audio,
+                DocumentsSelected = category == FileTypeCategory.Documents,
+                ArchivesSelected = category == FileTypeCategory.Archives,
+                CodeSelected = category == FileTypeCategory.Code,
+            };
+
+            await viewModel.StartScanCommand.ExecuteAsync(null);
+
+            ScanResult result = Assert.IsType<ScanResult>(store.CurrentResult);
+            DuplicateGroup group = Assert.Single(result.Groups);
+            Assert.Equal(2, result.TotalFilesScanned);
+            Assert.Equal(1, result.TotalDuplicateFiles);
+            Assert.Equal(4, result.TotalReclaimableBytes);
+            Assert.Equal(2, group.Files.Count);
+            Assert.All(group.Files, file => Assert.Equal(extension, file.Extension));
+            Assert.Contains(group.Files, file => file.FullPath == duplicatePath);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task StartScan_CustomExtensionsAcceptMixedSeparatorsAndCase()
+    {
+        string root = CreateTempRoot();
+        try
+        {
+            foreach (string extension in new[] { ".txt", ".png", ".mp3", ".bin" })
+            {
+                File.WriteAllText(Path.Combine(root, "candidate" + extension), "same");
+            }
+
+            var scope = new PathScopeViewModel();
+            scope.AddFolder(root);
+            var store = new ResultsStore();
+            var viewModel = new ScanViewModel(new DuplicateScanner(), new FakeSettingsService(), store, scope)
+            {
+                SelectedFileFilterIndex = 2,
+                CustomExtensionsText = "*.TXT; .PNG, mp3 ",
+            };
+
+            await viewModel.StartScanCommand.ExecuteAsync(null);
+
+            ScanResult result = Assert.IsType<ScanResult>(store.CurrentResult);
+            Assert.Equal(3, result.TotalFilesScanned);
+            DuplicateGroup group = Assert.Single(result.Groups);
+            Assert.Equal(ExpectedCustomExtensions, group.Files.Select(file => file.Extension).Order());
+            Assert.Equal(2, result.TotalDuplicateFiles);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task StartScan_PublishesCanonicalFilesExclusionsAndScopeOptions()
+    {
+        string root = CreateTempRoot();
+        try
+        {
+            string folder = Directory.CreateDirectory(Path.Combine(root, "included")).FullName;
+            string excluded = Path.Combine(folder, "excluded.txt");
+            string explicitFile = Path.Combine(root, "explicit.txt");
+            File.WriteAllText(excluded, "same");
+            File.WriteAllText(Path.Combine(folder, "keep.txt"), "same");
+            File.WriteAllText(explicitFile, "same");
+            var scope = new PathScopeViewModel();
+            scope.AddFolder(folder + Path.DirectorySeparatorChar);
+            scope.AddFile(explicitFile);
+            scope.ExcludePath(excluded);
+            var store = new ResultsStore();
+            var viewModel = new ScanViewModel(new DuplicateScanner(), new FakeSettingsService(), store, scope)
+            {
+                IncludeSubfolders = false,
+                IgnoreHiddenFiles = false,
+                IgnoreSystemFiles = false,
+            };
+
+            await viewModel.StartScanCommand.ExecuteAsync(null);
+
+            ExactResultsSession session = Assert.IsType<ExactResultsSession>(store.CurrentSession);
+            Assert.Equal(new[] { folder }, session.Scope.IncludedFolders);
+            Assert.Equal(new[] { explicitFile }, session.Scope.IncludedFiles);
+            Assert.Equal(new[] { excluded }, session.Scope.ExcludedPaths);
+            Assert.False(session.Scope.IncludeSubfolders);
+            Assert.False(session.Scope.IgnoreHiddenFiles);
+            Assert.False(session.Scope.IgnoreSystemFiles);
+            Assert.Equal(2, session.Result.TotalFilesScanned);
+            Assert.DoesNotContain(Assert.Single(session.Result.Groups).Files, file => file.FullPath == excluded);
+            Assert.False(viewModel.IncludeSubfolders);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task StartScan_InvalidSizeRangePreservesPriorResultAndReleasesOperation()
+    {
+        string root = CreateTempRoot();
+        try
+        {
+            var scope = new PathScopeViewModel();
+            scope.AddFolder(root);
+            var store = new ResultsStore();
+            var prior = new ScanResult
+            {
+                Groups = [],
+                TotalFilesScanned = 7,
+                TotalDuplicateFiles = 0,
+                TotalReclaimableBytes = 0,
+                Elapsed = TimeSpan.Zero,
+                SkippedPaths = [],
+            };
+            store.SetResult(prior);
+            var coordinator = new AppOperationCoordinator();
+            var viewModel = new ScanViewModel(new DuplicateScanner(), new FakeSettingsService(), store, scope, coordinator)
+            {
+                MinSizeValue = 100,
+                MaxSizeValue = 10,
+            };
+            int completed = 0;
+            viewModel.ScanCompleted += (_, _) => completed++;
+
+            await viewModel.StartScanCommand.ExecuteAsync(null);
+
+            Assert.Same(prior, store.CurrentResult);
+            Assert.Equal(0, completed);
+            Assert.Contains("Maximum size", viewModel.StatusMessage);
+            Assert.True(viewModel.IsStatusOpen);
+            Assert.Null(coordinator.ActiveOperation);
+            Assert.False(viewModel.IsScanning);
+            Assert.True(viewModel.StartScanCommand.CanExecute(null));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task StartScan_CompetingOperationKeepsExistingLeaseAndReportsBusy()
+    {
+        var coordinator = new AppOperationCoordinator();
+        var descriptor = new AppOperationDescriptor(AppOperationKind.ExactResultsAction);
+        Assert.True(coordinator.TryAcquire(descriptor, static () => { }, out IAppOperationLease? lease));
+        using (lease!)
+        {
+            var store = new ResultsStore();
+            var viewModel = new ScanViewModel(
+                new DuplicateScanner(), new FakeSettingsService(), store, new PathScopeViewModel(), coordinator);
+
+            await viewModel.StartScanCommand.ExecuteAsync(null);
+
+            Assert.Same(descriptor, coordinator.ActiveOperation);
+            Assert.Null(store.CurrentResult);
+            Assert.Equal("Another operation is already running.", viewModel.StatusMessage);
+            Assert.False(viewModel.IsScanning);
+        }
+
+        Assert.Null(coordinator.ActiveOperation);
+    }
+
+    [Fact]
+    public void ScanPresentationTracksRunStateAndStatus()
+    {
+        var viewModel = new ScanViewModel(
+            new DuplicateScanner(), new FakeSettingsService(), new ResultsStore(), new PathScopeViewModel());
+
+        Assert.Equal(Visibility.Visible, viewModel.SetupVisibility);
+        Assert.Equal(Visibility.Collapsed, viewModel.ProgressVisibility);
+        Assert.False(viewModel.IsStatusOpen);
+
+        viewModel.IsScanning = true;
+        viewModel.StatusMessage = "Scanning";
+
+        Assert.Equal(Visibility.Collapsed, viewModel.SetupVisibility);
+        Assert.Equal(Visibility.Visible, viewModel.ProgressVisibility);
+        Assert.True(viewModel.IsStatusOpen);
+        viewModel.CancelScanCommand.Execute(null);
+        Assert.True(viewModel.IsScanning);
+    }
+
+    [Fact]
+    public async Task CancelScanCommandBeforeContinuationPreservesResultsAndAllowsNextScan()
+    {
+        string root = CreateTempRoot();
+        try
+        {
+            var scope = new PathScopeViewModel();
+            scope.AddFolder(root);
+            var store = new ResultsStore();
+            var coordinator = new AppOperationCoordinator();
+            var viewModel = new ScanViewModel(new DuplicateScanner(), new FakeSettingsService(), store, scope, coordinator);
+            using var releaseProgress = new ManualResetEventSlim();
+            var context = new QueuedScanProgressContext(() => viewModel.CancelScanCommand.Execute(null), releaseProgress);
+            SynchronizationContext? previous = SynchronizationContext.Current;
+            Task scan;
+            SynchronizationContext.SetSynchronizationContext(context);
+            try
+            {
+                scan = viewModel.StartScanCommand.ExecuteAsync(null);
+            }
+            finally
+            {
+                SynchronizationContext.SetSynchronizationContext(previous);
+                releaseProgress.Set();
+            }
+
+            await scan;
+            context.DrainProgress();
+
+            Assert.Null(store.CurrentResult);
+            Assert.Equal("Scan cancelled.", viewModel.StatusMessage);
+            Assert.Null(coordinator.ActiveOperation);
+            Assert.True(viewModel.StartScanCommand.CanExecute(null));
+            viewModel.CancelScanCommand.Execute(null);
+            Assert.Equal("Scan cancelled.", viewModel.StatusMessage);
+
+            await viewModel.StartScanCommand.ExecuteAsync(null);
+
+            Assert.NotNull(store.CurrentResult);
+            Assert.Empty(viewModel.StatusMessage);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task CompletedScanQueuedProgressCannotOverwriteLaterState()
     {
@@ -305,8 +568,24 @@ public sealed class ScanViewModelTests
         Assert.Equal(Visibility.Visible, viewModel.CustomExtensionsVisibility);
     }
 
-    private sealed class QueuedScanProgressContext(Action? beforeContinuation = null, ManualResetEventSlim? releaseProgress = null) : SynchronizationContext
+    private static string CreateTempRoot()
     {
+        string root = Path.Combine(Path.GetTempPath(), $"Duplicates.ScanOptions.{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        return root;
+    }
+
+    private sealed class QueuedScanProgressContext : SynchronizationContext
+    {
+        private readonly Action? _beforeContinuation;
+        private readonly ManualResetEventSlim? _releaseProgress;
+
+        public QueuedScanProgressContext(Action? beforeContinuation = null, ManualResetEventSlim? releaseProgress = null)
+        {
+            _beforeContinuation = beforeContinuation;
+            _releaseProgress = releaseProgress;
+        }
+
         private readonly System.Collections.Concurrent.ConcurrentQueue<(SendOrPostCallback Callback, object? State)> _progress = new();
 
         public bool HasProgress => !_progress.IsEmpty;
@@ -316,13 +595,13 @@ public sealed class ScanViewModelTests
             if (state is ScanProgress)
             {
                 _progress.Enqueue((callback, state));
-                releaseProgress?.Wait(TestContext.Current.CancellationToken);
+                _releaseProgress?.Wait(TestContext.Current.CancellationToken);
             }
             else
             {
                 ThreadPool.QueueUserWorkItem(_ =>
                 {
-                    beforeContinuation?.Invoke();
+                    _beforeContinuation?.Invoke();
                     callback(state);
                 });
             }

@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Security;
@@ -27,11 +28,10 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
     private readonly List<PathFindingViewModel> _allFindings = [];
     private readonly List<SimilarityGroupViewModel> _allGroups = [];
     private CancellationTokenSource? _previewCancellation;
-    private CancellationTokenSource? _actionCancellation;
     private long _previewRequestGeneration;
 
     public AnalysisResultsViewModel(AnalysisSessionStore sessionStore)
-        : this(sessionStore, null, null, FileSignatureDetector.DetectFileAsync, null, null, null)
+        : this(sessionStore, null, null, (FileSignatureDetector.DetectFileAsync, null))
     {
     }
 
@@ -39,7 +39,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         AnalysisSessionStore sessionStore,
         IFileActionService? fileActionService,
         IResultExportService? resultExportService)
-        : this(sessionStore, fileActionService, resultExportService, FileSignatureDetector.DetectFileAsync, null, null, null)
+        : this(sessionStore, fileActionService, resultExportService, (FileSignatureDetector.DetectFileAsync, null))
     {
     }
 
@@ -48,7 +48,17 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         IFileActionService? fileActionService,
         IResultExportService? resultExportService,
         Func<string, CancellationToken, ValueTask<DetectedFileType?>> detectFileAsync)
-        : this(sessionStore, fileActionService, resultExportService, detectFileAsync, null, null, null)
+        : this(sessionStore, fileActionService, resultExportService, (detectFileAsync, null))
+    {
+    }
+
+    public AnalysisResultsViewModel(
+        AnalysisSessionStore sessionStore,
+        IFileActionService? fileActionService,
+        IResultExportService? resultExportService,
+        Func<string, CancellationToken, ValueTask<DetectedFileType?>> detectFileAsync,
+        IFileFormatProbe? fileFormatProbe)
+        : this(sessionStore, fileActionService, resultExportService, (detectFileAsync, fileFormatProbe))
     {
     }
 
@@ -62,8 +72,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
             sessionStore,
             fileActionService,
             resultExportService,
-            FileSignatureDetector.DetectFileAsync,
-            null,
+            (FileSignatureDetector.DetectFileAsync, null),
             analysisService,
             mediaPreviewLoader)
     {
@@ -80,8 +89,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
             sessionStore,
             fileActionService,
             resultExportService,
-            FileSignatureDetector.DetectFileAsync,
-            null,
+            (FileSignatureDetector.DetectFileAsync, null),
             analysisService,
             mediaPreviewLoader,
             operationCoordinator)
@@ -92,8 +100,8 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         AnalysisSessionStore sessionStore,
         IFileActionService? fileActionService,
         IResultExportService? resultExportService,
-        Func<string, CancellationToken, ValueTask<DetectedFileType?>> detectFileAsync,
-        IFileFormatProbe? fileFormatProbe,
+        (Func<string, CancellationToken, ValueTask<DetectedFileType?>> DetectFileAsync,
+            IFileFormatProbe? FileFormatProbe) fileDetection,
         IAnalysisService? analysisService = null,
         IMediaPreviewLoader? mediaPreviewLoader = null,
         IAppOperationCoordinator? operationCoordinator = null)
@@ -101,8 +109,8 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         _sessionStore = sessionStore;
         _fileActionService = fileActionService;
         _resultExportService = resultExportService;
-        _detectFileAsync = detectFileAsync;
-        _fileFormatProbe = fileFormatProbe;
+        _detectFileAsync = fileDetection.DetectFileAsync;
+        _fileFormatProbe = fileDetection.FileFormatProbe;
         _analysisService = analysisService;
         _mediaPreviewLoader = mediaPreviewLoader;
         _operationCoordinator = operationCoordinator ?? new AppOperationCoordinator();
@@ -212,10 +220,10 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         ? "Run an analysis to see results."
         : $"{_allFindings.Count:N0} findings, {_allGroups.Count:N0} similarity groups";
 
-    public int SelectedItemCount => SelectedFindings.Count + SelectedSimilarityItems.Count;
+    public int SelectedItemCount => GetSelectedFindings().Count + GetSelectedSimilarityItems().Count;
 
-    public long SelectedBytes => SelectedFindings.Sum(static item => item.SizeBytes) +
-        SelectedSimilarityItems.Sum(static item => item.SizeBytes);
+    public long SelectedBytes => GetSelectedFindings().Sum(static item => item.SizeBytes) +
+        GetSelectedSimilarityItems().Sum(static item => item.SizeBytes);
 
     public bool CanActOnSelection =>
         !IsActionRunning &&
@@ -227,11 +235,11 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         !IsActionRunning &&
         _operationCoordinator.ActiveOperation is null &&
         SupportsRenameDialog(_sessionStore.CurrentSession) &&
-        SelectedFindings.Count == 1 &&
-        SelectedSimilarityItems.Count == 0;
+        GetSelectedFindings().Count == 1 &&
+        GetSelectedSimilarityItems().Count == 0;
 
     public PathFindingViewModel? RenameSelection => CanRenameSelection
-        ? SelectedFindings[0]
+        ? GetSelectedFindings()[0]
         : null;
 
     public bool CanExport => !IsActionRunning && _operationCoordinator.ActiveOperation is null;
@@ -258,10 +266,10 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         return true;
     }
 
-    public IReadOnlyList<PathFindingViewModel> SelectedFindings =>
+    public IReadOnlyList<PathFindingViewModel> GetSelectedFindings() =>
         _allFindings.Where(static item => item.IsSelected).ToArray();
 
-    public IReadOnlyList<SimilarityItemViewModel> SelectedSimilarityItems =>
+    public IReadOnlyList<SimilarityItemViewModel> GetSelectedSimilarityItems() =>
         _allGroups.SelectMany(static group => group.Items).Where(static item => item.IsSelected).ToArray();
 
     public Visibility SimilarityPreviewVisibility => SimilarityPreview is null
@@ -338,6 +346,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
     private void TogglePreviewPane() => IsPreviewPaneOpen = !IsPreviewPaneOpen;
 
     [RelayCommand(AllowConcurrentExecutions = true)]
+    [SuppressMessage("Sonar", "S6966", Justification = "Old preview cancellation and disposal must complete before reserving the new generation and the first await.")]
     private async Task SelectSimilarityPreviewItemAsync(SimilarityItemViewModel? item)
     {
         AnalysisSession? session = _sessionStore.CurrentSession;
@@ -402,6 +411,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
         {
+            // A newer preview or session owns the visible state.
         }
         catch (Exception ex) when (IsExpectedSimilarityProviderFailure(ex))
         {
@@ -658,7 +668,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
 
     private SimilarityActionSnapshot CreateSimilarityActionSnapshot(AnalysisSession initiatingSession)
     {
-        SimilarityItemViewModel[] selectedItems = SelectedSimilarityItems.ToArray();
+        SimilarityItemViewModel[] selectedItems = GetSelectedSimilarityItems().ToArray();
         if (selectedItems.Length == 0)
         {
             throw new InvalidOperationException("Select at least one result first.");
@@ -680,76 +690,95 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         var failures = new List<FileActionFailure>();
         foreach (SimilarityItemViewModel item in snapshot.SelectedItems)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!IsCurrentSimilarityItem(snapshot.Session, item) ||
-                !TryReadSimilaritySnapshot(item.FullPath, out SimilarityFileSnapshot before) ||
-                !MatchesSimilaritySnapshot(item, before))
+            (FileActionTarget? target, FileActionFailure? failure) = await ValidateSimilarityItemAsync(
+                snapshot, item, analysisService, cancellationToken);
+            if (target is not null)
             {
-                failures.Add(ChangedFailure(item.FullPath));
-                continue;
+                targets.Add(target);
             }
-
-            bool matches = false;
-            Exception? providerFailure = null;
-            try
+            else
             {
-                matches = await analysisService.RevalidateSimilarityItemAsync(
-                    snapshot.Session.Tool,
-                    item.Source,
-                    cancellationToken);
+                failures.Add(failure!);
             }
-            catch (MissingRequiredMusicMetadataException ex)
-                when (snapshot.Session.Tool == ToolKind.MusicDuplicates)
-            {
-                providerFailure = ex;
-            }
-            catch (Exception ex) when (IsExpectedSimilarityProviderFailure(ex))
-            {
-                providerFailure = ex;
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-            bool current = IsCurrentSimilarityItem(snapshot.Session, item);
-            bool unchanged = TryReadSimilaritySnapshot(item.FullPath, out SimilarityFileSnapshot after) &&
-                after == before &&
-                MatchesSimilaritySnapshot(item, after);
-            if (!current || !unchanged)
-            {
-                failures.Add(ChangedFailure(item.FullPath));
-                continue;
-            }
-
-            if (providerFailure is not null)
-            {
-                string reason = providerFailure is MissingRequiredMusicMetadataException
-                    ? "Required music metadata is missing."
-                    : snapshot.Session.Tool switch
-                    {
-                        ToolKind.SimilarVideos => "Could not decode video.",
-                        ToolKind.MusicDuplicates => "Could not read music metadata.",
-                        _ => "Could not decode image.",
-                    };
-                failures.Add(new FileActionFailure(item.FullPath, reason));
-                continue;
-            }
-
-            if (!matches)
-            {
-                failures.Add(ChangedFailure(item.FullPath));
-                continue;
-            }
-
-            targets.Add(new FileActionTarget(
-                item.FullPath,
-                item.SizeBytes,
-                FileActionTargetKind.File,
-                ExpectedModifiedUtc: item.ModifiedUtc));
         }
 
         cancellationToken.ThrowIfCancellationRequested();
         return RejectSimilarityTargetsAfterSessionChange(
             snapshot,
             new SelectionTargets(targets, failures, snapshot.SelectedItems.Count));
+    }
+
+    private async Task<(FileActionTarget? Target, FileActionFailure? Failure)> ValidateSimilarityItemAsync(
+        SimilarityActionSnapshot snapshot,
+        SimilarityItemViewModel item,
+        IAnalysisService analysisService,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!IsCurrentSimilarityItem(snapshot.Session, item) ||
+            !TryReadSimilaritySnapshot(item.FullPath, out SimilarityFileSnapshot before) ||
+            !MatchesSimilaritySnapshot(item, before))
+        {
+            return (null, ChangedFailure(item.FullPath));
+        }
+
+        bool matches = false;
+        Exception? providerFailure = null;
+        try
+        {
+            matches = await analysisService.RevalidateSimilarityItemAsync(
+                snapshot.Session.Tool,
+                item.Source,
+                cancellationToken);
+        }
+        catch (MissingRequiredMusicMetadataException ex)
+            when (snapshot.Session.Tool == ToolKind.MusicDuplicates)
+        {
+            providerFailure = ex;
+        }
+        catch (Exception ex) when (IsExpectedSimilarityProviderFailure(ex))
+        {
+            providerFailure = ex;
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        bool current = IsCurrentSimilarityItem(snapshot.Session, item);
+        bool unchanged = TryReadSimilaritySnapshot(item.FullPath, out SimilarityFileSnapshot after) &&
+            after == before &&
+            MatchesSimilaritySnapshot(item, after);
+        if (!current || !unchanged)
+        {
+            return (null, ChangedFailure(item.FullPath));
+        }
+
+        if (providerFailure is not null)
+        {
+            return (null, new FileActionFailure(
+                item.FullPath, SimilarityProviderFailureReason(snapshot.Session.Tool, providerFailure)));
+        }
+
+        if (!matches)
+        {
+            return (null, ChangedFailure(item.FullPath));
+        }
+
+        return (new FileActionTarget(
+            item.FullPath,
+            item.SizeBytes,
+            FileActionTargetKind.File,
+            ExpectedModifiedUtc: item.ModifiedUtc), null);
+    }
+
+    private static string SimilarityProviderFailureReason(ToolKind tool, Exception providerFailure)
+    {
+        return providerFailure is MissingRequiredMusicMetadataException
+            ? "Required music metadata is missing."
+            : tool switch
+            {
+                ToolKind.SimilarVideos => "Could not decode video.",
+                ToolKind.MusicDuplicates => "Could not read music metadata.",
+                _ => "Could not decode image.",
+            };
     }
 
     private SelectionTargets RejectSimilarityTargetsAfterSessionChange(
@@ -838,7 +867,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
             return new FileOperationResult(finding.FullPath, null, failure);
         }
 
-        FileOperationResult result = await fileActions.RenameAsync(target!, newName, cancellationToken);
+        FileOperationResult result = await fileActions.RenameAsync(target, newName, cancellationToken);
         if (result.Succeeded &&
             ReferenceEquals(_sessionStore.CurrentSession, initiatingSession) &&
             _allFindings.Contains(finding))
@@ -921,7 +950,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         bool overwriteExisting = false) => RunCoordinatedActionAsync(
             async token =>
             {
-                await ExportCoreAsync(format, destinationPath, token, overwriteExisting);
+                await ExportCoreAsync(format, destinationPath, overwriteExisting, token);
                 return true;
             },
             cancellationToken);
@@ -929,8 +958,8 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
     private Task ExportCoreAsync(
         ResultExportFormat format,
         string destinationPath,
-        CancellationToken cancellationToken,
-        bool overwriteExisting)
+        bool overwriteExisting,
+        CancellationToken cancellationToken)
     {
         IResultExportService exporter = _resultExportService ??
             throw new InvalidOperationException("Result export is not configured.");
@@ -996,7 +1025,6 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
             throw new InvalidOperationException("Another operation is already running.");
         }
 
-        _actionCancellation = actionCancellation;
         IsActionRunning = true;
         AnalysisSession? initiatingSession = _sessionStore.CurrentSession;
         try
@@ -1015,7 +1043,6 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         finally
         {
             IsActionRunning = false;
-            _actionCancellation = null;
             lease!.Dispose();
         }
     }
@@ -1158,8 +1185,6 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
     {
         OnPropertyChanged(nameof(SelectedItemCount));
         OnPropertyChanged(nameof(SelectedBytes));
-        OnPropertyChanged(nameof(SelectedFindings));
-        OnPropertyChanged(nameof(SelectedSimilarityItems));
         OnPropertyChanged(nameof(CanActOnSelection));
         OnPropertyChanged(nameof(CanRenameSelection));
         OnPropertyChanged(nameof(RenameSelection));
@@ -1248,11 +1273,14 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         int failed = results.Length - succeeded;
         if (isCurrentSession)
         {
-            ActionStatusMessage = wasCancelled
-                ? $"Move cancelled after {succeeded:N0} {(succeeded == 1 ? "item" : "items")} moved."
-                : failed == 0
-                    ? succeeded == 1 ? "1 item moved." : $"{succeeded:N0} items moved."
-                    : $"{succeeded:N0} items moved, {failed:N0} could not be moved.";
+            ActionStatusMessage = (wasCancelled, failed, succeeded) switch
+            {
+                (true, _, 1) => "Move cancelled after 1 item moved.",
+                (true, _, _) => $"Move cancelled after {succeeded:N0} items moved.",
+                (false, 0, 1) => "1 item moved.",
+                (false, 0, _) => $"{succeeded:N0} items moved.",
+                _ => $"{succeeded:N0} items moved, {failed:N0} could not be moved.",
+            };
         }
         return new FileOperationSummary(results, serviceSummary.SucceededBytes);
     }
@@ -1284,14 +1312,14 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         }
         if (isCurrentSession)
         {
-            ActionStatusMessage = wasCancelled
-                ? $"Delete cancelled after {serviceSummary.DeletedCount:N0} " +
-                    (serviceSummary.DeletedCount == 1 ? "item deleted." : "items deleted.")
-                : failures.Length == 0
-                    ? serviceSummary.DeletedCount == 1
-                        ? "1 item deleted."
-                        : $"{serviceSummary.DeletedCount:N0} items deleted."
-                    : $"{serviceSummary.DeletedCount:N0} items deleted, {failures.Length:N0} could not be deleted.";
+            ActionStatusMessage = (wasCancelled, failures.Length, serviceSummary.DeletedCount) switch
+            {
+                (true, _, 1) => "Delete cancelled after 1 item deleted.",
+                (true, _, _) => $"Delete cancelled after {serviceSummary.DeletedCount:N0} items deleted.",
+                (false, 0, 1) => "1 item deleted.",
+                (false, 0, _) => $"{serviceSummary.DeletedCount:N0} items deleted.",
+                _ => $"{serviceSummary.DeletedCount:N0} items deleted, {failures.Length:N0} could not be deleted.",
+            };
         }
         return new DeleteSummary(
             serviceSummary.DeletedCount,
@@ -1309,7 +1337,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
             return BuildValidatedSelection();
         }
 
-        IReadOnlyList<PathFindingViewModel> selectedFindings = SelectedFindings;
+        IReadOnlyList<PathFindingViewModel> selectedFindings = GetSelectedFindings();
         var targets = new List<FileActionTarget>(selectedFindings.Count);
         var failures = new List<FileActionFailure>();
         foreach (PathFindingViewModel finding in selectedFindings)
@@ -1354,8 +1382,8 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
     {
         var targets = new List<FileActionTarget>();
         var failures = new List<FileActionFailure>();
-        int selectedCount = SelectedFindings.Count + SelectedSimilarityItems.Count;
-        IEnumerable<PathFindingViewModel> selectedFindings = SelectedFindings;
+        int selectedCount = GetSelectedFindings().Count + GetSelectedSimilarityItems().Count;
+        IEnumerable<PathFindingViewModel> selectedFindings = GetSelectedFindings();
         if (_sessionStore.CurrentSession?.Tool == ToolKind.EmptyFolders)
         {
             selectedFindings = selectedFindings
@@ -1376,7 +1404,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
             }
         }
 
-        foreach (SimilarityItemViewModel item in SelectedSimilarityItems)
+        foreach (SimilarityItemViewModel item in GetSelectedSimilarityItems())
         {
             if (TryMapSimilarityItem(item, out FileActionTarget? target, out FileActionFailure? failure))
             {
@@ -1560,7 +1588,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
             FileActionTargetKind kind = ReadTargetKind(finding.FullPath);
             long sizeBytes = kind == FileActionTargetKind.File ? new FileInfo(finding.FullPath).Length : 0;
             if (!FindingKindMatches(finding.Source.Kind, kind) ||
-                !FindingPredicateStillMatches(finding, kind, sizeBytes))
+                !FindingPredicateStillMatches(kind, sizeBytes))
             {
                 failure = ChangedFailure(finding.FullPath);
                 return false;
@@ -1608,7 +1636,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
 
     private static bool TryMapTemporaryFile(
         PathFindingViewModel finding,
-        ToolOptions toolOptions,
+        IToolOptions toolOptions,
         out FileActionTarget? target,
         out FileActionFailure? failure)
     {
@@ -1638,6 +1666,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
             long sizeBytes = file.Length;
             using (new FileStream(finding.FullPath, FileMode.Open, FileAccess.Write, FileShare.None))
             {
+                // Opening exclusively verifies that the temporary file is writable and unused.
             }
 
             target = new FileActionTarget(finding.FullPath, sizeBytes, FileActionTargetKind.File,
@@ -1872,7 +1901,6 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
     }
 
     private bool FindingPredicateStillMatches(
-        PathFindingViewModel finding,
         FileActionTargetKind kind,
         long currentSizeBytes)
     {
@@ -1888,7 +1916,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
     }
 
     private void RebuildSimilarityGroups(
-        IReadOnlySet<string> successfulPaths,
+        HashSet<string> successfulPaths,
         SimilarityActionSnapshot snapshot)
     {
         if (!ReferenceEquals(_sessionStore.CurrentSession, snapshot.Session) || successfulPaths.Count == 0)
@@ -1949,7 +1977,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         NotifyResultStateChanged();
     }
 
-    private void RemoveSuccessfulPaths(IReadOnlySet<string> successfulPaths)
+    private void RemoveSuccessfulPaths(HashSet<string> successfulPaths)
     {
         if (successfulPaths.Count == 0)
         {
@@ -2109,7 +2137,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         SimilarityPreviewStatusText = string.Empty;
     }
 
-    private static IReadOnlyDictionary<string, string> MergeMetadata(
+    private static Dictionary<string, string> MergeMetadata(
         IReadOnlyDictionary<string, string> groupMetadata,
         IReadOnlyDictionary<string, string> itemMetadata)
     {

@@ -183,7 +183,7 @@ public sealed class SettingsServiceTests
         {
             var service = new SettingsService(
                 Path.Combine(directory, "settings.json"),
-                async (_, _, _) => await Task.Delay(10).ConfigureAwait(false));
+                async (_, _, _) => await Task.Delay(10, CancellationToken.None).ConfigureAwait(false));
             var context = new PumpSynchronizationContext();
             SynchronizationContext? eventContext = null;
             service.SettingsChanged += (_, _) => eventContext = SynchronizationContext.Current;

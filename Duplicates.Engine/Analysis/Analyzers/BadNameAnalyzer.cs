@@ -9,7 +9,7 @@ public sealed record BadNameFinding(
     string SuggestedName,
     IReadOnlyList<string> Reasons);
 
-public sealed class BadNameAnalyzer
+public static class BadNameAnalyzer
 {
     private static readonly HashSet<char> InvalidFileNameCharacters =
         Path.GetInvalidFileNameChars().ToHashSet();
@@ -22,7 +22,7 @@ public sealed class BadNameAnalyzer
         ],
         StringComparer.OrdinalIgnoreCase);
 
-    public Task<AnalysisResult> AnalyzeAsync(
+    public static Task<AnalysisResult> AnalyzeAsync(
         FileInventory inventory,
         CancellationToken cancellationToken)
     {
@@ -163,25 +163,28 @@ public sealed class BadNameAnalyzer
     {
         var builder = new StringBuilder(name.Length);
         int runStart = 0;
-        for (int index = 0; index < name.Length; index++)
+        int index = 0;
+        while (index < name.Length)
         {
             char current = name[index];
             if (char.IsHighSurrogate(current) &&
                 index + 1 < name.Length &&
                 char.IsLowSurrogate(name[index + 1]))
             {
-                index++;
+                index += 2;
                 continue;
             }
 
             if (!char.IsSurrogate(current))
             {
+                index++;
                 continue;
             }
 
             AppendNormalizedRun(builder, name, runStart, index - runStart);
             builder.Append(current);
             runStart = index + 1;
+            index++;
         }
 
         if (runStart == 0)
@@ -208,7 +211,8 @@ public sealed class BadNameAnalyzer
     private static List<NameSegment> CreateSafeSegments(string name)
     {
         var segments = new List<NameSegment>(name.Length);
-        for (int index = 0; index < name.Length; index++)
+        int index = 0;
+        while (index < name.Length)
         {
             int length = char.IsHighSurrogate(name[index]) &&
                 index + 1 < name.Length &&
@@ -219,7 +223,7 @@ public sealed class BadNameAnalyzer
             string inspected = length == 1 && char.IsSurrogate(original[0])
                 ? original
                 : original.Normalize(NormalizationForm.FormKC);
-            index += length - 1;
+            index += length;
 
             if (inspected.Any(IsControlCharacter) || inspected.Any(IsBidirectionalControlCharacter))
             {
@@ -231,6 +235,13 @@ public sealed class BadNameAnalyzer
                 : new NameSegment(original, inspected));
         }
 
+        TrimLeadingWhitespace(segments);
+        TrimTrailingWhitespaceAndDots(segments);
+        return segments;
+    }
+
+    private static void TrimLeadingWhitespace(List<NameSegment> segments)
+    {
         while (segments.Count > 0)
         {
             NameSegment segment = segments[0];
@@ -256,7 +267,10 @@ public sealed class BadNameAnalyzer
             segments[0] = new NameSegment(safeRemainder, safeRemainder);
             break;
         }
+    }
 
+    private static void TrimTrailingWhitespaceAndDots(List<NameSegment> segments)
+    {
         while (segments.Count > 0)
         {
             NameSegment segment = segments[^1];
@@ -283,8 +297,6 @@ public sealed class BadNameAnalyzer
             segments[^1] = new NameSegment(safePrefix, safePrefix);
             break;
         }
-
-        return segments;
     }
 
     private static string BuildSuggestion(List<NameSegment> safeSegments)

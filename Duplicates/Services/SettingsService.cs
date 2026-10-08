@@ -167,7 +167,7 @@ public sealed class SettingsService : ISettingsService
         MaxHashingConcurrency = settings.MaxHashingConcurrency is 1 or 2 or 4 or 8
             ? settings.MaxHashingConcurrency
             : null,
-        DeletionMode = Enum.IsDefined(settings.DeletionMode) ? settings.DeletionMode : DeletionMode.RecycleBin,
+        DeletionMode = Enum.IsDefined(settings.DeletionMode) ? settings.DeletionMode : DeletionMode.RecycleBin
     };
 
     private static bool IsSettingsFailure(Exception exception) =>

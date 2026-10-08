@@ -2,9 +2,9 @@ using Duplicates.Engine.Models;
 
 namespace Duplicates.Engine.FileEnumeration;
 
-internal sealed class FileWalker
+internal static class FileWalker
 {
-    public FileWalkResult Walk(ScanOptions options, ScanProgressReporter progress, CancellationToken cancellationToken)
+    public static FileWalkResult Walk(ScanOptions options, ScanProgressReporter progress, CancellationToken cancellationToken)
     {
         var files = new List<FileEntry>();
         var skipped = new List<SkippedPath>();
@@ -175,7 +175,7 @@ internal sealed class FileWalker
         }
     }
 
-    private static IReadOnlyList<ExcludedPath> BuildExcludedPaths(IReadOnlyList<string> paths)
+    private static List<ExcludedPath> BuildExcludedPaths(IReadOnlyList<string> paths)
     {
         var excludedPaths = new List<ExcludedPath>();
 
@@ -193,6 +193,7 @@ internal sealed class FileWalker
             }
             catch (Exception ex) when (IsSkippable(ex))
             {
+                // An invalid exclusion cannot match a canonical file path.
             }
         }
 

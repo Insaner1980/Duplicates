@@ -18,7 +18,7 @@ using Xunit.Sdk;
 
 namespace Duplicates.App.Tests;
 
-public sealed class WindowsMediaProviderTests : IDisposable
+public sealed partial class WindowsMediaProviderTests : IDisposable
 {
     private static readonly TimeSpan FileSystemActionTimeout = TimeSpan.FromSeconds(15);
 

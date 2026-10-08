@@ -6,7 +6,7 @@ using Xunit.Sdk;
 
 namespace Duplicates.Engine.Tests;
 
-public sealed class FileInventoryBuilderTests : IDisposable
+public sealed partial class FileInventoryBuilderTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), "Duplicates.Engine.Tests", Guid.NewGuid().ToString("N"));
 
@@ -223,7 +223,7 @@ public sealed class FileInventoryBuilderTests : IDisposable
         WriteFile("file.txt", "content");
         var reports = new List<AnalysisProgress>();
 
-        FileInventory inventory = new FileInventoryBuilder().Build(
+        FileInventory inventory = FileInventoryBuilder.Build(
             new AnalysisScope { IncludedFolders = [_root] },
             new CapturingProgress<AnalysisProgress>(reports.Add),
             CancellationToken.None);
@@ -235,9 +235,9 @@ public sealed class FileInventoryBuilderTests : IDisposable
         Assert.Equal(1, reports[^1].ItemsProcessed);
     }
 
-    private FileInventory Build(AnalysisScope scope, CancellationToken cancellationToken = default)
+    private static FileInventory Build(AnalysisScope scope, CancellationToken cancellationToken = default)
     {
-        return new FileInventoryBuilder().Build(scope, progress: null, cancellationToken);
+        return FileInventoryBuilder.Build(scope, progress: null, cancellationToken);
     }
 
     private string WriteFile(string relativePath, string contents)
@@ -271,16 +271,23 @@ public sealed class FileInventoryBuilderTests : IDisposable
         return CreateFileW(path, genericRead, 0, IntPtr.Zero, openExisting, fileFlagBackupSemantics, IntPtr.Zero);
     }
 
-    private sealed class CapturingProgress<T>(Action<T> report) : IProgress<T>
+    private sealed class CapturingProgress<T> : IProgress<T>
     {
+        private readonly Action<T> _report;
+
+        public CapturingProgress(Action<T> report)
+        {
+            _report = report;
+        }
+
         public void Report(T value)
         {
-            report(value);
+            _report(value);
         }
     }
 
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern SafeFileHandle CreateFileW(
+    [LibraryImport("kernel32.dll", StringMarshalling = StringMarshalling.Utf16, SetLastError = true)]
+    private static partial SafeFileHandle CreateFileW(
         string fileName,
         uint desiredAccess,
         uint shareMode,

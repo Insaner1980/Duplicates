@@ -244,8 +244,8 @@ public sealed class CrossToolStateTests
         Assert.Equal(1, viewModel.SelectedSortIndex);
         Assert.Same(preview, viewModel.SelectedFile);
         Assert.Equal(2, viewModel.SelectedFileCount);
-        Assert.Contains(viewModel.SelectedFiles, file => ReferenceEquals(file, failed));
-        Assert.Contains(viewModel.SelectedFiles, file => ReferenceEquals(file, unattempted));
+        Assert.Contains(viewModel.GetSelectedFiles(), file => ReferenceEquals(file, failed));
+        Assert.Contains(viewModel.GetSelectedFiles(), file => ReferenceEquals(file, unattempted));
         viewModel.SearchText = string.Empty;
         Assert.DoesNotContain(viewModel.Groups.SelectMany(static group => group.Files), file => file.FullPath == success.FullPath);
         Assert.Contains(viewModel.Groups.SelectMany(static group => group.Files), file => ReferenceEquals(file, preview));
@@ -263,8 +263,8 @@ public sealed class CrossToolStateTests
             "failed.bin",
             "old-survivor.bin")));
         ExactResultsSession initiatingSession = store.CurrentSession!;
-        DuplicateFileViewModel successful = viewModel.SelectedFiles.Single(file => file.FileName == "delete.bin");
-        DuplicateFileViewModel failed = viewModel.SelectedFiles.Single(file => file.FileName == "failed.bin");
+        DuplicateFileViewModel successful = viewModel.GetSelectedFiles().Single(file => file.FileName == "delete.bin");
+        DuplicateFileViewModel failed = viewModel.GetSelectedFiles().Single(file => file.FileName == "failed.bin");
         var dispatched = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource<DeleteSummary>(TaskCreationOptions.RunContinuationsAsynchronously);
         IProgress<DeleteProgress>? progress = null;
@@ -315,8 +315,8 @@ public sealed class CrossToolStateTests
             "failed.bin",
             "old-survivor.bin")));
         ExactResultsSession initiatingSession = store.CurrentSession!;
-        DuplicateFileViewModel successful = viewModel.SelectedFiles.Single(file => file.FileName == "move.bin");
-        DuplicateFileViewModel failed = viewModel.SelectedFiles.Single(file => file.FileName == "failed.bin");
+        DuplicateFileViewModel successful = viewModel.GetSelectedFiles().Single(file => file.FileName == "move.bin");
+        DuplicateFileViewModel failed = viewModel.GetSelectedFiles().Single(file => file.FileName == "failed.bin");
         var dispatched = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource<FileOperationSummary>(TaskCreationOptions.RunContinuationsAsynchronously);
         actions.MoveHandler = (_, _, _, _) =>
@@ -342,7 +342,7 @@ public sealed class CrossToolStateTests
             new FileOperationResult(
                 failed.FullPath,
                 null,
-                new FileActionFailure(failed.FullPath, "Access denied")),
+                new FileActionFailure(failed.FullPath, "Access denied"))
         ], successful.SizeBytes));
 
         await moving;
@@ -382,7 +382,7 @@ public sealed class CrossToolStateTests
                 NewAnalysisResult(findings:
                 [
                     NewFinding(successfulPath, 0),
-                    NewFinding(failedPath, 0),
+                    NewFinding(failedPath, 0)
                 ]));
             AnalysisSession initiatingSession = store.CurrentSession!;
             foreach (PathFindingViewModel finding in viewModel.Findings)
@@ -406,7 +406,7 @@ public sealed class CrossToolStateTests
                 NewAnalysisResult(findings:
                 [
                     NewFinding(successfulPath, 0),
-                    NewFinding(failedPath, 0),
+                    NewFinding(failedPath, 0)
                 ]));
             AnalysisSession replacementSession = store.CurrentSession!;
             release.SetResult(new DeleteSummary(
@@ -453,7 +453,7 @@ public sealed class CrossToolStateTests
                 NewAnalysisResult(findings:
                 [
                     NewFinding(successfulPath, 0),
-                    NewFinding(failedPath, 0),
+                    NewFinding(failedPath, 0)
                 ]));
             AnalysisSession initiatingSession = store.CurrentSession!;
             foreach (PathFindingViewModel finding in viewModel.Findings)
@@ -481,7 +481,7 @@ public sealed class CrossToolStateTests
                 NewAnalysisResult(findings:
                 [
                     NewFinding(successfulPath, 0),
-                    NewFinding(failedPath, 0),
+                    NewFinding(failedPath, 0)
                 ]));
             AnalysisSession replacementSession = store.CurrentSession!;
             release.SetResult(new FileOperationSummary(
@@ -490,7 +490,7 @@ public sealed class CrossToolStateTests
                 new FileOperationResult(
                     failedPath,
                     null,
-                    new FileActionFailure(failedPath, "Access denied")),
+                    new FileActionFailure(failedPath, "Access denied"))
             ], 0));
 
             await moving;
@@ -660,7 +660,7 @@ public sealed class CrossToolStateTests
                         NewFinding(successPath, 10),
                         NewFinding(failedPath, 20),
                         NewFinding(previewPath, 30),
-                        NewFinding(unattemptedPath, 40),
+                        NewFinding(unattemptedPath, 40)
                     ],
                     Groups = [],
                     SkippedPaths = [],
@@ -699,8 +699,8 @@ public sealed class CrossToolStateTests
             Assert.Same(preview, viewModel.SelectedResult);
             Assert.Equal(2, viewModel.SelectedItemCount);
             Assert.Equal(60, viewModel.SelectedBytes);
-            Assert.Contains(viewModel.SelectedFindings, item => ReferenceEquals(item, failed));
-            Assert.Contains(viewModel.SelectedFindings, item => ReferenceEquals(item, unattempted));
+            Assert.Contains(viewModel.GetSelectedFindings(), item => ReferenceEquals(item, failed));
+            Assert.Contains(viewModel.GetSelectedFindings(), item => ReferenceEquals(item, unattempted));
             viewModel.SearchText = string.Empty;
             Assert.DoesNotContain(viewModel.Findings, item => item.FullPath == successPath);
             Assert.Contains(viewModel.Findings, item => ReferenceEquals(item, preview));
@@ -757,7 +757,7 @@ public sealed class CrossToolStateTests
                     groups:
                     [
                         NewVideoGroup(first, articulation, tail),
-                        NewVideoGroup(otherReference, failed),
+                        NewVideoGroup(otherReference, failed)
                     ],
                     skippedPaths: [skip]));
             SimilarityGroupViewModel firstGroup = viewModel.Groups.Single(group =>
@@ -875,7 +875,7 @@ public sealed class CrossToolStateTests
         };
 
     private static SimilarityGroup NewVideoGroup(params SimilarityItem[] items) => Assert.Single(
-        new SimilarVideoAnalyzer(new FakeVideoSampleProvider()).Regroup(
+        SimilarVideoAnalyzer.Regroup(
             items,
             new SimilarVideoOptions(9)));
 
@@ -921,7 +921,7 @@ public sealed class CrossToolStateTests
         public Task<AnalysisResult> RunAsync(
             ToolKind tool,
             AnalysisScope scope,
-            ToolOptions toolOptions,
+            IToolOptions toolOptions,
             IProgress<AnalysisProgress>? progress,
             CancellationToken cancellationToken) => throw new NotSupportedException();
 
@@ -936,12 +936,12 @@ public sealed class CrossToolStateTests
 
         public IReadOnlyList<SimilarityGroup> RegroupSimilarityItems(
             ToolKind tool,
-            ToolOptions options,
+            IToolOptions options,
             IReadOnlyList<SimilarityItem> items)
         {
             Assert.Equal(ToolKind.SimilarVideos, tool);
             var videoOptions = Assert.IsType<SimilarVideoToolOptions>(options);
-            return new SimilarVideoAnalyzer(new FakeVideoSampleProvider()).Regroup(
+            return SimilarVideoAnalyzer.Regroup(
                 items,
                 new SimilarVideoOptions(videoOptions.MaximumMeanFrameDistance));
         }

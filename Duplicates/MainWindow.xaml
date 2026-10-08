@@ -73,7 +73,7 @@
                 </NavigationViewItem>
                 <NavigationViewItem Content="Big files" Tag="BigFiles">
                     <NavigationViewItem.Icon>
-                        <FontIcon Glyph="&#xE8A5;" />
+                        <FontIcon Glyph="&#xE9F9;" />
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
                 <NavigationViewItem Content="Empty files" Tag="EmptyFiles">
@@ -115,7 +115,7 @@
                 </NavigationViewItem>
                 <NavigationViewItem Content="Video optimizer" Tag="VideoOptimizer">
                     <NavigationViewItem.Icon>
-                        <FontIcon Glyph="&#xE74D;" />
+                        <FontIcon Glyph="&#xE8B2;" />
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
             </NavigationView.MenuItems>

@@ -3,9 +3,9 @@ using System.Globalization;
 
 namespace Duplicates.Engine.Analysis.Analyzers;
 
-public sealed class LargeFileAnalyzer
+public static class LargeFileAnalyzer
 {
-    public Task<AnalysisResult> AnalyzeAsync(
+    public static Task<AnalysisResult> AnalyzeAsync(
         FileInventory inventory,
         long minimumSizeBytes,
         CancellationToken cancellationToken)

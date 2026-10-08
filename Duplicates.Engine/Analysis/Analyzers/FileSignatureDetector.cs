@@ -63,6 +63,56 @@ namespace Duplicates.Engine.Analysis.Analyzers
         {
             _ = path;
 
+            DetectedFileType? prefixType = DetectCommonPrefix(header);
+            if (prefixType is not null)
+            {
+                return prefixType;
+            }
+
+            if (header.StartsWith("ID3"u8) || IsMpegAudioFrame(header))
+            {
+                return Mp3;
+            }
+
+            if (header.StartsWith("fLaC"u8))
+            {
+                return Flac;
+            }
+
+            if (header.StartsWith("OggS"u8))
+            {
+                return Ogg;
+            }
+
+            if (header.Length >= 12 && header.StartsWith("RIFF"u8))
+            {
+                if (header[8..].StartsWith("WEBP"u8))
+                {
+                    return WebP;
+                }
+
+                if (header[8..].StartsWith("WAVE"u8))
+                {
+                    return Wav;
+                }
+
+                if (header[8..].StartsWith("AVI "u8))
+                {
+                    return Avi;
+                }
+            }
+
+            DetectedFileType? bmff = DetectIsoBmff(header);
+            if (bmff is not null)
+            {
+                return bmff;
+            }
+
+            return DetectEbml(header);
+        }
+
+        private static DetectedFileType? DetectCommonPrefix(ReadOnlySpan<byte> header)
+        {
             if (HasPrefix(header, [0xFF, 0xD8, 0xFF]))
             {
                 return Jpeg;
@@ -112,46 +162,7 @@ namespace Duplicates.Engine.Analysis.Analyzers
                 return SevenZip;
             }
 
-            if (header.StartsWith("ID3"u8) || IsMpegAudioFrame(header))
-            {
-                return Mp3;
-            }
-
-            if (header.StartsWith("fLaC"u8))
-            {
-                return Flac;
-            }
-
-            if (header.StartsWith("OggS"u8))
-            {
-                return Ogg;
-            }
-
-            if (header.Length >= 12 && header.StartsWith("RIFF"u8))
-            {
-                if (header[8..].StartsWith("WEBP"u8))
-                {
-                    return WebP;
-                }
-
-                if (header[8..].StartsWith("WAVE"u8))
-                {
-                    return Wav;
-                }
-
-                if (header[8..].StartsWith("AVI "u8))
-                {
-                    return Avi;
-                }
-            }
-
-            DetectedFileType? bmff = DetectIsoBmff(header);
-            if (bmff is not null)
-            {
-                return bmff;
-            }
-
-            return DetectEbml(header);
+            return null;
         }
 
         public static async ValueTask<DetectedFileType?> DetectFileAsync(
@@ -196,39 +207,11 @@ namespace Duplicates.Engine.Analysis.Analyzers
 
         private static DetectedFileType? DetectIsoBmff(ReadOnlySpan<byte> header)
         {
-            if (header.Length < 16 || !header[4..].StartsWith("ftyp"u8))
+            if (!TryGetBmffBrandBounds(header, out int brandsOffset, out int end))
             {
                 return null;
             }
 
-            uint ordinarySize = BinaryPrimitives.ReadUInt32BigEndian(header);
-            int brandsOffset;
-            ulong boxSize;
-            if (ordinarySize == 1)
-            {
-                if (header.Length < 24)
-                {
-                    return null;
-                }
-
-                boxSize = BinaryPrimitives.ReadUInt64BigEndian(header[8..]);
-                brandsOffset = 16;
-                if (boxSize < 24 || boxSize > (ulong)header.Length || (boxSize - 24) % 4 != 0)
-                {
-                    return null;
-                }
-            }
-            else
-            {
-                boxSize = ordinarySize;
-                brandsOffset = 8;
-                if (boxSize < 16 || boxSize > (ulong)header.Length || (boxSize - 16) % 4 != 0)
-                {
-                    return null;
-                }
-            }
-
-            int end = checked((int)boxSize);
             bool hasMp4 = false;
             bool hasQuickTime = false;
             bool hasUnknown = false;
@@ -267,6 +250,45 @@ namespace Duplicates.Engine.Analysis.Analyzers
             return IsoBmff;
         }
 
+        private static bool TryGetBmffBrandBounds(ReadOnlySpan<byte> header, out int brandsOffset, out int end)
+        {
+            brandsOffset = 0;
+            end = 0;
+            if (header.Length < 16 || !header[4..].StartsWith("ftyp"u8))
+            {
+                return false;
+            }
+
+            uint ordinarySize = BinaryPrimitives.ReadUInt32BigEndian(header);
+            ulong boxSize;
+            if (ordinarySize == 1)
+            {
+                if (header.Length < 24)
+                {
+                    return false;
+                }
+
+                boxSize = BinaryPrimitives.ReadUInt64BigEndian(header[8..]);
+                brandsOffset = 16;
+                if (boxSize < 24 || boxSize > (ulong)header.Length || (boxSize - 24) % 4 != 0)
+                {
+                    return false;
+                }
+            }
+            else
+            {
+                boxSize = ordinarySize;
+                brandsOffset = 8;
+                if (boxSize < 16 || boxSize > (ulong)header.Length || (boxSize - 16) % 4 != 0)
+                {
+                    return false;
+                }
+            }
+
+            end = checked((int)boxSize);
+            return true;
+        }
+
         private static DetectedFileType? DetectEbml(ReadOnlySpan<byte> header)
         {
             if (!HasPrefix(header, [0x1A, 0x45, 0xDF, 0xA3]) ||
@@ -285,35 +307,19 @@ namespace Duplicates.Engine.Analysis.Analyzers
             int offset = payloadStart;
             while (offset < payloadEnd)
             {
-                if (!TryGetVintLength(header[offset..payloadEnd], out int idLength) ||
-                    offset + idLength > payloadEnd)
+                if (!TryReadEbmlElement(header[..payloadEnd], ref offset, out bool isDocType, out ReadOnlySpan<byte> value))
                 {
                     return null;
                 }
 
-                bool isDocType = idLength == 2 && header[offset] == 0x42 && header[offset + 1] == 0x82;
-                offset += idLength;
-                if (!TryReadVint(header[offset..payloadEnd], out int elementSizeLength, out ulong elementSize))
-                {
-                    return null;
-                }
-
-                offset += elementSizeLength;
-                if (elementSize > (ulong)(payloadEnd - offset))
-                {
-                    return null;
-                }
-
-                int valueLength = checked((int)elementSize);
                 if (isDocType)
                 {
-                    ReadOnlySpan<byte> docType = header.Slice(offset, valueLength);
-                    if (docType.SequenceEqual("webm"u8))
+                    if (value.SequenceEqual("webm"u8))
                     {
                         return WebM;
                     }
 
-                    if (docType.SequenceEqual("matroska"u8))
+                    if (value.SequenceEqual("matroska"u8))
                     {
                         return Matroska;
                     }
@@ -321,10 +327,40 @@ namespace Duplicates.Engine.Analysis.Analyzers
                     return Ebml;
                 }
 
-                offset += valueLength;
+                offset += value.Length;
             }
 
             return Ebml;
+        }
+
+        private static bool TryReadEbmlElement(
+            ReadOnlySpan<byte> header,
+            ref int offset,
+            out bool isDocType,
+            out ReadOnlySpan<byte> value)
+        {
+            isDocType = false;
+            value = default;
+            if (!TryGetVintLength(header[offset..], out int idLength) || offset + idLength > header.Length)
+            {
+                return false;
+            }
+
+            isDocType = idLength == 2 && header[offset] == 0x42 && header[offset + 1] == 0x82;
+            offset += idLength;
+            if (!TryReadVint(header[offset..], out int elementSizeLength, out ulong elementSize))
+            {
+                return false;
+            }
+
+            offset += elementSizeLength;
+            if (elementSize > (ulong)(header.Length - offset))
+            {
+                return false;
+            }
+
+            value = header.Slice(offset, checked((int)elementSize));
+            return true;
         }
 
         private static bool TryReadVint(

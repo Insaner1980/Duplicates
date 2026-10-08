@@ -9,7 +9,7 @@ using Microsoft.UI.Xaml;
 
 namespace Duplicates.App.Tests;
 
-public sealed class SimilarImageResultsViewModelTests : IDisposable
+public sealed partial class SimilarImageResultsViewModelTests : IDisposable
 {
     private readonly string _root = Path.Combine(
         Path.GetTempPath(),
@@ -464,7 +464,7 @@ public sealed class SimilarImageResultsViewModelTests : IDisposable
         Assert.Equal(2, viewModel.SimilarityPreview!.Bgra8[0]);
     }
 
-    private AnalysisResultsViewModel NewViewModel(
+    private static AnalysisResultsViewModel NewViewModel(
         AnalysisSessionStore store,
         IFileActionService fileActions,
         IAnalysisService analysisService,
@@ -511,7 +511,7 @@ public sealed class SimilarImageResultsViewModelTests : IDisposable
     }
 
     private static IReadOnlyList<SimilarityGroup> Regroup(IReadOnlyList<SimilarityItem> items) =>
-        new SimilarImageAnalyzer(new FakeImageSampleProvider()).Regroup(items, new SimilarImageOptions(8));
+        SimilarImageAnalyzer.Regroup(items, new SimilarImageOptions(8));
 
     private static AnalysisResult Result(
         IReadOnlyList<SimilarityGroup> groups,
@@ -537,7 +537,7 @@ public sealed class SimilarImageResultsViewModelTests : IDisposable
         public Task<AnalysisResult> RunAsync(
             ToolKind tool,
             AnalysisScope scope,
-            ToolOptions toolOptions,
+            IToolOptions toolOptions,
             IProgress<AnalysisProgress>? progress,
             CancellationToken cancellationToken) => throw new NotSupportedException();
 
@@ -552,7 +552,7 @@ public sealed class SimilarImageResultsViewModelTests : IDisposable
 
         public IReadOnlyList<SimilarityGroup> RegroupSimilarityItems(
             ToolKind tool,
-            ToolOptions options,
+            IToolOptions options,
             IReadOnlyList<SimilarityItem> items)
         {
             if (tool != ToolKind.SimilarImages || options is not SimilarImageToolOptions imageOptions)
@@ -560,7 +560,7 @@ public sealed class SimilarImageResultsViewModelTests : IDisposable
                 throw new NotSupportedException();
             }
 
-            return new SimilarImageAnalyzer(new FakeImageSampleProvider()).Regroup(
+            return SimilarImageAnalyzer.Regroup(
                 items,
                 new SimilarImageOptions(imageOptions.MaximumHammingDistance));
         }

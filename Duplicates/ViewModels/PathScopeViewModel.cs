@@ -137,7 +137,7 @@ public sealed partial class PathScopeViewModel : ObservableObject
     private static bool ContainsPath(IEnumerable<ScopePathViewModel> paths, string fullPath) =>
         paths.Any(path => string.Equals(path.FullPath, fullPath, StringComparison.OrdinalIgnoreCase));
 
-    private static void RemoveEquivalent(ICollection<ScopePathViewModel> paths, string fullPath)
+    private static void RemoveEquivalent(ObservableCollection<ScopePathViewModel> paths, string fullPath)
     {
         ScopePathViewModel? existing = paths.FirstOrDefault(
             path => string.Equals(path.FullPath, fullPath, StringComparison.OrdinalIgnoreCase));

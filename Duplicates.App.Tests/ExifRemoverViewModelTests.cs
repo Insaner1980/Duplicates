@@ -286,8 +286,7 @@ public sealed class ExifRemoverViewModelTests
         viewModel.CancelCleaningCommand.Execute(null);
         await cleaning;
 
-        Assert.Single(viewModel.Results);
-        Assert.Equal(ExifCleanOutcome.Succeeded, viewModel.Results[0].Outcome);
+        Assert.Equal(ExifCleanOutcome.Succeeded, Assert.Single(viewModel.Results).Outcome);
         Assert.Equal(2, cleaner.Requests.Count);
         Assert.Null(coordinator.ActiveOperation);
         Assert.False(viewModel.IsCleaning);
@@ -484,5 +483,32 @@ public sealed class ExifRemoverViewModelTests
         public void OpenFile(string path) => OpenedPaths.Add(path);
 
         public void RevealInExplorer(string path) => RevealedPaths.Add(path);
+    }
+
+    [Fact]
+    public void ProgressAndResultsSectionsAreHiddenUntilTheyHaveContent()
+    {
+        ExifRemoverViewModel viewModel = CreateViewModel();
+        var changed = new List<string?>();
+        viewModel.PropertyChanged += (_, args) => changed.Add(args.PropertyName);
+
+        Assert.Equal(Visibility.Collapsed, viewModel.ProgressVisibility);
+        Assert.Equal(Visibility.Collapsed, viewModel.ResultsVisibility);
+
+        viewModel.IsCleaning = true;
+        viewModel.Results.Add(new ExifCleanResultViewModel(new ExifCleanResult(
+            ExifCleanOutcome.Succeeded,
+            @"C:\Photos\a.jpg",
+            null,
+            "Cleaned.",
+            [])));
+
+        Assert.Equal(Visibility.Visible, viewModel.ProgressVisibility);
+        Assert.Equal(Visibility.Visible, viewModel.ResultsVisibility);
+        Assert.Contains(nameof(ExifRemoverViewModel.ProgressVisibility), changed);
+        Assert.Contains(nameof(ExifRemoverViewModel.ResultsVisibility), changed);
+
+        viewModel.Results.Clear();
+        Assert.Equal(Visibility.Collapsed, viewModel.ResultsVisibility);
     }
 }

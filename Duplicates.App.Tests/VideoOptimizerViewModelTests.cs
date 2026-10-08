@@ -5,7 +5,7 @@ using Duplicates.ViewModels;
 
 namespace Duplicates.App.Tests;
 
-public sealed class VideoOptimizerViewModelTests
+public sealed partial class VideoOptimizerViewModelTests
 {
     [Fact]
     public void Defaults_ReuseSharedScopeAndUseBalancedHardwareOnKeepOff()
@@ -136,7 +136,7 @@ public sealed class VideoOptimizerViewModelTests
             [
                 "C:\\Media\\clip.optimized.mp4",
                 "C:\\Media\\clip.optimized (2).mp4",
-                "C:\\Media\\other.optimized.mp4",
+                "C:\\Media\\other.optimized.mp4"
             ],
             optimizer.Requests.Select(static request => request.DestinationPath));
         Assert.Equal(optimizer.Requests.Count, viewModel.Queue.Count);
@@ -649,9 +649,16 @@ public sealed class VideoOptimizerViewModelTests
         }
     }
 
-    private sealed class InlineProgress(Action<double> callback) : IProgress<double>
+    private sealed class InlineProgress : IProgress<double>
     {
-        public void Report(double value) => callback(value);
+        private readonly Action<double> _callback;
+
+        public InlineProgress(Action<double> callback)
+        {
+            _callback = callback;
+        }
+
+        public void Report(double value) => _callback(value);
     }
 
     private sealed class RecordingFileActionService : IFileActionService
@@ -683,7 +690,7 @@ public sealed class VideoOptimizerViewModelTests
         public void RevealInExplorer(string path) => RevealedPaths.Add(path);
     }
 
-    private sealed class CancellationOnDisposeCoordinator : IAppOperationCoordinator
+    private sealed partial class CancellationOnDisposeCoordinator : IAppOperationCoordinator
     {
         private Action? _requestCancellation;
 
@@ -711,16 +718,60 @@ public sealed class VideoOptimizerViewModelTests
             ? Task.CompletedTask
             : Task.Delay(Timeout.InfiniteTimeSpan);
 
-        private sealed class CallbackLease(CancellationOnDisposeCoordinator owner) : IAppOperationLease
+        private sealed partial class CallbackLease : IAppOperationLease
         {
+            private readonly CancellationOnDisposeCoordinator _owner;
+
+            public CallbackLease(CancellationOnDisposeCoordinator owner)
+            {
+                _owner = owner;
+            }
+
             public void Dispose()
             {
-                owner.RequestCancellation();
-                owner._requestCancellation = null;
-                owner.ActiveOperation = null;
-                owner.LeaseDisposed = true;
-                owner.ActiveOperationChanged?.Invoke(owner, EventArgs.Empty);
+                _owner.RequestCancellation();
+                _owner._requestCancellation = null;
+                _owner.ActiveOperation = null;
+                _owner.LeaseDisposed = true;
+                _owner.ActiveOperationChanged?.Invoke(_owner, EventArgs.Empty);
             }
         }
+    }
+
+    [Fact]
+    public void PresetIndexMirrorsPresetAndIgnoresInvalidSelections()
+    {
+        VideoOptimizerViewModel viewModel = CreateViewModel();
+        var changed = new List<string?>();
+        viewModel.PropertyChanged += (_, args) => changed.Add(args.PropertyName);
+
+        Assert.Equal((int)VideoOptimizationPreset.Balanced, viewModel.PresetIndex);
+
+        viewModel.PresetIndex = (int)VideoOptimizationPreset.HighQuality;
+        viewModel.PresetIndex = -1;
+
+        Assert.Equal(VideoOptimizationPreset.HighQuality, viewModel.Preset);
+        Assert.Equal((int)VideoOptimizationPreset.HighQuality, viewModel.PresetIndex);
+        Assert.Contains(nameof(VideoOptimizerViewModel.PresetIndex), changed);
+    }
+
+    [Fact]
+    public async Task ProgressAndQueueSectionsAreHiddenUntilTheyHaveContent()
+    {
+        VideoOptimizerViewModel viewModel = CreateViewModel(
+            inventoryBuilder: (_, _) => Inventory(Video(@"C:\Media\visible.mp4", 500)));
+        var changed = new List<string?>();
+        viewModel.PropertyChanged += (_, args) => changed.Add(args.PropertyName);
+
+        Assert.Equal(Microsoft.UI.Xaml.Visibility.Collapsed, viewModel.ProgressVisibility);
+        Assert.Equal(Microsoft.UI.Xaml.Visibility.Collapsed, viewModel.QueueVisibility);
+
+        await viewModel.RefreshQueueCommand.ExecuteAsync(null);
+        viewModel.IsOptimizing = true;
+
+        Assert.Equal(Microsoft.UI.Xaml.Visibility.Visible, viewModel.QueueVisibility);
+        Assert.Equal(Microsoft.UI.Xaml.Visibility.Visible, viewModel.ProgressVisibility);
+        Assert.Contains(nameof(VideoOptimizerViewModel.QueueVisibility), changed);
+        Assert.Contains(nameof(VideoOptimizerViewModel.ProgressVisibility), changed);
     }
 }

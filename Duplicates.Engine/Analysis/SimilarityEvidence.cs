@@ -1,12 +1,14 @@
 namespace Duplicates.Engine.Analysis;
 
-public abstract record SimilarityEvidence;
+public interface ISimilarityEvidence
+{
+}
 
 public sealed record ImageSimilarityEvidence(
     ulong PerceptualHash,
     int Width,
     int Height,
-    string Format) : SimilarityEvidence;
+    string Format) : ISimilarityEvidence;
 
 public sealed record VideoSimilarityEvidence(
     ulong FrameHash10,
@@ -20,7 +22,7 @@ public sealed record VideoSimilarityEvidence(
     TimeSpan Duration,
     uint Bitrate,
     double FramesPerSecond,
-    string Codec) : SimilarityEvidence;
+    string Codec) : ISimilarityEvidence;
 
 public sealed record MusicSimilarityEvidence(
     string NormalizedTitle,
@@ -33,11 +35,11 @@ public sealed record MusicSimilarityEvidence(
     uint Year,
     IReadOnlyList<string> Genres,
     uint Bitrate,
-    TimeSpan Duration) : SimilarityEvidence
+    TimeSpan Duration) : ISimilarityEvidence
 {
     public IReadOnlyList<string> Genres { get; init; } = CopyGenres(Genres);
 
-    private static IReadOnlyList<string> CopyGenres(IReadOnlyList<string>? genres) =>
+    private static System.Collections.ObjectModel.ReadOnlyCollection<string> CopyGenres(IReadOnlyList<string>? genres) =>
         Array.AsReadOnly(genres?.ToArray() ?? []);
 }
 

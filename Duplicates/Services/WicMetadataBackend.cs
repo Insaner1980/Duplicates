@@ -219,7 +219,7 @@ internal sealed class WicMetadataBackend : IWicMetadataBackend
             ? "/app1/ifd/{ushort=274}"
             : "/ifd/{ushort=274}";
 
-    private static IReadOnlyList<string> ReadColorContexts(
+    private static List<string> ReadColorContexts(
         IWICImagingFactory factory,
         IWICBitmapFrameDecode frame,
         List<IWICColorContext> ownedContexts)
@@ -448,7 +448,7 @@ internal sealed class WicMetadataBackend : IWicMetadataBackend
 
             context.AddBytes(serializedSize);
             byte[] bytes = new byte[checked((int)serializedSize)];
-            if (bytes.Length > 0)
+            if (serializedSize != 0)
             {
                 Marshal.Copy(serialized, bytes, 0, bytes.Length);
             }
@@ -485,7 +485,7 @@ internal sealed class WicMetadataBackend : IWicMetadataBackend
         if ((value.VariantType & vector) != 0 && type == 17)
         {
             byte[] bytes = new byte[checked((int)value.ElementCount)];
-            if (bytes.Length > 0)
+            if (value.ElementCount != 0)
             {
                 Marshal.Copy(value.Elements, bytes, 0, bytes.Length);
             }
@@ -524,7 +524,7 @@ internal sealed class WicMetadataBackend : IWicMetadataBackend
     private static string CanonicalBlob(PropVariant value)
     {
         byte[] bytes = new byte[checked((int)value.ElementCount)];
-        if (bytes.Length > 0)
+        if (value.ElementCount != 0)
         {
             Marshal.Copy(value.Elements, bytes, 0, bytes.Length);
         }

@@ -2,7 +2,7 @@ namespace Duplicates.Engine.Models;
 
 public sealed record FileTypeFilter
 {
-    private static readonly IReadOnlyDictionary<FileTypeCategory, IReadOnlySet<string>> CategoryExtensions =
+    private static readonly Dictionary<FileTypeCategory, IReadOnlySet<string>> CategoryExtensions =
         new Dictionary<FileTypeCategory, IReadOnlySet<string>>
         {
             [FileTypeCategory.Images] = ToSet("jpg", "jpeg", "png", "gif", "bmp", "tiff", "tif", "webp", "heic", "heif", "raw", "cr2", "nef", "arw", "dng", "svg", "ico", "psd"),
@@ -90,7 +90,7 @@ public sealed record FileTypeFilter
             : Array.Empty<string>();
     }
 
-    private static IReadOnlySet<string> ToSet(params string[] extensions)
+    private static HashSet<string> ToSet(params string[] extensions)
     {
         return extensions.Select(NormalizeExtension).ToHashSet(StringComparer.OrdinalIgnoreCase);
     }

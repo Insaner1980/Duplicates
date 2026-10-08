@@ -10,7 +10,7 @@ public sealed record SimilarityItem
 
     public required double SimilarityPercent { get; init; }
 
-    public required SimilarityEvidence Evidence { get; init; }
+    public required ISimilarityEvidence Evidence { get; init; }
 
     public IReadOnlyDictionary<string, string> Metadata { get; init; } = new Dictionary<string, string>();
 }

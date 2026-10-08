@@ -7,7 +7,7 @@ using Microsoft.Win32.SafeHandles;
 
 namespace Duplicates.Services;
 
-internal sealed class IdentityFileTransactions : IIdentityFileTransactions
+internal sealed partial class IdentityFileTransactions : IIdentityFileTransactions
 {
     private const uint GenericRead = 0x80000000;
     private const uint GenericWrite = 0x40000000;
@@ -114,7 +114,7 @@ internal sealed class IdentityFileTransactions : IIdentityFileTransactions
         }
 
         using var input = new FileStream(sourceHandle, FileAccess.Read, 128 * 1024, isAsync: false);
-        using var output = new FileStream(destinationHandle!, FileAccess.ReadWrite, 128 * 1024, isAsync: false);
+        using var output = new FileStream(destinationHandle, FileAccess.ReadWrite, 128 * 1024, isAsync: false);
         output.SetLength(0);
         byte[] buffer = ArrayPool<byte>.Shared.Rent(128 * 1024);
         try
@@ -448,7 +448,7 @@ internal sealed class IdentityFileTransactions : IIdentityFileTransactions
 
     private static void DeleteByHandle(SafeFileHandle handle)
     {
-        var disposition = new FileDispositionInformation { DeleteFile = true };
+        var disposition = new FileDispositionInformation { DeleteFile = 1 };
         if (!SetFileInformationByHandle(
                 handle,
                 FileDispositionInfo,
@@ -479,6 +479,7 @@ internal sealed class IdentityFileTransactions : IIdentityFileTransactions
         }
         catch
         {
+            // A failed handle-path query leaves the move commit state indeterminate.
         }
 
         return IdentityMoveCommitState.Indeterminate;
@@ -603,12 +604,11 @@ internal sealed class IdentityFileTransactions : IIdentityFileTransactions
     [StructLayout(LayoutKind.Sequential)]
     private struct FileDispositionInformation
     {
-        [MarshalAs(UnmanagedType.Bool)]
-        public bool DeleteFile;
+        public int DeleteFile;
     }
 
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern SafeFileHandle CreateFileW(
+    [LibraryImport("kernel32.dll", StringMarshalling = StringMarshalling.Utf16, SetLastError = true)]
+    private static partial SafeFileHandle CreateFileW(
         string fileName,
         uint desiredAccess,
         uint shareMode,
@@ -617,25 +617,25 @@ internal sealed class IdentityFileTransactions : IIdentityFileTransactions
         uint flagsAndAttributes,
         nint templateFile);
 
-    [DllImport("kernel32.dll", SetLastError = true)]
+    [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GetFileInformationByHandleEx(
+    private static partial bool GetFileInformationByHandleEx(
         SafeFileHandle file,
         int fileInformationClass,
         out FileIdInformation fileInformation,
         uint bufferSize);
 
-    [DllImport("kernel32.dll", SetLastError = true)]
+    [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GetFileInformationByHandleEx(
+    private static partial bool GetFileInformationByHandleEx(
         SafeFileHandle file,
         int fileInformationClass,
         out FileBasicInformation fileInformation,
         uint bufferSize);
 
-    [DllImport("kernel32.dll", SetLastError = true)]
+    [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GetFileSizeEx(SafeFileHandle file, out long fileSize);
+    private static partial bool GetFileSizeEx(SafeFileHandle file, out long fileSize);
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern uint GetFinalPathNameByHandleW(
@@ -644,17 +644,17 @@ internal sealed class IdentityFileTransactions : IIdentityFileTransactions
         uint filePathLength,
         uint flags);
 
-    [DllImport("kernel32.dll", SetLastError = true)]
+    [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool SetFileInformationByHandle(
+    private static partial bool SetFileInformationByHandle(
         SafeFileHandle file,
         int fileInformationClass,
         nint fileInformation,
         uint bufferSize);
 
-    [DllImport("kernel32.dll", SetLastError = true)]
+    [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool SetFileInformationByHandle(
+    private static partial bool SetFileInformationByHandle(
         SafeFileHandle file,
         int fileInformationClass,
         ref FileDispositionInformation fileInformation,

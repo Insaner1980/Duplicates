@@ -140,7 +140,7 @@ public sealed class AppOperationViewModelTests
         public Task<AnalysisResult> RunAsync(
             ToolKind tool,
             AnalysisScope scope,
-            ToolOptions toolOptions,
+            IToolOptions toolOptions,
             IProgress<AnalysisProgress>? progress,
             CancellationToken cancellationToken)
         {
@@ -161,7 +161,7 @@ public sealed class AppOperationViewModelTests
 
         public IReadOnlyList<SimilarityGroup> RegroupSimilarityItems(
             ToolKind tool,
-            ToolOptions options,
+            IToolOptions options,
             IReadOnlyList<SimilarityItem> items) => [];
     }
 }

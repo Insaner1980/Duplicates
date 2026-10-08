@@ -183,7 +183,7 @@ public sealed class MainWindowOperationGuardTests
     }
 
     private static IAppOperationLease Acquire(
-        IAppOperationCoordinator coordinator,
+        AppOperationCoordinator coordinator,
         AppOperationKind kind,
         Action requestCancellation)
     {

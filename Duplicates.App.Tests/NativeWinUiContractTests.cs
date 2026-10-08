@@ -18,6 +18,31 @@ public sealed class NativeWinUiContractTests
         "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
     private static readonly XNamespace Xaml =
         "http://schemas.microsoft.com/winfx/2006/xaml";
+    private static readonly XNamespace Toolkit = "using:CommunityToolkit.WinUI.Controls";
+    private static readonly string[] LargeFilePresetNames = ["Any", "100 MB", "1 GB", "10 GB"];
+    private static readonly string[] LargeFilePresetCommands =
+    [
+        "{Binding SetLargeFileMinimumSizeToAnyCommand}",
+        "{Binding SetLargeFileMinimumSizeTo100MbCommand}",
+        "{Binding SetLargeFileMinimumSizeTo1GbCommand}",
+        "{Binding SetLargeFileMinimumSizeTo10GbCommand}",
+    ];
+    private static readonly string[] SimilarityPresetNames = ["Strict", "Balanced", "Broad"];
+    private static readonly string[] ScanOptionHeaders = ["Scan options", "Advanced options"];
+    private static readonly string[] ScanOptionBindings =
+    [
+        "{Binding PathScope.IncludeSubfolders, Mode=TwoWay}",
+        "{Binding PathScope.IgnoreHiddenFiles, Mode=TwoWay}",
+        "{Binding PathScope.IgnoreSystemFiles, Mode=TwoWay}",
+        "{Binding VerifyByteByByte, Mode=TwoWay}",
+    ];
+    private static readonly (string Path, string PrimaryAction)[] SetupPages =
+    [
+        (@"Views\ScanPage.xaml", "Start scan"),
+        (@"Views\AnalysisPage.xaml", "Start analysis"),
+        (@"Views\ExifRemoverPage.xaml", "Clean images"),
+        (@"Views\VideoOptimizerPage.xaml", "Optimize videos"),
+    ];
 
     [Fact]
     public void Colors_KeepTheLockedFiveColorPalette()
@@ -133,13 +158,13 @@ public sealed class NativeWinUiContractTests
 
         var dialogClosed = new TaskCompletionSource<object?>();
         string? selectedTag = null;
-        Task recovery = Assert.IsAssignableFrom<Task>(
+        Task recovery = Assert.IsType<Task>(
             completion.Invoke(
                 null,
                 [
                     new Func<Task>(() => dialogClosed.Task),
                     new Action(() => selectedTag = "DuplicateFiles"),
-                ]));
+                ]), exactMatch: false);
 
         Assert.Null(selectedTag);
 
@@ -210,10 +235,13 @@ public sealed class NativeWinUiContractTests
         XDocument page = LoadXaml(@"Views\ScanPage.xaml");
         XDocument scopeEditor = LoadXaml(@"Views\Controls\PathScopeEditor.xaml");
 
-        Assert.Equal(2, page.Descendants(Presentation + "NumberBox").Count());
+        Assert.Empty(page.Descendants(Presentation + "NumberBox"));
+        Assert.Equal(
+            ["{Binding MinSizeEditor}", "{Binding MaxSizeEditor}"],
+            ByteSizeBoxes(page).Select(box => (string?)box.Attribute("DataContext")));
         Assert.Single(page.Descendants(), element => element.Name.LocalName == "PathScopeEditor");
         Assert.NotEmpty(scopeEditor.Descendants(Presentation + "ListView"));
-        Assert.NotEmpty(page.Descendants(Presentation + "Expander"));
+        Assert.NotEmpty(page.Descendants(Toolkit + "SettingsExpander"));
         Assert.NotEmpty(page.Descendants(Presentation + "InfoBar"));
         Assert.NotEmpty(page.Descendants(Presentation + "ProgressBar"));
         Assert.DoesNotContain(
@@ -379,7 +407,8 @@ public sealed class NativeWinUiContractTests
         XDocument page = LoadXaml(@"Views\AnalysisPage.xaml");
 
         Assert.Single(page.Descendants(), element => element.Name.LocalName == "PathScopeEditor");
-        Assert.Single(page.Descendants(Presentation + "Expander"));
+        Assert.Empty(page.Descendants(Presentation + "Expander"));
+        Assert.Single(page.Descendants(Toolkit + "SettingsExpander"));
         Assert.Single(page.Descendants(Presentation + "InfoBar"));
         Assert.Single(page.Descendants(Presentation + "ProgressBar"));
         Assert.Single(
@@ -396,24 +425,19 @@ public sealed class NativeWinUiContractTests
     {
         XDocument page = LoadXaml(@"Views\AnalysisPage.xaml");
         XElement options = page
-            .Descendants(Presentation + "Expander")
+            .Descendants(Toolkit + "SettingsExpander")
             .Single(element => (string?)element.Attribute(Xaml + "Name") == "AnalysisOptions");
-        XElement[] numberBoxes = options.Descendants(Presentation + "NumberBox").ToArray();
-        Assert.Equal(2, numberBoxes.Length);
-        XElement largeFileInput = numberBoxes.Single(
-            numberBox => (string?)numberBox.Attribute("Header") == "Minimum size, bytes");
-        XElement temporaryFileInput = numberBoxes.Single(
-            numberBox => (string?)numberBox.Attribute("Header") == "Minimum age, days");
+        Assert.Equal("{Binding OptionsSummary}", (string?)options.Attribute("Description"));
+        XElement largeFileInput = Assert.Single(ByteSizeBoxes(options));
+        XElement temporaryFileInput = Assert.Single(options.Descendants(Presentation + "NumberBox"));
+        Assert.Equal("Minimum age, days", (string?)temporaryFileInput.Attribute("AutomationProperties.Name"));
 
         Assert.Equal("{Binding OptionsVisibility}", (string?)options.Attribute("Visibility"));
-        Assert.Equal("0", (string?)largeFileInput.Attribute("Minimum"));
-        Assert.Equal("InvalidInputOverwritten", (string?)largeFileInput.Attribute("ValidationMode"));
-        Assert.Equal(
-            "{Binding LargeFileMinimumSizeValue, Mode=TwoWay}",
-            (string?)largeFileInput.Attribute("Value"));
+        Assert.Equal("{Binding LargeFileMinimumSizeEditor}", (string?)largeFileInput.Attribute("DataContext"));
+        Assert.Equal("Minimum size", (string?)largeFileInput.Attribute("AccessibleName"));
         Assert.Equal(
             "{Binding LargeFileOptionsVisibility}",
-            (string?)largeFileInput.Parent?.Attribute("Visibility"));
+            (string?)OwningSettingsCard(largeFileInput).Attribute("Visibility"));
         Assert.Equal("0", (string?)temporaryFileInput.Attribute("Minimum"));
         Assert.Equal("InvalidInputOverwritten", (string?)temporaryFileInput.Attribute("ValidationMode"));
         Assert.Equal(
@@ -421,20 +445,14 @@ public sealed class NativeWinUiContractTests
             (string?)temporaryFileInput.Attribute("Value"));
         Assert.Equal(
             "{Binding TemporaryFileOptionsVisibility}",
-            (string?)temporaryFileInput.Parent?.Attribute("Visibility"));
+            (string?)OwningSettingsCard(temporaryFileInput).Attribute("Visibility"));
         Assert.Equal(
-            new[] { "Any", "100 MB", "1 GB", "10 GB" },
+            LargeFilePresetNames,
             options.Descendants(Presentation + "Button")
                 .Select(button => (string?)button.Attribute("Content"))
                 .Where(static content => content is not null));
         Assert.Equal(
-            new[]
-            {
-                "{Binding SetLargeFileMinimumSizeToAnyCommand}",
-                "{Binding SetLargeFileMinimumSizeTo100MbCommand}",
-                "{Binding SetLargeFileMinimumSizeTo1GbCommand}",
-                "{Binding SetLargeFileMinimumSizeTo10GbCommand}",
-            },
+            LargeFilePresetCommands,
             options.Descendants(Presentation + "Button")
                 .Select(button => (string?)button.Attribute("Command")));
     }
@@ -444,27 +462,27 @@ public sealed class NativeWinUiContractTests
     {
         XDocument page = LoadXaml(@"Views\AnalysisPage.xaml");
         XElement imageCombo = page.Descendants(Presentation + "ComboBox")
-            .Single(element => (string?)element.Attribute("Header") == "Image similarity");
+            .Single(element => (string?)element.Attribute("AutomationProperties.Name") == "Image similarity");
         XElement videoCombo = page.Descendants(Presentation + "ComboBox")
-            .Single(element => (string?)element.Attribute("Header") == "Video similarity");
+            .Single(element => (string?)element.Attribute("AutomationProperties.Name") == "Video similarity");
 
         Assert.Equal(
-            "{Binding ImageSimilarityPreset, Mode=TwoWay}",
+            "{Binding ImageSimilarityPresetIndex, Mode=TwoWay}",
             (string?)imageCombo.Attribute("SelectedIndex"));
         Assert.Equal(
             "{Binding SimilarImageOptionsVisibility}",
-            (string?)imageCombo.Parent?.Attribute("Visibility"));
+            (string?)OwningSettingsCard(imageCombo).Attribute("Visibility"));
         Assert.Equal(
-            new[] { "Strict", "Balanced", "Broad" },
+            SimilarityPresetNames,
             imageCombo.Elements(Presentation + "ComboBoxItem").Select(item => (string?)item.Attribute("Content")));
         Assert.Equal(
-            "{Binding VideoSimilarityPreset, Mode=TwoWay}",
+            "{Binding VideoSimilarityPresetIndex, Mode=TwoWay}",
             (string?)videoCombo.Attribute("SelectedIndex"));
         Assert.Equal(
             "{Binding SimilarVideoOptionsVisibility}",
-            (string?)videoCombo.Parent?.Attribute("Visibility"));
+            (string?)OwningSettingsCard(videoCombo).Attribute("Visibility"));
         Assert.Equal(
-            new[] { "Strict", "Balanced", "Broad" },
+            SimilarityPresetNames,
             videoCombo.Elements(Presentation + "ComboBoxItem").Select(item => (string?)item.Attribute("Content")));
     }
 
@@ -684,7 +702,10 @@ public sealed class NativeWinUiContractTests
             .ToArray();
         Assert.Equal(["Appearance", "Scanning defaults", "Similarity and media", "File actions"], headers);
         Assert.NotEmpty(page.Descendants(toolkit + "SettingsCard"));
-        Assert.Equal(3, page.Descendants(Presentation + "NumberBox").Count());
+        Assert.Single(page.Descendants(Presentation + "NumberBox"));
+        Assert.Equal(
+            ["{Binding DefaultMinSizeEditor}", "{Binding DefaultLargeFileMinimumEditor}"],
+            ByteSizeBoxes(page.Root!).Select(box => (string?)box.Attribute("DataContext")));
         Assert.Empty(page.Descendants(Presentation + "TextBox"));
         XElement clear = Assert.Single(
             page.Descendants(Presentation + "Button"),
@@ -1117,40 +1138,28 @@ public sealed class NativeWinUiContractTests
     }
 
     [Fact]
-    public void ScanPage_CentersActionsScopeAndOptionsOnOneWorkArea()
+    public void SetupPages_AlignHeaderScopeAndOptionsToOneContentColumn()
     {
         XDocument styles = LoadXaml(@"Themes\Styles.xaml");
-        XElement workAreaWidth = styles
-            .Descendants(Xaml + "Double")
-            .Single(element =>
-                (string?)element.Attribute(Xaml + "Key") == "ScanWorkAreaMaxWidth");
-        Assert.Equal("680", workAreaWidth.Value.Trim());
+        Assert.DoesNotContain(
+            styles.Descendants().Attributes(Xaml + "Key"),
+            attribute => attribute.Value == "ScanWorkAreaMaxWidth");
 
-        XDocument page = LoadXaml(@"Views\ScanPage.xaml");
-        string[] centeredNames =
-        [
-            "HeaderActionRail",
-            "PathScopeEditor",
-            "ScanOptions",
-        ];
-
-        foreach (string name in centeredNames)
+        foreach ((string path, _) in SetupPages)
         {
-            XElement element = page
-                .Descendants()
-                .Single(candidate =>
-                    (string?)candidate.Attribute(Xaml + "Name") == name);
-            Assert.Equal(
-                "{StaticResource ScanWorkAreaMaxWidth}",
-                (string?)element.Attribute("MaxWidth"));
-            Assert.Equal("Stretch", (string?)element.Attribute("HorizontalAlignment"));
-        }
+            XDocument page = LoadXaml(path);
+            Assert.DoesNotContain(
+                page.Descendants().Attributes(),
+                attribute => attribute.Value.Contains("ScanWorkAreaMaxWidth", StringComparison.Ordinal));
+            Assert.DoesNotContain(
+                page.Descendants(),
+                element => (string?)element.Attribute(Xaml + "Name") == "HeaderActionRail");
 
-        XElement scanOptions = page
-            .Descendants(Presentation + "Expander")
-            .Single(element =>
-                (string?)element.Attribute(Xaml + "Name") == "ScanOptions");
-        Assert.Null(scanOptions.Attribute("Width"));
+            XElement title = Assert.Single(
+                page.Descendants(Presentation + "TextBlock"),
+                text => (string?)text.Attribute("AutomationProperties.HeadingLevel") == "Level1");
+            Assert.NotEmpty(title.Ancestors(Presentation + "ScrollViewer"));
+        }
     }
 
     [Fact]
@@ -1188,21 +1197,100 @@ public sealed class NativeWinUiContractTests
     }
 
     [Fact]
-    public void ScanPage_SmallMovesActionRailsBelowHeaderCopy()
+    public void SetupPages_PinPrimaryActionToFooterOutsideScrollContent()
+    {
+        foreach ((string path, string action) in SetupPages)
+        {
+            XDocument page = LoadXaml(path);
+            XElement footer = page
+                .Descendants(Presentation + "Border")
+                .Single(element => (string?)element.Attribute(Xaml + "Name") == "ActionFooter");
+            Assert.Equal("1", (string?)footer.Attribute("Grid.Row"));
+            Assert.Equal("{StaticResource PageFooterBorderStyle}", (string?)footer.Attribute("Style"));
+            Assert.Empty(footer.Ancestors(Presentation + "ScrollViewer"));
+
+            XElement primary = footer
+                .Descendants(Presentation + "Button")
+                .Single(button => (string?)button.Attribute("AutomationProperties.Name") == action);
+            Assert.Equal("{StaticResource AccentButtonStyle}", (string?)primary.Attribute("Style"));
+
+            XElement hint = Assert.Single(
+                footer.Descendants(Presentation + "TextBlock"),
+                text => (string?)text.Attribute("Visibility") == "{Binding PathScope.EmptyIncludedPathsVisibility}");
+            Assert.Equal("Add at least one folder or file to start.", (string?)hint.Attribute("Text"));
+        }
+    }
+
+    [Fact]
+    public void ScanPage_GroupsOptionsInFlatNativeSettingsExpanders()
     {
         XDocument page = LoadXaml(@"Views\ScanPage.xaml");
-        XElement small = page
-            .Descendants(Presentation + "VisualState")
-            .Single(element =>
-                (string?)element.Attribute(Xaml + "Name") == "Small");
-        Dictionary<string, string> setters = small
-            .Descendants(Presentation + "Setter")
-            .ToDictionary(
-                element => (string)element.Attribute("Target")!,
-                element => (string)element.Attribute("Value")!,
-                StringComparer.Ordinal);
+        Assert.Empty(page.Descendants(Presentation + "Expander"));
 
-        Assert.Equal("1", setters["HeaderActionRail.(Grid.Row)"]);
+        XElement[] expanders = page.Descendants(Toolkit + "SettingsExpander").ToArray();
+        Assert.Equal(
+            ScanOptionHeaders,
+            expanders.Select(expander => (string?)expander.Attribute("Header")));
+        Assert.All(expanders, expander => Assert.Empty(expander.Ancestors(Toolkit + "SettingsExpander")));
+        Assert.Empty(page.Descendants(Presentation + "VisualStateManager.VisualStateGroups"));
+
+        string[] toggleBindings = page
+            .Descendants(Presentation + "ToggleSwitch")
+            .Select(toggle => (string?)toggle.Attribute("IsOn"))
+            .Cast<string>()
+            .ToArray();
+        Assert.Equal(
+            ScanOptionBindings,
+            toggleBindings);
+        Assert.All(
+            page.Descendants(Presentation + "ToggleSwitch").Concat(page.Descendants(Presentation + "NumberBox")),
+            control => Assert.False(
+                string.IsNullOrWhiteSpace((string?)control.Attribute("AutomationProperties.Name"))));
+    }
+
+    [Fact]
+    public void PathScopeEditor_FramesDropZoneAndHighlightsItDuringDrag()
+    {
+        XDocument editor = LoadXaml(@"Views\Controls\PathScopeEditor.xaml");
+        XElement region = editor
+            .Descendants(Presentation + "Grid")
+            .Single(element => (string?)element.Attribute(Xaml + "Name") == "IncludedPathsRegion");
+        Assert.Equal("IncludedPathsRegion_DragLeave", (string?)region.Attribute("DragLeave"));
+
+        XElement dropZone = region
+            .Descendants(Presentation + "Border")
+            .Single(element => (string?)element.Attribute(Xaml + "Name") == "DropZone");
+        Assert.Equal("{ThemeResource BgCardBrush}", (string?)dropZone.Attribute("Background"));
+        Assert.Equal("{ThemeResource StrokeSubtleBrush}", (string?)dropZone.Attribute("BorderBrush"));
+        Assert.Equal("{StaticResource CardCornerRadius}", (string?)dropZone.Attribute("CornerRadius"));
+        Assert.Contains(
+            dropZone.Descendants(Presentation + "Button"),
+            button => (string?)button.Attribute("Click") == "AddIncludedFolder_Click");
+        Assert.Contains(
+            dropZone.Descendants(Presentation + "Button"),
+            button => (string?)button.Attribute("Click") == "AddIncludedFile_Click");
+
+        XElement dropTarget = editor
+            .Descendants(Presentation + "VisualState")
+            .Single(element => (string?)element.Attribute(Xaml + "Name") == "DropTarget");
+        XElement setter = Assert.Single(dropTarget.Descendants(Presentation + "Setter"));
+        Assert.Equal("DropZone.BorderBrush", (string?)setter.Attribute("Target"));
+        Assert.Equal("{ThemeResource AccentRedBrush}", (string?)setter.Attribute("Value"));
+
+        Assert.DoesNotContain(
+            editor.Descendants(Presentation + "TextBlock"),
+            text => ((string?)text.Attribute("Text"))?.Contains("matching", StringComparison.Ordinal) == true);
+        Assert.Single(
+            dropZone.Descendants(Presentation + "TextBlock"),
+            text => (string?)text.Attribute("Text") == "Drag folders or files here");
+
+        XElement excluded = Assert.Single(editor.Descendants(Toolkit + "SettingsExpander"));
+        XElement excludedIcon = Assert.Single(excluded.Descendants(Presentation + "FontIcon"));
+        Assert.Equal("\uE733", (string?)excludedIcon.Attribute("Glyph"));
+        Assert.Equal("Excluded paths", (string?)excluded.Attribute("Header"));
+        Assert.Equal("{Binding ExcludedPaths}", (string?)excluded.Attribute("ItemsSource"));
+        Assert.Equal("{StaticResource ExcludedPathItemTemplate}", (string?)excluded.Attribute("ItemTemplate"));
+        Assert.Empty(editor.Descendants(Presentation + "Expander"));
     }
 
     [Fact]
@@ -1344,7 +1432,9 @@ public sealed class NativeWinUiContractTests
             element => element.Name.LocalName == "PathScopeEditor");
         Assert.Equal(".jpg,.jpeg,.tif,.tiff", (string?)scopeEditor.Attribute("FileTypeFilter"));
 
-        Assert.Single(page.Descendants(Presentation + "Expander"));
+        Assert.Empty(page.Descendants(Presentation + "Expander"));
+        XElement privacy = Assert.Single(page.Descendants(Toolkit + "SettingsExpander"));
+        Assert.Equal("Privacy options", (string?)privacy.Attribute("Header"));
         XElement[] toggles = page.Descendants(Presentation + "ToggleSwitch").ToArray();
         Assert.Equal(7, toggles.Length);
         string[] optionBindings =
@@ -1421,9 +1511,6 @@ public sealed class NativeWinUiContractTests
         XElement scrollViewer = Assert.Single(page.Descendants(Presentation + "ScrollViewer"));
         Assert.Equal("Disabled", (string?)scrollViewer.Attribute("HorizontalScrollMode"));
         Assert.Equal("Disabled", (string?)scrollViewer.Attribute("HorizontalScrollBarVisibility"));
-        Assert.Contains(
-            page.Descendants(Presentation + "AdaptiveTrigger"),
-            trigger => (string?)trigger.Attribute("MinWindowWidth") == "641");
         Assert.True(
             page.Descendants().Count(element =>
                 (string?)element.Attribute("AutomationProperties.LiveSetting") == "Polite") >= 2);
@@ -1467,7 +1554,7 @@ public sealed class NativeWinUiContractTests
             (string?)scopeEditor.Attribute("IsEnabled"));
 
         XElement preset = Assert.Single(page.Descendants(Presentation + "ComboBox"));
-        Assert.Equal("{Binding Preset, Mode=TwoWay}", (string?)preset.Attribute("SelectedIndex"));
+        Assert.Equal("{Binding PresetIndex, Mode=TwoWay}", (string?)preset.Attribute("SelectedIndex"));
         Assert.Equal(
             ["Smaller", "Balanced", "High quality"],
             preset.Elements(Presentation + "ComboBoxItem")
@@ -1559,9 +1646,6 @@ public sealed class NativeWinUiContractTests
         XElement scrollViewer = Assert.Single(page.Descendants(Presentation + "ScrollViewer"));
         Assert.Equal("Disabled", (string?)scrollViewer.Attribute("HorizontalScrollMode"));
         Assert.Equal("Disabled", (string?)scrollViewer.Attribute("HorizontalScrollBarVisibility"));
-        Assert.Contains(
-            page.Descendants(Presentation + "AdaptiveTrigger"),
-            trigger => (string?)trigger.Attribute("MinWindowWidth") == "641");
     }
 
     [Fact]
@@ -1626,6 +1710,164 @@ public sealed class NativeWinUiContractTests
         Assert.Contains("IsLoaded &&", publicationGuard, StringComparison.Ordinal);
         Assert.Contains("ReferenceEquals(ViewModel.SimilarityPreview, preview)", publicationGuard, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void MainWindow_VideoOptimizerUsesFilmGlyphDistinctFromSimilarVideos()
+    {
+        XDocument main = LoadXaml("MainWindow.xaml");
+        XElement item = main
+            .Descendants(Presentation + "NavigationViewItem")
+            .Single(element => (string?)element.Attribute("Tag") == "VideoOptimizer");
+
+        Assert.Equal("\uE8B2", (string?)item.Descendants(Presentation + "FontIcon").Single().Attribute("Glyph"));
+    }
+
+    [Fact]
+    public void SettingsPage_UsesSharedScrollingColumnReadableChoicesAndAboutCard()
+    {
+        XDocument styles = LoadXaml(@"Themes\Styles.xaml");
+        Assert.DoesNotContain(
+            styles.Descendants().Attributes(Xaml + "Key"),
+            attribute => attribute.Value == "SettingsContentMaxWidth");
+
+        XDocument page = LoadXaml(@"Views\SettingsPage.xaml");
+        XElement title = Assert.Single(
+            page.Descendants(Presentation + "TextBlock"),
+            text => (string?)text.Attribute("AutomationProperties.HeadingLevel") == "Level1");
+        Assert.NotEmpty(title.Ancestors(Presentation + "ScrollViewer"));
+        XElement column = Assert.Single(page.Descendants(Presentation + "ScrollViewer")).Elements().Single();
+        Assert.Equal("{StaticResource ContentMaxWidth}", (string?)column.Attribute("MaxWidth"));
+        Assert.Equal("{StaticResource ScrollingPageContentPadding}", (string?)column.Attribute("Padding"));
+
+        XElement backdrop = page
+            .Descendants(Presentation + "ComboBox")
+            .Single(combo => (string?)combo.Attribute("AutomationProperties.Name") == "Window background");
+        Assert.Equal("{Binding SelectedBackdropModeIndex, Mode=TwoWay}", (string?)backdrop.Attribute("SelectedIndex"));
+        Assert.Equal(
+            ["Mica", "Mica Alt", "Acrylic", "Solid"],
+            backdrop.Elements(Presentation + "ComboBoxItem").Select(item => (string?)item.Attribute("Content")));
+
+        XElement deletion = page
+            .Descendants(Presentation + "ComboBox")
+            .Single(combo => (string?)combo.Attribute("AutomationProperties.Name") == "Default delete action");
+        Assert.Equal("{Binding SelectedDeletionModeIndex, Mode=TwoWay}", (string?)deletion.Attribute("SelectedIndex"));
+        Assert.Equal(
+            ["Recycle Bin", "Permanent delete"],
+            deletion.Elements(Presentation + "ComboBoxItem").Select(item => (string?)item.Attribute("Content")));
+
+        XElement cachePath = Assert.Single(
+            page.Descendants(Presentation + "TextBlock"),
+            text => (string?)text.Attribute("Text") == "{Binding CachePath}");
+        Assert.Equal(Toolkit + "SettingsCard.Description", cachePath.Parent?.Name);
+
+        XElement about = page
+            .Descendants(Toolkit + "SettingsCard")
+            .Single(card => (string?)card.Attribute("Header") == "About");
+        Assert.Equal("{Binding AboutText}", (string?)about.Attribute("Description"));
+    }
+
+    [Fact]
+    public void ToolPages_HideIdleProgressAndEmptyResultSections()
+    {
+        (string Path, string Progress, string Results, string ResultsBinding)[] pages =
+        [
+            (@"Views\ExifRemoverPage.xaml", "Cleaning progress", "Results", "{Binding ResultsVisibility}"),
+            (@"Views\VideoOptimizerPage.xaml", "Optimization progress", "Queue and results", "{Binding QueueVisibility}"),
+        ];
+
+        foreach ((string path, string progress, string results, string resultsBinding) in pages)
+        {
+            XDocument page = LoadXaml(path);
+            Assert.Equal("{Binding ProgressVisibility}", (string?)SectionFor(page, progress).Attribute("Visibility"));
+            Assert.Equal(resultsBinding, (string?)SectionFor(page, results).Attribute("Visibility"));
+        }
+    }
+
+    [Fact]
+    public void ToolPages_UseFlatSettingsRowsForOptions()
+    {
+        (string Path, string Header, int Toggles)[] pages =
+        [
+            (@"Views\ExifRemoverPage.xaml", "Privacy options", 7),
+            (@"Views\VideoOptimizerPage.xaml", "Optimization options", 2),
+        ];
+
+        foreach ((string path, string header, int toggles) in pages)
+        {
+            XDocument page = LoadXaml(path);
+            XElement options = Assert.Single(page.Descendants(Toolkit + "SettingsExpander"));
+            Assert.Equal(header, (string?)options.Attribute("Header"));
+            XElement[] switches = options.Descendants(Presentation + "ToggleSwitch").ToArray();
+            Assert.Equal(toggles, switches.Length);
+            Assert.All(switches, toggle =>
+            {
+                Assert.Null(toggle.Attribute("Header"));
+                Assert.False(string.IsNullOrWhiteSpace((string?)toggle.Attribute("AutomationProperties.Name")));
+                Assert.NotEmpty(toggle.Ancestors(Toolkit + "SettingsCard"));
+            });
+        }
+    }
+
+    private static XElement SectionFor(XDocument page, string heading) =>
+        page.Descendants(Presentation + "TextBlock")
+            .Single(text =>
+                (string?)text.Attribute("Text") == heading &&
+                (string?)text.Attribute("AutomationProperties.HeadingLevel") == "Level2")
+            .Parent!;
+
+    [Fact]
+    public void ByteSizeBox_PairsNativeNumberBoxWithUnitComboBox()
+    {
+        XDocument control = LoadXaml(@"Views\Controls\ByteSizeBox.xaml");
+
+        XElement amount = Assert.Single(control.Descendants(Presentation + "NumberBox"));
+        Assert.Equal("{Binding Amount, Mode=TwoWay}", (string?)amount.Attribute("Value"));
+        Assert.Equal("0", (string?)amount.Attribute("Minimum"));
+        Assert.Equal("InvalidInputOverwritten", (string?)amount.Attribute("ValidationMode"));
+        Assert.Equal("{x:Bind AccessibleName}", (string?)amount.Attribute("AutomationProperties.Name"));
+        Assert.Equal("{x:Bind PlaceholderText}", (string?)amount.Attribute("PlaceholderText"));
+
+        XElement unit = Assert.Single(control.Descendants(Presentation + "ComboBox"));
+        Assert.Equal("{Binding Units}", (string?)unit.Attribute("ItemsSource"));
+        Assert.Equal("{Binding UnitIndex, Mode=TwoWay}", (string?)unit.Attribute("SelectedIndex"));
+        Assert.Equal("{x:Bind UnitAccessibleName}", (string?)unit.Attribute("AutomationProperties.Name"));
+    }
+
+    [Fact]
+    public void MainWindow_EveryNavigationItemHasADistinctGlyph()
+    {
+        XDocument main = LoadXaml("MainWindow.xaml");
+        string[] glyphs = main
+            .Descendants(Presentation + "NavigationViewItem")
+            .Select(item => (string?)item.Descendants(Presentation + "FontIcon").Single().Attribute("Glyph"))
+            .Cast<string>()
+            .ToArray();
+
+        Assert.Equal(glyphs.Length, glyphs.Distinct(StringComparer.Ordinal).Count());
+        XElement bigFiles = main
+            .Descendants(Presentation + "NavigationViewItem")
+            .Single(element => (string?)element.Attribute("Tag") == "BigFiles");
+        Assert.Equal("\uE9F9", (string?)bigFiles.Descendants(Presentation + "FontIcon").Single().Attribute("Glyph"));
+    }
+
+    [Fact]
+    public void AnalysisPage_ExplainsThatAnalysisDoesNotChangeFiles()
+    {
+        XDocument page = LoadXaml(@"Views\AnalysisPage.xaml");
+        XElement card = page
+            .Descendants(Toolkit + "SettingsCard")
+            .Single(element => (string?)element.Attribute("Header") == "Nothing changes until you choose");
+        Assert.Equal(
+            "The analysis only reads files. You review the results before anything is renamed, moved, or deleted.",
+            (string?)card.Attribute("Description"));
+        Assert.Empty(card.Ancestors(Toolkit + "SettingsExpander"));
+    }
+
+    private static IEnumerable<XElement> ByteSizeBoxes(XContainer container) =>
+        container.Descendants().Where(element => element.Name.LocalName == "ByteSizeBox");
+
+    private static XElement OwningSettingsCard(XElement control) =>
+        control.Ancestors(Toolkit + "SettingsCard").First();
 
     private static XDocument LoadXaml(string relativePath)
     {

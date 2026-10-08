@@ -4,7 +4,7 @@ using Duplicates.Engine.Models;
 
 namespace Duplicates.ViewModels;
 
-public sealed class DuplicateGroupViewModel : ObservableObject
+public sealed partial class DuplicateGroupViewModel : ObservableObject
 {
     private DuplicateFileViewModel? _linkSurvivor;
     private bool _canMutateSelection = true;
@@ -44,7 +44,7 @@ public sealed class DuplicateGroupViewModel : ObservableObject
 
     public bool CanSelectForDeletion(DuplicateFileViewModel candidate)
     {
-        return Files.Count(file => !file.IsSelected && file != candidate) >= 1;
+        return Files.Any(file => !file.IsSelected && file != candidate);
     }
 
     public bool CanSetLinkSurvivor(DuplicateFileViewModel candidate) =>

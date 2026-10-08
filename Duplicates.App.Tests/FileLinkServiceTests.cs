@@ -112,7 +112,7 @@ public sealed class FileLinkServiceTests
         await Assert.ThrowsAsync<ArgumentException>(() => service.ReplaceWithLinksAsync(
             [
                 new(Snapshot(survivorOne, 1), [Snapshot(duplicateOne, 1)]),
-                new(Snapshot(survivorTwo, 1), [Snapshot(duplicateTwo, 1)]),
+                new(Snapshot(survivorTwo, 1), [Snapshot(duplicateTwo, 1)])
             ],
             LinkReplacementMode.HardLink,
             null,
@@ -633,7 +633,7 @@ public sealed class FileLinkServiceTests
             InvalidRequest.OverlapAcrossGroups =>
             [
                 new(Snapshot(survivor, 1), [Snapshot(duplicate, 1)]),
-                new(Snapshot(FullPath("other.bin"), 1), [Snapshot(duplicate.ToUpperInvariant(), 1)]),
+                new(Snapshot(FullPath("other.bin"), 1), [Snapshot(duplicate.ToUpperInvariant(), 1)])
             ],
             _ => throw new ArgumentOutOfRangeException(nameof(request)),
         };
@@ -661,14 +661,28 @@ public sealed class FileLinkServiceTests
         DuplicateHasMultipleLinks,
     }
 
-    private sealed class InlineProgress<T>(Action<T> report) : IProgress<T>
+    private sealed class InlineProgress<T> : IProgress<T>
     {
-        public void Report(T value) => report(value);
+        private readonly Action<T> _report;
+
+        public InlineProgress(Action<T> report)
+        {
+            _report = report;
+        }
+
+        public void Report(T value) => _report(value);
     }
 }
 
-internal sealed class FakeRecycleBinService(FakeFileLinkPlatform platform) : IRecycleBinService
+internal sealed class FakeRecycleBinService : IRecycleBinService
 {
+    private readonly FakeFileLinkPlatform _platform;
+
+    public FakeRecycleBinService(FakeFileLinkPlatform platform)
+    {
+        _platform = platform;
+    }
+
     public bool ThrowBeforeRemoval { get; set; }
 
     public bool ThrowAfterRemoval { get; set; }
@@ -686,7 +700,7 @@ internal sealed class FakeRecycleBinService(FakeFileLinkPlatform platform) : IRe
             throw new IOException("Recycle failed before commit.");
         }
 
-        platform.RemoveForRecycle(path, expectedIdentity);
+        _platform.RemoveForRecycle(path, expectedIdentity);
         if (ThrowAfterRemoval)
         {
             throw new IOException("Recycle reported an error after commit.");
@@ -696,7 +710,7 @@ internal sealed class FakeRecycleBinService(FakeFileLinkPlatform platform) : IRe
     }
 }
 
-internal sealed class FakeFileLinkPlatform : IFileLinkPlatform
+internal sealed partial class FakeFileLinkPlatform : IFileLinkPlatform
 {
     private readonly Dictionary<string, Entry> _entries = new(StringComparer.OrdinalIgnoreCase);
     private int _nextIdentity = 500;
@@ -842,7 +856,7 @@ internal sealed class FakeFileLinkPlatform : IFileLinkPlatform
         {
             _entries[createdPath] = createdEntry with
             {
-                Info = createdEntry.Info with { Identity = Identity(902, 7) },
+                Info = createdEntry.Info with { Identity = Identity(902, 7) }
             };
         }
 
@@ -916,7 +930,7 @@ internal sealed class FakeFileLinkPlatform : IFileLinkPlatform
             {
                 Identity = Identity((ulong)Interlocked.Increment(ref _nextIdentity), survivor.Info.Identity.VolumeSerialNumber),
                 Attributes = FileAttributes.ReparsePoint,
-                LinkCount = 1,
+                LinkCount = 1
             },
             survivor.Security,
             survivor.Content,
@@ -1063,8 +1077,8 @@ internal sealed class FakeFileLinkPlatform : IFileLinkPlatform
             {
                 Identity = entry.Info.Identity with { VolumeSerialNumber = serial },
                 IsLocal = isLocal,
-                FileSystemName = fileSystem,
-            },
+                FileSystemName = fileSystem
+            }
         };
     }
 
@@ -1124,15 +1138,22 @@ internal sealed class FakeFileLinkPlatform : IFileLinkPlatform
         public bool StreamsError { get; init; }
     }
 
-    private sealed class FakeHandle(string path, Entry entry, bool deleteAccess) : IFileLinkHandle
+    private sealed partial class FakeHandle : IFileLinkHandle
     {
+        public FakeHandle(string path, Entry entry, bool deleteAccess)
+        {
+            Path = path;
+            Entry = entry;
+            DeleteAccess = deleteAccess;
+        }
+
         public bool IsDisposed { get; private set; }
 
-        public string Path { get; set; } = path;
+        public string Path { get; set; }
 
-        public Entry Entry { get; } = entry;
+        public Entry Entry { get; }
 
-        public bool DeleteAccess { get; } = deleteAccess;
+        public bool DeleteAccess { get; }
 
         public void Dispose()
         {

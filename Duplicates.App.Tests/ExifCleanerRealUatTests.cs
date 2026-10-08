@@ -8,9 +8,10 @@ using Windows.Storage.Streams;
 
 namespace Duplicates.App.Tests;
 
-public sealed class ExifCleanerRealUatTests : IDisposable
+public sealed partial class ExifCleanerRealUatTests : IDisposable
 {
     private const string UatCategory = "Task17RealUat";
+    private static readonly string[] IptcKeywords = ["alpha"];
 
     private readonly ITestOutputHelper _output;
     private readonly string _root = Path.Combine(
@@ -182,7 +183,7 @@ public sealed class ExifCleanerRealUatTests : IDisposable
             new BitmapPropertySet
             {
                 ["/app13/irb/8bimiptc/iptc/keywords"] =
-                    new BitmapTypedValue(new[] { "alpha" }, PropertyType.StringArray),
+                    new BitmapTypedValue(IptcKeywords, PropertyType.StringArray),
             });
         byte[] sourceHash = await HashFileAsync(source);
         var service = new ExifCleanerService(
@@ -283,7 +284,7 @@ public sealed class ExifCleanerRealUatTests : IDisposable
         else
         {
             properties["/ifd/iptc/keywords"] =
-                new BitmapTypedValue(new[] { "alpha" }, PropertyType.StringArray);
+                new BitmapTypedValue(IptcKeywords, PropertyType.StringArray);
             requiredQueries.Add("/ifd/iptc");
         }
 
@@ -341,7 +342,7 @@ public sealed class ExifCleanerRealUatTests : IDisposable
             255, 0, 0, 255,
             255, 255, 255, 255,
             32, 64, 128, 255,
-            128, 64, 32, 255,
+            128, 64, 32, 255
         ];
         encoder.SetPixelData(
             BitmapPixelFormat.Bgra8,
@@ -529,14 +530,21 @@ public sealed class ExifCleanerRealUatTests : IDisposable
         WicContainerKind Container,
         IReadOnlyList<string> RequiredQueries);
 
-    private sealed class InlineProgress(Action<double>? callback = null) : IProgress<double>
+    private sealed class InlineProgress : IProgress<double>
     {
+        private readonly Action<double>? _callback;
+
+        public InlineProgress(Action<double>? callback = null)
+        {
+            _callback = callback;
+        }
+
         public List<double> Values { get; } = [];
 
         public void Report(double value)
         {
             Values.Add(value);
-            callback?.Invoke(value);
+            _callback?.Invoke(value);
         }
     }
 

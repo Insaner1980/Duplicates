@@ -37,7 +37,7 @@ public sealed partial class VideoOptimizerViewModel : ObservableObject
             fileActionService,
             operationCoordinator,
             static (scope, cancellationToken) =>
-                new FileInventoryBuilder().Build(scope, progress: null, cancellationToken),
+                FileInventoryBuilder.Build(scope, progress: null, cancellationToken),
             IsCurrentOrdinarySnapshot)
     {
     }
@@ -60,11 +60,16 @@ public sealed partial class VideoOptimizerViewModel : ObservableObject
         _progressFactory = progressFactory ?? (static callback => new Progress<double>(callback));
         PathScope.PropertyChanged += PathScopeChanged;
         _operationCoordinator.ActiveOperationChanged += OperationChanged;
+        Queue.CollectionChanged += (_, _) => OnPropertyChanged(nameof(QueueVisibility));
     }
 
     public PathScopeViewModel PathScope { get; }
 
     public ObservableCollection<VideoOptimizationQueueItemViewModel> Queue { get; } = [];
+
+    public Visibility ProgressVisibility => IsOptimizing ? Visibility.Visible : Visibility.Collapsed;
+
+    public Visibility QueueVisibility => Queue.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
 
     public bool CanStartOptimization =>
         !IsOptimizing &&
@@ -78,7 +83,20 @@ public sealed partial class VideoOptimizerViewModel : ObservableObject
     public bool IsStatusOpen => !string.IsNullOrWhiteSpace(StatusMessage);
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(PresetIndex))]
     public partial VideoOptimizationPreset Preset { get; set; } = VideoOptimizationPreset.Balanced;
+
+    public int PresetIndex
+    {
+        get => EnumSelection.ToIndex(Preset);
+        set
+        {
+            if (EnumSelection.TryFromIndex(value, out VideoOptimizationPreset preset))
+            {
+                Preset = preset;
+            }
+        }
+    }
 
     [ObservableProperty]
     public partial bool HardwareAccelerationEnabled { get; set; } = true;
@@ -89,6 +107,7 @@ public sealed partial class VideoOptimizerViewModel : ObservableObject
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(CanStartOptimization))]
     [NotifyPropertyChangedFor(nameof(CanEditQueue))]
+    [NotifyPropertyChangedFor(nameof(ProgressVisibility))]
     public partial bool IsOptimizing { get; set; }
 
     [ObservableProperty]
@@ -164,64 +183,8 @@ public sealed partial class VideoOptimizerViewModel : ObservableObject
                 return;
             }
 
-            bool recoveryRequired = false;
-            for (int index = 0; index < frozenQueue.Length; index++)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                int fileIndex = index;
-                VideoOptimizationQueueItemViewModel item = frozenQueue[fileIndex];
-                _activeFileIndex = fileIndex;
-                CurrentPath = item.SourcePath;
-                CurrentFileProgress = 0;
-                item.Progress = 0;
-
-                if (!_snapshotRechecker(item.InventoryFile))
-                {
-                    ApplyResult(item, new VideoOptimizationResult(
-                        VideoOptimizationOutcome.SourceChanged,
-                        item.SourcePath,
-                        null,
-                        null,
-                        null,
-                        null,
-                        0,
-                        "The source file changed since it was queued.",
-                        []));
-                    ProcessedCount = index + 1;
-                    ProgressValue = Math.Max(ProgressValue, ProcessedCount * 100d / frozenQueue.Length);
-                    continue;
-                }
-
-                var request = new VideoOptimizationRequest(
-                    item.SourcePath,
-                    item.SizeBytes,
-                    item.ModifiedUtc,
-                    item.DestinationPath,
-                    options);
-                IProgress<double> fileProgress = _progressFactory(value =>
-                    UpdateProgress(runGeneration, fileIndex, frozenQueue.Length, item, value));
-                VideoOptimizationResult result = await _optimizerService.OptimizeAsync(
-                    request,
-                    fileProgress,
-                    cancellationToken);
-                ApplyResult(item, result);
-                ProcessedCount = index + 1;
-                if (result.Outcome is VideoOptimizationOutcome.Succeeded or
-                    VideoOptimizationOutcome.KeptWithoutSaving)
-                {
-                    CurrentFileProgress = 100;
-                    item.Progress = 100;
-                }
-
-                ProgressValue = Math.Max(ProgressValue, ProcessedCount * 100d / frozenQueue.Length);
-                if (result.Outcome == VideoOptimizationOutcome.RecoveryRequired)
-                {
-                    recoveryRequired = true;
-                    StatusSeverity = InfoBarSeverity.Error;
-                    StatusMessage = "Optimization stopped because manual recovery is required.";
-                    break;
-                }
-            }
+            bool recoveryRequired = await ProcessVideoQueueAsync(
+                frozenQueue, options, runGeneration, cancellationToken);
 
             if (!recoveryRequired)
             {
@@ -273,6 +236,74 @@ public sealed partial class VideoOptimizerViewModel : ObservableObject
         }
     }
 
+    private async Task<bool> ProcessVideoQueueAsync(
+        VideoOptimizationQueueItemViewModel[] frozenQueue,
+        VideoOptimizationOptions options,
+        long runGeneration,
+        CancellationToken cancellationToken)
+    {
+        bool recoveryRequired = false;
+        for (int index = 0; index < frozenQueue.Length; index++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            int fileIndex = index;
+            VideoOptimizationQueueItemViewModel item = frozenQueue[fileIndex];
+            _activeFileIndex = fileIndex;
+            CurrentPath = item.SourcePath;
+            CurrentFileProgress = 0;
+            item.Progress = 0;
+
+            if (!_snapshotRechecker(item.InventoryFile))
+            {
+                ApplyResult(item, new VideoOptimizationResult(
+                    VideoOptimizationOutcome.SourceChanged,
+                    item.SourcePath,
+                    null,
+                    null,
+                    null,
+                    null,
+                    0,
+                    "The source file changed since it was queued.",
+                    []));
+                ProcessedCount = index + 1;
+                ProgressValue = Math.Max(ProgressValue, ProcessedCount * 100d / frozenQueue.Length);
+                continue;
+            }
+
+            var request = new VideoOptimizationRequest(
+                item.SourcePath,
+                item.SizeBytes,
+                item.ModifiedUtc,
+                item.DestinationPath,
+                options);
+            IProgress<double> fileProgress = _progressFactory(value =>
+                UpdateProgress(runGeneration, fileIndex, frozenQueue.Length, item, value));
+            VideoOptimizationResult result = await _optimizerService.OptimizeAsync(
+                request,
+                fileProgress,
+                cancellationToken);
+            ApplyResult(item, result);
+            ProcessedCount = index + 1;
+            if (result.Outcome is VideoOptimizationOutcome.Succeeded or
+                VideoOptimizationOutcome.KeptWithoutSaving)
+            {
+                CurrentFileProgress = 100;
+                item.Progress = 100;
+            }
+
+            ProgressValue = Math.Max(ProgressValue, ProcessedCount * 100d / frozenQueue.Length);
+            if (result.Outcome == VideoOptimizationOutcome.RecoveryRequired)
+            {
+                recoveryRequired = true;
+                StatusSeverity = InfoBarSeverity.Error;
+                StatusMessage = "Optimization stopped because manual recovery is required.";
+                break;
+            }
+        }
+
+        return recoveryRequired;
+    }
+
     [RelayCommand]
     private void CancelOptimization() => _optimizationCancellation?.Cancel();
 
@@ -290,7 +321,8 @@ public sealed partial class VideoOptimizerViewModel : ObservableObject
         try
         {
             FileInventory inventory = await Task.Run(
-                () => _inventoryBuilder(scope, CancellationToken.None));
+                () => _inventoryBuilder(scope, CancellationToken.None),
+                CancellationToken.None);
             if (generation != Volatile.Read(ref _queueRefreshGeneration) || IsOptimizing)
             {
                 return;
@@ -376,12 +408,13 @@ public sealed partial class VideoOptimizerViewModel : ObservableObject
         }
     }
 
-    private static string ReserveDestination(string sourcePath, ISet<string> reserved)
+    private static string ReserveDestination(string sourcePath, HashSet<string> reserved)
     {
         string directory = Path.GetDirectoryName(sourcePath) ??
             throw new InvalidDataException("The video path has no parent directory.");
         string stem = Path.GetFileNameWithoutExtension(sourcePath);
-        for (int suffix = 1; ; suffix++)
+        int suffix = 1;
+        while (true)
         {
             string name = suffix == 1
                 ? $"{stem}.optimized.mp4"
@@ -392,6 +425,8 @@ public sealed partial class VideoOptimizerViewModel : ObservableObject
                 reserved.Add(candidate);
                 return candidate;
             }
+
+            suffix++;
         }
     }
 

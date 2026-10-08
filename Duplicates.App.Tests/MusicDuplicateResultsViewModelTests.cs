@@ -8,7 +8,7 @@ using Duplicates.ViewModels;
 
 namespace Duplicates.App.Tests;
 
-public sealed class MusicDuplicateResultsViewModelTests : IDisposable
+public sealed partial class MusicDuplicateResultsViewModelTests : IDisposable
 {
     private readonly string _root = Path.Combine(
         Path.GetTempPath(),
@@ -290,7 +290,7 @@ public sealed class MusicDuplicateResultsViewModelTests : IDisposable
         Assert.Equal(0, viewModel.SelectedItemCount);
     }
 
-    private AnalysisResultsViewModel NewViewModel(
+    private static AnalysisResultsViewModel NewViewModel(
         AnalysisSessionStore store,
         IFileActionService fileActions,
         IAnalysisService analysisService,
@@ -351,7 +351,7 @@ public sealed class MusicDuplicateResultsViewModelTests : IDisposable
     private static MusicDuplicateToolOptions Options() => new(TimeSpan.FromSeconds(2));
 
     private static IReadOnlyList<SimilarityGroup> Regroup(IReadOnlyList<SimilarityItem> items) =>
-        new MusicDuplicateAnalyzer(new FakeMusicMetadataProvider()).Regroup(
+        MusicDuplicateAnalyzer.Regroup(
             items,
             new MusicDuplicateOptions(TimeSpan.FromSeconds(2)));
 
@@ -375,7 +375,7 @@ public sealed class MusicDuplicateResultsViewModelTests : IDisposable
         public Task<AnalysisResult> RunAsync(
             ToolKind tool,
             AnalysisScope scope,
-            ToolOptions toolOptions,
+            IToolOptions toolOptions,
             IProgress<AnalysisProgress>? progress,
             CancellationToken cancellationToken) => throw new NotSupportedException();
 
@@ -390,7 +390,7 @@ public sealed class MusicDuplicateResultsViewModelTests : IDisposable
 
         public IReadOnlyList<SimilarityGroup> RegroupSimilarityItems(
             ToolKind tool,
-            ToolOptions options,
+            IToolOptions options,
             IReadOnlyList<SimilarityItem> items)
         {
             if (tool != ToolKind.MusicDuplicates || options is not MusicDuplicateToolOptions musicOptions)
@@ -398,7 +398,7 @@ public sealed class MusicDuplicateResultsViewModelTests : IDisposable
                 throw new NotSupportedException();
             }
 
-            return new MusicDuplicateAnalyzer(new FakeMusicMetadataProvider()).Regroup(
+            return MusicDuplicateAnalyzer.Regroup(
                 items,
                 new MusicDuplicateOptions(musicOptions.MaximumDurationDifference));
         }

@@ -54,56 +54,15 @@ public sealed class ExifCleanerService : IExifCleanerService
             return Result(ExifCleanOutcome.Failed, sourcePath, "The source path must be canonical.");
         }
 
-        IdentityTrackedFile source;
-        try
+        var preparation = await InspectSourceAsync(sourcePath, request, cancellationToken).ConfigureAwait(false);
+        if (preparation.Failure is not null)
         {
-            source = _transactions.Capture(sourcePath);
-        }
-        catch (Exception ex) when (IsOrdinaryFailure(ex))
-        {
-            return Result(ExifCleanOutcome.Failed, sourcePath, "The source image could not be opened.");
+            return preparation.Failure;
         }
 
-        if (!MatchesRequest(source, request))
-        {
-            return Result(ExifCleanOutcome.SourceChanged, sourcePath, "The source image changed since it was queued.");
-        }
-
-        if (!IsOrdinaryFile(source))
-        {
-            return Result(ExifCleanOutcome.UnsupportedFormat, sourcePath, "Only ordinary non-link image files are supported.");
-        }
-
-        DetectedFileType? detected;
-        try
-        {
-            detected = await FileSignatureDetector.DetectFileAsync(sourcePath, cancellationToken)
-                .ConfigureAwait(false);
-        }
-        catch (Exception ex) when (IsOrdinaryFailure(ex))
-        {
-            return Result(ExifCleanOutcome.Failed, sourcePath, "The source image could not be read.");
-        }
-
-        if (!TryGetContainer(detected, Path.GetExtension(sourcePath), out WicContainerKind container))
-        {
-            return Result(ExifCleanOutcome.UnsupportedFormat, sourcePath, "Only content-detected JPEG and single-frame TIFF images are supported.");
-        }
-
-        WicImageInspection sourceInspection;
-        try
-        {
-            sourceInspection = _metadataBackend.Inspect(sourcePath);
-        }
-        catch (Exception ex) when (IsOrdinaryFailure(ex))
-        {
-            return Result(ExifCleanOutcome.Failed, sourcePath, "The source image metadata could not be inspected.");
-        }
-
-        if (sourceInspection.Container != container || sourceInspection.RenderState.FrameCount != 1)
-        {
-            return Result(ExifCleanOutcome.UnsupportedFormat, sourcePath, "Only content-detected JPEG and single-frame TIFF images are supported.");
-        }
+        IdentityTrackedFile source = preparation.Source!;
+        WicImageInspection sourceInspection = preparation.Inspection!;
+        WicContainerKind container = sourceInspection.Container;
 
         string finalPath;
         string tempPath;
@@ -131,8 +90,7 @@ public sealed class ExifCleanerService : IExifCleanerService
                 cancellationToken).ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
 
-            IdentityTrackedFile currentSource = _transactions.Capture(sourcePath);
-            if (currentSource.Identity != source.Identity || !MatchesRequest(currentSource, request))
+            if (!SourceStillMatches(sourcePath, source, request))
             {
                 return CleanupOrRecovery(
                     ExifCleanOutcome.SourceChanged,
@@ -142,47 +100,15 @@ public sealed class ExifCleanerService : IExifCleanerService
             }
 
             IReadOnlyList<string> selectedQueries = ExifMetadataPolicy.SelectedQueries(container, request.Options);
-            try
+            ExifCleanResult? metadataFailure = RemoveAndVerifyMetadata(
+                artifact, sourcePath, container, sourceInspection, selectedQueries, progress);
+            if (metadataFailure is not null)
             {
-                using IDisposable mutationGuard = _transactions.GuardOwnedPath(artifact);
-                _metadataBackend.RemoveMetadata(artifact.Path, container, selectedQueries);
-            }
-            catch (WicMetadataLayoutException)
-            {
-                return CleanupOrRecovery(
-                    ExifCleanOutcome.UnsupportedMetadataLayout,
-                    sourcePath,
-                    "The requested metadata cannot be removed safely from this image layout.",
-                    artifact);
-            }
-            progress?.Report(0.65);
-
-            WicImageInspection tempInspection;
-            try
-            {
-                tempInspection = _metadataBackend.Inspect(artifact.Path);
-            }
-            catch (Exception ex) when (IsOrdinaryFailure(ex))
-            {
-                return CleanupOrRecovery(
-                    ExifCleanOutcome.VerificationFailed,
-                    sourcePath,
-                    "The cleaned image could not be reopened for verification.",
-                    artifact);
-            }
-
-            if (!IsVerified(sourceInspection, tempInspection, selectedQueries))
-            {
-                return CleanupOrRecovery(
-                    ExifCleanOutcome.VerificationFailed,
-                    sourcePath,
-                    "The cleaned image did not pass verification.",
-                    artifact);
+                return metadataFailure;
             }
 
             cancellationToken.ThrowIfCancellationRequested();
-            currentSource = _transactions.Capture(sourcePath);
-            if (currentSource.Identity != source.Identity || !MatchesRequest(currentSource, request))
+            if (!SourceStillMatches(sourcePath, source, request))
             {
                 return CleanupOrRecovery(
                     ExifCleanOutcome.SourceChanged,
@@ -204,95 +130,14 @@ public sealed class ExifCleanerService : IExifCleanerService
                     cancellationToken).ConfigureAwait(false);
             }
 
-            if (_transactions.EntryExistsCaseInsensitive(finalPath))
-            {
-                return CleanupOrRecovery(
-                    ExifCleanOutcome.DestinationCollision,
-                    sourcePath,
-                    "The selected output path is no longer available.",
-                    artifact);
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-            IdentityMoveResult publication;
-            try
-            {
-                using IDisposable sourceGuard = _transactions.GuardSourceSnapshot(source);
-                publication = MoveWithResolution(artifact, finalPath);
-            }
-            catch (IdentitySourceChangedException)
-            {
-                return CleanupOrRecovery(
-                    ExifCleanOutcome.SourceChanged,
-                    sourcePath,
-                    "The source image changed before publication.",
-                    artifact);
-            }
-
-            if (publication.CommitState == IdentityMoveCommitState.NotCommitted)
-            {
-                return CleanupOrRecovery(
-                    publication.DestinationOccupied
-                        ? ExifCleanOutcome.DestinationCollision
-                        : ExifCleanOutcome.Failed,
-                    sourcePath,
-                    publication.DestinationOccupied
-                        ? "The selected output path is no longer available."
-                        : "The cleaned image could not be published.",
-                    artifact);
-            }
-
-            if (publication.CommitState == IdentityMoveCommitState.Indeterminate)
-            {
-                return RecoveryRequired(
-                    sourcePath,
-                    "The cleaned image publication could not be resolved safely.",
-                    [artifact.Path, finalPath]);
-            }
-
-            artifact = publication.File;
-            WicImageInspection finalInspection;
-            IdentityTrackedFile verifiedArtifact;
-            try
-            {
-                using IDisposable verificationGuard = _transactions.GuardOwnedPath(artifact);
-                finalInspection = _metadataBackend.Inspect(artifact.Path);
-                verifiedArtifact = _transactions.Capture(artifact.Path);
-            }
-            catch (Exception ex) when (IsOrdinaryFailure(ex))
-            {
-                return CleanupOrRecovery(
-                    ExifCleanOutcome.VerificationFailed,
-                    sourcePath,
-                    "The published image could not be reopened for verification.",
-                    artifact);
-            }
-
-            if (verifiedArtifact.Identity != artifact.Identity)
-            {
-                return CleanupOrRecovery(
-                    ExifCleanOutcome.VerificationFailed,
-                    sourcePath,
-                    "The published image identity changed during verification.",
-                    artifact);
-            }
-
-            if (!IsVerified(sourceInspection, finalInspection, selectedQueries))
-            {
-                return CleanupOrRecovery(
-                    ExifCleanOutcome.VerificationFailed,
-                    sourcePath,
-                    "The published image did not pass verification.",
-                    artifact);
-            }
-
-            progress?.Report(1);
-            return new ExifCleanResult(
-                ExifCleanOutcome.Succeeded,
-                sourcePath,
+            return PublishSibling(
+                source,
+                ref artifact,
                 finalPath,
-                "Image cleaned.",
-                []);
+                sourceInspection,
+                selectedQueries,
+                progress,
+                cancellationToken);
         }
         catch (IdentityOwnedCreationRecoveryException exception)
         {
@@ -303,31 +148,246 @@ public sealed class ExifCleanerService : IExifCleanerService
         }
         catch (OperationCanceledException)
         {
-            if (artifact is not null)
+            ExifCleanResult? recovery = CleanupAfterCancellation(artifact, sourcePath);
+            if (recovery is not null)
             {
-                ExifCleanResult cleanup = CleanupOrRecovery(
-                    ExifCleanOutcome.Failed,
-                    sourcePath,
-                    "Image cleaning was cancelled.",
-                    artifact);
-                if (cleanup.Outcome == ExifCleanOutcome.RecoveryRequired)
-                {
-                    return cleanup;
-                }
+                return recovery;
             }
 
             throw;
         }
         catch (Exception ex) when (IsOrdinaryFailure(ex))
         {
-            return artifact is null
-                ? Result(ExifCleanOutcome.Failed, sourcePath, "The image could not be cleaned.")
-                : CleanupOrRecovery(
-                ExifCleanOutcome.Failed,
+            return FailedCleaning(sourcePath, artifact);
+        }
+    }
+
+    private ExifCleanResult FailedCleaning(string sourcePath, IdentityTrackedFile? artifact) =>
+        artifact is null
+            ? Result(ExifCleanOutcome.Failed, sourcePath, "The image could not be cleaned.")
+            : CleanupOrRecovery(ExifCleanOutcome.Failed, sourcePath, "The image could not be cleaned.", artifact);
+
+    private ExifCleanResult? RemoveAndVerifyMetadata(
+        IdentityTrackedFile artifact,
+        string sourcePath,
+        WicContainerKind container,
+        WicImageInspection sourceInspection,
+        IReadOnlyList<string> selectedQueries,
+        IProgress<double>? progress)
+    {
+        try
+        {
+            using IDisposable mutationGuard = _transactions.GuardOwnedPath(artifact);
+            _metadataBackend.RemoveMetadata(artifact.Path, container, selectedQueries);
+        }
+        catch (WicMetadataLayoutException)
+        {
+            return CleanupOrRecovery(
+                ExifCleanOutcome.UnsupportedMetadataLayout,
                 sourcePath,
-                "The image could not be cleaned.",
+                "The requested metadata cannot be removed safely from this image layout.",
                 artifact);
         }
+        progress?.Report(0.65);
+
+        WicImageInspection tempInspection;
+        try
+        {
+            tempInspection = _metadataBackend.Inspect(artifact.Path);
+        }
+        catch (Exception ex) when (IsOrdinaryFailure(ex))
+        {
+            return CleanupOrRecovery(
+                ExifCleanOutcome.VerificationFailed,
+                sourcePath,
+                "The cleaned image could not be reopened for verification.",
+                artifact);
+        }
+
+        if (!IsVerified(sourceInspection, tempInspection, selectedQueries))
+        {
+            return CleanupOrRecovery(
+                ExifCleanOutcome.VerificationFailed,
+                sourcePath,
+                "The cleaned image did not pass verification.",
+                artifact);
+        }
+
+        return null;
+    }
+
+    private ExifCleanResult? CleanupAfterCancellation(IdentityTrackedFile? artifact, string sourcePath)
+    {
+        if (artifact is null)
+        {
+            return null;
+        }
+
+        ExifCleanResult cleanup = CleanupOrRecovery(
+            ExifCleanOutcome.Failed, sourcePath, "Image cleaning was cancelled.", artifact);
+        return cleanup.Outcome == ExifCleanOutcome.RecoveryRequired ? cleanup : null;
+    }
+
+    private async Task<(IdentityTrackedFile? Source, WicImageInspection? Inspection, ExifCleanResult? Failure)> InspectSourceAsync(
+        string sourcePath,
+        ExifCleanRequest request,
+        CancellationToken cancellationToken)
+    {
+        IdentityTrackedFile source;
+        try
+        {
+            source = _transactions.Capture(sourcePath);
+        }
+        catch (Exception ex) when (IsOrdinaryFailure(ex))
+        {
+            return (null, null, Result(ExifCleanOutcome.Failed, sourcePath, "The source image could not be opened."));
+        }
+
+        if (!MatchesRequest(source, request))
+        {
+            return (null, null, Result(ExifCleanOutcome.SourceChanged, sourcePath, "The source image changed since it was queued."));
+        }
+
+        if (!IsOrdinaryFile(source))
+        {
+            return (null, null, Result(ExifCleanOutcome.UnsupportedFormat, sourcePath, "Only ordinary non-link image files are supported."));
+        }
+
+        DetectedFileType? detected;
+        try
+        {
+            detected = await FileSignatureDetector.DetectFileAsync(sourcePath, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (IsOrdinaryFailure(ex))
+        {
+            return (null, null, Result(ExifCleanOutcome.Failed, sourcePath, "The source image could not be read."));
+        }
+
+        if (!TryGetContainer(detected, Path.GetExtension(sourcePath), out WicContainerKind container))
+        {
+            return (null, null, Result(ExifCleanOutcome.UnsupportedFormat, sourcePath, "Only content-detected JPEG and single-frame TIFF images are supported."));
+        }
+
+        WicImageInspection sourceInspection;
+        try
+        {
+            sourceInspection = _metadataBackend.Inspect(sourcePath);
+        }
+        catch (Exception ex) when (IsOrdinaryFailure(ex))
+        {
+            return (null, null, Result(ExifCleanOutcome.Failed, sourcePath, "The source image metadata could not be inspected."));
+        }
+
+        if (sourceInspection.Container != container || sourceInspection.RenderState.FrameCount != 1)
+        {
+            return (null, null, Result(ExifCleanOutcome.UnsupportedFormat, sourcePath, "Only content-detected JPEG and single-frame TIFF images are supported."));
+        }
+
+        return (source, sourceInspection, null);
+    }
+
+    private ExifCleanResult PublishSibling(
+        IdentityTrackedFile source,
+        ref IdentityTrackedFile? artifact,
+        string finalPath,
+        WicImageInspection sourceInspection,
+        IReadOnlyList<string> selectedQueries,
+        IProgress<double>? progress,
+        CancellationToken cancellationToken)
+    {
+        string sourcePath = source.Path;
+        IdentityTrackedFile cleaned = artifact!;
+        if (_transactions.EntryExistsCaseInsensitive(finalPath))
+        {
+            return CleanupOrRecovery(
+                ExifCleanOutcome.DestinationCollision,
+                sourcePath,
+                "The selected output path is no longer available.",
+                cleaned);
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        IdentityMoveResult publication;
+        try
+        {
+            using IDisposable sourceGuard = _transactions.GuardSourceSnapshot(source);
+            publication = MoveWithResolution(cleaned, finalPath);
+        }
+        catch (IdentitySourceChangedException)
+        {
+            return CleanupOrRecovery(
+                ExifCleanOutcome.SourceChanged,
+                sourcePath,
+                "The source image changed before publication.",
+                cleaned);
+        }
+
+        if (publication.CommitState == IdentityMoveCommitState.NotCommitted)
+        {
+            return CleanupOrRecovery(
+                publication.DestinationOccupied
+                    ? ExifCleanOutcome.DestinationCollision
+                    : ExifCleanOutcome.Failed,
+                sourcePath,
+                publication.DestinationOccupied
+                    ? "The selected output path is no longer available."
+                    : "The cleaned image could not be published.",
+                cleaned);
+        }
+
+        if (publication.CommitState == IdentityMoveCommitState.Indeterminate)
+        {
+            return RecoveryRequired(
+                sourcePath,
+                "The cleaned image publication could not be resolved safely.",
+                [cleaned.Path, finalPath]);
+        }
+
+        cleaned = publication.File;
+        artifact = cleaned;
+        WicImageInspection finalInspection;
+        IdentityTrackedFile verifiedArtifact;
+        try
+        {
+            using IDisposable verificationGuard = _transactions.GuardOwnedPath(cleaned);
+            finalInspection = _metadataBackend.Inspect(cleaned.Path);
+            verifiedArtifact = _transactions.Capture(cleaned.Path);
+        }
+        catch (Exception ex) when (IsOrdinaryFailure(ex))
+        {
+            return CleanupOrRecovery(
+                ExifCleanOutcome.VerificationFailed,
+                sourcePath,
+                "The published image could not be reopened for verification.",
+                cleaned);
+        }
+
+        if (verifiedArtifact.Identity != cleaned.Identity)
+        {
+            return CleanupOrRecovery(
+                ExifCleanOutcome.VerificationFailed,
+                sourcePath,
+                "The published image identity changed during verification.",
+                cleaned);
+        }
+
+        if (!IsVerified(sourceInspection, finalInspection, selectedQueries))
+        {
+            return CleanupOrRecovery(
+                ExifCleanOutcome.VerificationFailed,
+                sourcePath,
+                "The published image did not pass verification.",
+                cleaned);
+        }
+
+        progress?.Report(1);
+        return new ExifCleanResult(
+            ExifCleanOutcome.Succeeded,
+            sourcePath,
+            finalPath,
+            "Image cleaned.",
+            []);
     }
 
     private async Task<ExifCleanResult> ReplaceOriginalAsync(
@@ -541,7 +601,6 @@ public sealed class ExifCleanerService : IExifCleanerService
                         [sourcePath, rollbackPath, cleaned.Path]);
                 }
 
-                rollback = restoreMove.File;
                 sourceProbe = _transactions.Probe(sourcePath);
             }
 
@@ -644,6 +703,12 @@ public sealed class ExifCleanerService : IExifCleanerService
         file.Length == request.ExpectedLength &&
         file.ModifiedUtc == request.ExpectedModifiedUtc;
 
+    private bool SourceStillMatches(string sourcePath, IdentityTrackedFile source, ExifCleanRequest request)
+    {
+        IdentityTrackedFile current = _transactions.Capture(sourcePath);
+        return current.Identity == source.Identity && MatchesRequest(current, request);
+    }
+
     private static bool IsVerified(
         WicImageInspection source,
         WicImageInspection output,
@@ -679,6 +744,7 @@ public sealed class ExifCleanerService : IExifCleanerService
         return true;
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Major Code Smell", "S1244", Justification = "DPI metadata must be preserved exactly; accepting a tolerance would permit a changed render state.")]
     private static bool RenderStateEquals(WicRenderState left, WicRenderState right) =>
         left.FrameCount == right.FrameCount &&
         left.Width == right.Width &&
@@ -813,12 +879,23 @@ public sealed class ExifCleanerService : IExifCleanerService
         exception is IOException or UnauthorizedAccessException or ArgumentException or
             NotSupportedException or PathTooLongException or System.Runtime.InteropServices.COMException;
 
-    private sealed class MappedProgress(
+    private sealed class MappedProgress : IProgress<double>
+    {
+        private readonly IProgress<double> _inner;
+        private readonly double _minimum;
+        private readonly double _maximum;
+
+        public MappedProgress(
         IProgress<double> inner,
         double minimum,
-        double maximum) : IProgress<double>
-    {
+        double maximum)
+        {
+            _inner = inner;
+            _minimum = minimum;
+            _maximum = maximum;
+        }
+
         public void Report(double value) =>
-            inner.Report(minimum + (maximum - minimum) * Math.Clamp(value, 0, 1));
+            _inner.Report(_minimum + (_maximum - _minimum) * Math.Clamp(value, 0, 1));
     }
 }

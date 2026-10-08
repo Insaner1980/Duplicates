@@ -202,18 +202,17 @@ public sealed class AnalysisResultsViewModelTests
             NewResult(
                 [
                     NewFinding(@"C:\visible\large.iso", 100),
-                    NewFinding(@"C:\hidden\archive.zip", 250),
+                    NewFinding(@"C:\hidden\archive.zip", 250)
                 ]));
         PathFindingViewModel hidden = viewModel.Findings.Single(item => item.FullPath == @"C:\hidden\archive.zip");
         hidden.IsSelected = true;
 
         viewModel.SearchText = "visible";
 
-        Assert.Single(viewModel.Findings);
-        Assert.Equal(@"C:\visible\large.iso", viewModel.Findings[0].FullPath);
+        Assert.Equal(@"C:\visible\large.iso", Assert.Single(viewModel.Findings).FullPath);
         Assert.Equal(1, viewModel.SelectedItemCount);
         Assert.Equal(250, viewModel.SelectedBytes);
-        Assert.Contains(viewModel.SelectedFindings, item => item.FullPath == hidden.FullPath);
+        Assert.Contains(viewModel.GetSelectedFindings(), item => item.FullPath == hidden.FullPath);
 
         viewModel.SearchText = string.Empty;
         Assert.Equal(2, viewModel.Findings.Count);
@@ -231,11 +230,11 @@ public sealed class AnalysisResultsViewModelTests
             NewResult(
                 [
                     NewFinding(@"C:\scan\small.bin", 10),
-                    NewFinding(@"C:\scan\large.bin", 200),
+                    NewFinding(@"C:\scan\large.bin", 200)
                 ],
                 [
                     NewGroup("b", @"C:\scan\b.jpg", @"C:\scan\b-copy.jpg", 20),
-                    NewGroup("a", @"C:\scan\a.jpg", @"C:\scan\a-copy.jpg", 300),
+                    NewGroup("a", @"C:\scan\a.jpg", @"C:\scan\a-copy.jpg", 300)
                 ]));
         viewModel.Findings.Single(item => item.FullPath == @"C:\scan\small.bin").IsSelected = true;
 
@@ -261,7 +260,7 @@ public sealed class AnalysisResultsViewModelTests
             NewResult(
                 [
                     NewFinding(@"C:\scan\c.bin", 100, second),
-                    NewFinding(@"C:\scan\b.bin", 50, third),
+                    NewFinding(@"C:\scan\b.bin", 50, third)
                 ],
                 [NewGroup("a", @"C:\scan\a.jpg", @"C:\scan\a-copy.jpg", 90, second, 10)]));
 
@@ -269,7 +268,7 @@ public sealed class AnalysisResultsViewModelTests
         [
             (0, [@"C:\scan\a.jpg", @"C:\scan\b.bin", @"C:\scan\c.bin"]),
             (1, [@"C:\scan\a.jpg", @"C:\scan\c.bin", @"C:\scan\b.bin"]),
-            (2, [@"C:\scan\b.bin", @"C:\scan\a.jpg", @"C:\scan\c.bin"]),
+            (2, [@"C:\scan\b.bin", @"C:\scan\a.jpg", @"C:\scan\c.bin"])
         ];
 
         foreach ((int sortIndex, string[] expectedPaths) in cases)
@@ -296,7 +295,7 @@ public sealed class AnalysisResultsViewModelTests
         Assert.Empty(viewModel.Groups);
         Assert.Equal(1, viewModel.SelectedItemCount);
         Assert.Equal(75, viewModel.SelectedBytes);
-        Assert.Contains(viewModel.SelectedSimilarityItems, item => item.FullPath == selected.FullPath);
+        Assert.Contains(viewModel.GetSelectedSimilarityItems(), item => item.FullPath == selected.FullPath);
     }
 
     [Fact]
@@ -419,9 +418,9 @@ public sealed class AnalysisResultsViewModelTests
             nameof(AnalysisResultsViewModel.ExportAsync),
             [typeof(ResultExportFormat), typeof(string), typeof(CancellationToken), typeof(bool)]);
         Assert.NotNull(pickerExport);
-        await Assert.IsAssignableFrom<Task>(pickerExport.Invoke(
+        await Assert.IsType<Task>(pickerExport.Invoke(
             viewModel,
-            [ResultExportFormat.Csv, @"C:\exports\picked.csv", CancellationToken.None, true]));
+            [ResultExportFormat.Csv, @"C:\exports\picked.csv", CancellationToken.None, true]), exactMatch: false);
         Assert.True(exporter.OverwriteExisting);
     }
 
@@ -510,7 +509,7 @@ public sealed class AnalysisResultsViewModelTests
             Assert.Equal(2, summary.DeletedCount);
             Assert.Equal(
                 [reference.FullPath, candidate.FullPath],
-                Assert.IsAssignableFrom<IReadOnlyList<FileActionTarget>>(dispatched).Select(static target => target.FullPath));
+                Assert.IsType<IReadOnlyList<FileActionTarget>>(dispatched, exactMatch: false).Select(static target => target.FullPath));
             Assert.Empty(viewModel.Groups);
             Assert.Equal(2, analysis.RevalidatedPaths.Count);
         }
@@ -671,7 +670,7 @@ public sealed class AnalysisResultsViewModelTests
             var viewModel = new AnalysisResultsViewModel(store, fileActions, new FakeResultExportService());
             PathFinding finding = NewFinding(path, 100) with
             {
-                Metadata = new Dictionary<string, string> { ["MinimumSizeBytes"] = "1" },
+                Metadata = new Dictionary<string, string> { ["MinimumSizeBytes"] = "1" }
             };
             store.SetCompleted(
                 ToolKind.BigFiles,
@@ -689,7 +688,7 @@ public sealed class AnalysisResultsViewModelTests
             Assert.Equal(0, fileActions.DeleteCallCount);
             Assert.Same(selected, Assert.Single(viewModel.Findings));
             Assert.True(selected.IsSelected);
-            Assert.Contains(selected, viewModel.SelectedFindings);
+            Assert.Contains(selected, viewModel.GetSelectedFindings());
         }
         finally
         {
@@ -728,7 +727,7 @@ public sealed class AnalysisResultsViewModelTests
             Assert.Equal(0, fileActions.DeleteCallCount);
             Assert.Equal(2, viewModel.Findings.Count);
             Assert.All(viewModel.Findings, static finding => Assert.True(finding.IsSelected));
-            Assert.Equal(2, viewModel.SelectedFindings.Count);
+            Assert.Equal(2, viewModel.GetSelectedFindings().Count);
         }
         finally
         {
@@ -763,7 +762,7 @@ public sealed class AnalysisResultsViewModelTests
                 NewResult(
                 [
                     NewDirectoryFinding(shallow, depth: 1),
-                    NewDirectoryFinding(deep, depth: 2),
+                    NewDirectoryFinding(deep, depth: 2)
                 ]));
             foreach (PathFindingViewModel finding in viewModel.Findings)
             {
@@ -775,7 +774,7 @@ public sealed class AnalysisResultsViewModelTests
             Assert.Equal(
                 [
                     new FileActionTarget(deep, 0, FileActionTargetKind.Directory),
-                    new FileActionTarget(shallow, 0, FileActionTargetKind.Directory),
+                    new FileActionTarget(shallow, 0, FileActionTargetKind.Directory)
                 ],
                 requestedTargets);
             Assert.Equal(2, summary.DeletedCount);
@@ -908,7 +907,7 @@ public sealed class AnalysisResultsViewModelTests
                     NewFinding(changedName, 1),
                     NewFinding(fresh, 1),
                     NewFinding(active, 1),
-                    NewFinding(missing, 1),
+                    NewFinding(missing, 1)
                 ]));
             foreach (PathFindingViewModel finding in viewModel.Findings)
             {
@@ -967,7 +966,7 @@ public sealed class AnalysisResultsViewModelTests
                 [
                     NewFinding(success, 1),
                     NewFinding(serviceFailure, 1),
-                    NewFinding(localFailure, 1),
+                    NewFinding(localFailure, 1)
                 ]));
             foreach (PathFindingViewModel finding in viewModel.Findings)
             {
@@ -1154,7 +1153,7 @@ public sealed class AnalysisResultsViewModelTests
                     NewLinkFinding(lowerCaseMetadata, "file", "missing-lowercase"),
                     NewLinkFinding(wrongKind, "Directory", "missing-kind"),
                     NewLinkFinding(noLongerLink, "File", "missing-regular"),
-                    NewLinkFinding(changedClassification, "File", "missing-before-scan"),
+                    NewLinkFinding(changedClassification, "File", "missing-before-scan")
                 ]));
             foreach (PathFindingViewModel finding in viewModel.Findings)
             {
@@ -1387,7 +1386,7 @@ public sealed class AnalysisResultsViewModelTests
             await File.WriteAllBytesAsync(replacedName, [1], TestContext.Current.CancellationToken);
             PathFinding replacedNameFinding = NewBadNameFinding(replacedName) with
             {
-                Metadata = new Dictionary<string, string> { ["CurrentName"] = "different.txt" },
+                Metadata = new Dictionary<string, string> { ["CurrentName"] = "different.txt" }
             };
 
             string noLongerBad = Path.Combine(root, "good.txt");
@@ -1657,7 +1656,7 @@ public sealed class AnalysisResultsViewModelTests
                     ["CurrentExtension"] = ".txt",
                     ["ProperExtension"] = ".png",
                     ["DetectedType"] = "JPEG",
-                },
+                }
             };
 
             string nowAllowed = await WritePngAsync(Path.Combine(root, "already.png"));
@@ -1974,7 +1973,7 @@ public sealed class AnalysisResultsViewModelTests
                 [
                     NewFinding(first, 0),
                     NewFinding(failed, 0),
-                    NewFinding(unattempted, 0),
+                    NewFinding(unattempted, 0)
                 ]));
             foreach (PathFindingViewModel finding in viewModel.Findings)
             {
@@ -1987,7 +1986,7 @@ public sealed class AnalysisResultsViewModelTests
             Assert.DoesNotContain(viewModel.Findings, finding => finding.FullPath == first);
             Assert.Contains(viewModel.Findings, finding => finding.FullPath == failed && finding.IsSelected);
             Assert.Contains(viewModel.Findings, finding => finding.FullPath == unattempted && finding.IsSelected);
-            Assert.Equal(2, viewModel.SelectedFindings.Count);
+            Assert.Equal(2, viewModel.GetSelectedFindings().Count);
             Assert.Contains("cancelled", viewModel.ActionStatusMessage, StringComparison.OrdinalIgnoreCase);
             Assert.False(viewModel.IsActionRunning);
         }
@@ -2093,7 +2092,7 @@ public sealed class AnalysisResultsViewModelTests
                 "HeaderReadFailure",
                 detectedType: null,
                 validator: "Header");
-            Exception sourceFailure = Assert.IsAssignableFrom<Exception>(Activator.CreateInstance(exceptionType));
+            Exception sourceFailure = Assert.IsType<Exception>(Activator.CreateInstance(exceptionType), exactMatch: false);
             Func<string, CancellationToken, ValueTask<DetectedFileType?>> detectAsync = (_, _) =>
                 new(Task.FromException<DetectedFileType?>(sourceFailure));
             var probe = BrokenProbe(FileProbeStatus.Valid, null);
@@ -2241,7 +2240,7 @@ public sealed class AnalysisResultsViewModelTests
             Assert.Equal(0, fileActions.DeleteCallCount);
             Assert.Equal(3, summary.Failures.Count);
             Assert.All(summary.Failures, static failure => Assert.Equal("File changed since scan.", failure.Reason));
-            Assert.Equal(3, viewModel.SelectedFindings.Count);
+            Assert.Equal(3, viewModel.GetSelectedFindings().Count);
             Assert.Equal(3, viewModel.Findings.Count);
             Assert.Equal(2, probe.Calls.Count);
         }
@@ -2292,8 +2291,7 @@ public sealed class AnalysisResultsViewModelTests
 
             Assert.Equal(0, fileActions.DeleteCallCount);
             Assert.Equal("File changed since scan.", Assert.Single(summary.Failures).Reason);
-            Assert.Single(viewModel.Findings);
-            Assert.True(viewModel.Findings[0].IsSelected);
+            Assert.True(Assert.Single(viewModel.Findings).IsSelected);
         }
         finally
         {
@@ -2736,7 +2734,7 @@ public sealed class AnalysisResultsViewModelTests
         };
 
     private static SimilarityGroup NewVideoGroup(params SimilarityItem[] items) => Assert.Single(
-        new SimilarVideoAnalyzer(new FakeVideoSampleProvider()).Regroup(
+        SimilarVideoAnalyzer.Regroup(
             items,
             new SimilarVideoOptions(9)));
 
@@ -2835,7 +2833,7 @@ public sealed class AnalysisResultsViewModelTests
         public Task<AnalysisResult> RunAsync(
             ToolKind tool,
             AnalysisScope scope,
-            ToolOptions toolOptions,
+            IToolOptions toolOptions,
             IProgress<AnalysisProgress>? progress,
             CancellationToken cancellationToken) => throw new NotSupportedException();
 
@@ -2851,12 +2849,12 @@ public sealed class AnalysisResultsViewModelTests
 
         public IReadOnlyList<SimilarityGroup> RegroupSimilarityItems(
             ToolKind tool,
-            ToolOptions options,
+            IToolOptions options,
             IReadOnlyList<SimilarityItem> items)
         {
             Assert.Equal(ToolKind.SimilarVideos, tool);
             var videoOptions = Assert.IsType<SimilarVideoToolOptions>(options);
-            return new SimilarVideoAnalyzer(new FakeVideoSampleProvider()).Regroup(
+            return SimilarVideoAnalyzer.Regroup(
                 items,
                 new SimilarVideoOptions(videoOptions.MaximumMeanFrameDistance));
         }

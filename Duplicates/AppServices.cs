@@ -11,7 +11,6 @@ public sealed class AppServices
     public AppServices()
     {
         SettingsService = new SettingsService();
-        ThemeService = new ThemeService();
         ResultsStore = new ResultsStore();
         AnalysisSessionStore = new AnalysisSessionStore();
         MediaFingerprintCache = new MediaFingerprintCache();
@@ -65,8 +64,7 @@ public sealed class AppServices
             AnalysisSessionStore,
             FileActionService,
             ResultExportService,
-            FileSignatureDetector.DetectFileAsync,
-            FileFormatProbe,
+            (FileSignatureDetector.DetectFileAsync, FileFormatProbe),
             AnalysisService,
             MediaPreviewLoader,
             OperationCoordinator);
@@ -87,8 +85,6 @@ public sealed class AppServices
     }
 
     public ISettingsService SettingsService { get; }
-
-    public ThemeService ThemeService { get; }
 
     public ResultsStore ResultsStore { get; }
 

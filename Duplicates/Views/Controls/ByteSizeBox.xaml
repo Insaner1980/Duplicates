@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<UserControl
+    x:Class="Duplicates.Views.Controls.ByteSizeBox"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpacingSmall}">
+        <NumberBox
+            MinWidth="140"
+            AutomationProperties.Name="{x:Bind AccessibleName}"
+            Minimum="0"
+            PlaceholderText="{x:Bind PlaceholderText}"
+            SpinButtonPlacementMode="Compact"
+            ValidationMode="InvalidInputOverwritten"
+            Value="{Binding Amount, Mode=TwoWay}" />
+        <ComboBox
+            MinWidth="80"
+            AutomationProperties.Name="{x:Bind UnitAccessibleName}"
+            ItemsSource="{Binding Units}"
+            SelectedIndex="{Binding UnitIndex, Mode=TwoWay}" />
+    </StackPanel>
+</UserControl>

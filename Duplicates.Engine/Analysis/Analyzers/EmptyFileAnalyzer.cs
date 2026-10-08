@@ -2,9 +2,9 @@ using System.Diagnostics;
 
 namespace Duplicates.Engine.Analysis.Analyzers;
 
-public sealed class EmptyFileAnalyzer
+public static class EmptyFileAnalyzer
 {
-    public Task<AnalysisResult> AnalyzeAsync(
+    public static Task<AnalysisResult> AnalyzeAsync(
         FileInventory inventory,
         CancellationToken cancellationToken)
     {

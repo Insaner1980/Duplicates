@@ -76,355 +76,430 @@ internal sealed class VideoOptimizerService : IVideoOptimizerService
         }
 
         reporter.Report(2);
-        VideoMediaInfo? sourceMedia = null;
-        VideoMediaInfo? outputMedia = null;
-        IdentityTrackedFile? artifact = null;
-        bool publicationCommitted = false;
+        var state = new OptimizationState(request, source, sourcePath, destinationPath);
         try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            try
-            {
-                sourceMedia = await _probe.ProbeAsync(sourcePath, cancellationToken).ConfigureAwait(false);
-            }
-            catch (InvalidDataException)
-            {
-                return Result(
-                    VideoOptimizationOutcome.UnsupportedInput,
-                    sourcePath,
-                    detail: "The source video metadata or track layout is unsupported.");
-            }
-
-            using (_transactions.GuardSourceSnapshot(source))
-            {
-            }
-
-            reporter.Report(4);
-            VideoProfileBuildResult profileResult = VideoOptimizationProfilePolicy.Build(
-                sourceMedia,
-                request.Options);
-            if (profileResult.Profile is null)
-            {
-                return Result(
-                    profileResult.FailureOutcome ?? VideoOptimizationOutcome.InvalidProfile,
-                    sourcePath,
-                    sourceMedia: sourceMedia,
-                    detail: profileResult.Detail);
-            }
-
-            VideoTranscodeProfile profile = profileResult.Profile;
-            artifact = CreateUniqueTemp(destinationPath);
-            reporter.Report(5);
-
-            if (_transactions.EntryExistsCaseInsensitive(destinationPath))
-            {
-                return FinishAfterCleanup(
-                    VideoOptimizationOutcome.DestinationCollision,
-                    sourcePath,
-                    sourceMedia,
-                    null,
-                    null,
-                    0,
-                    "The reserved output path is already occupied.",
-                    artifact);
-            }
-
-            VideoTranscodeBackendResult backendResult;
-            using (_transactions.GuardSourceSnapshot(source))
-            using (_transactions.GuardOwnedPath(artifact))
-            {
-                var backendProgress = new InlineProgress(value => reporter.Report(5 + (Math.Clamp(value, 0, 100) * 0.85)));
-                backendResult = await _backend.TranscodeAsync(
-                    sourcePath,
-                    artifact.Path,
-                    profile,
-                    backendProgress,
-                    cancellationToken).ConfigureAwait(false);
-            }
-
-            if (backendResult.Outcome != VideoTranscodeBackendOutcome.Succeeded)
-            {
-                return FinishAfterCleanup(
-                    MapBackendOutcome(backendResult.Outcome),
-                    sourcePath,
-                    sourceMedia,
-                    null,
-                    null,
-                    0,
-                    DetailForBackendOutcome(backendResult.Outcome),
-                    artifact);
-            }
-
-            IdentityTrackedFile completedArtifact = _transactions.Capture(artifact.Path);
-            cancellationToken.ThrowIfCancellationRequested();
-            if (completedArtifact.Identity != artifact.Identity)
-            {
-                return Recovery(
-                    sourcePath,
-                    sourceMedia,
-                    null,
-                    "The temporary output identity changed after transcoding.",
-                    [artifact.Path]);
-            }
-
-            artifact = completedArtifact with { Identity = artifact.Identity };
-            bool outputVerified;
-            string verificationDetail;
-            try
-            {
-                using (_transactions.GuardSourceSnapshot(artifact))
-                {
-                    VideoMediaInfo candidate = await _probe.ProbeAsync(
-                        artifact.Path,
-                        cancellationToken).ConfigureAwait(false);
-                    outputVerified = TryVerifyOutput(sourceMedia, candidate, profile, out verificationDetail);
-                    outputMedia = outputVerified ? candidate : null;
-                }
-            }
-            catch (Exception exception) when (exception is not OperationCanceledException)
-            {
-                outputVerified = false;
-                verificationDetail = "The temporary output could not be verified safely.";
-            }
-
-            if (!outputVerified)
-            {
-                return FinishAfterCleanup(
-                    VideoOptimizationOutcome.VerificationFailed,
-                    sourcePath,
-                    sourceMedia,
-                    null,
-                    artifact.Length,
-                    0,
-                    verificationDetail,
-                    artifact);
-            }
-
-            reporter.Report(95);
-            try
-            {
-                using (_transactions.GuardSourceSnapshot(source))
-                {
-                }
-            }
-            catch (IdentitySourceChangedException)
-            {
-                return FinishAfterCleanup(
-                    VideoOptimizationOutcome.SourceChanged,
-                    sourcePath,
-                    sourceMedia,
-                    outputMedia,
-                    artifact.Length,
-                    0,
-                    "The source file changed before the output could be published.",
-                    artifact);
-            }
-
-            reporter.Report(97);
-            long savedBytes = request.ExpectedLength - artifact.Length;
-            bool outputIsNotSmaller = artifact.Length >= request.ExpectedLength;
-            if (outputIsNotSmaller && !request.Options.KeepOutputWhenNotSmaller)
-            {
-                return FinishAfterCleanup(
-                    VideoOptimizationOutcome.NoSpaceSaving,
-                    sourcePath,
-                    sourceMedia,
-                    outputMedia,
-                    artifact.Length,
-                    savedBytes,
-                    "The verified output was not smaller than the source and was removed.",
-                    artifact);
-            }
-
-            reporter.Report(98);
-            if (_transactions.EntryExistsCaseInsensitive(destinationPath))
-            {
-                return FinishAfterCleanup(
-                    VideoOptimizationOutcome.DestinationCollision,
-                    sourcePath,
-                    sourceMedia,
-                    outputMedia,
-                    artifact.Length,
-                    savedBytes,
-                    "The reserved output path became occupied before publication.",
-                    artifact);
-            }
-
-            IdentityMoveResult publication;
-            using (_transactions.GuardSourceSnapshot(source))
-            {
-                reporter.Report(99);
-                cancellationToken.ThrowIfCancellationRequested();
-                try
-                {
-                    publication = MoveWithResolution(artifact, destinationPath);
-                }
-                catch (IdentitySourceChangedException)
-                {
-                    return FinishAfterCleanup(
-                        VideoOptimizationOutcome.VerificationFailed,
-                        sourcePath,
-                        sourceMedia,
-                        null,
-                        artifact.Length,
-                        savedBytes,
-                        "The temporary output changed after verification.",
-                        artifact);
-                }
-            }
-
-            if (publication.CommitState == IdentityMoveCommitState.NotCommitted)
-            {
-                VideoOptimizationOutcome outcome = publication.DestinationOccupied
-                    ? VideoOptimizationOutcome.DestinationCollision
-                    : VideoOptimizationOutcome.Failed;
-                return FinishAfterCleanup(
-                    outcome,
-                    sourcePath,
-                    sourceMedia,
-                    outputMedia,
-                    artifact.Length,
-                    savedBytes,
-                    publication.DestinationOccupied
-                        ? "The reserved output path became occupied during publication."
-                        : "The optimized output could not be published.",
-                    artifact);
-            }
-
-            if (publication.CommitState == IdentityMoveCommitState.Indeterminate)
-            {
-                return Recovery(
-                    sourcePath,
-                    sourceMedia,
-                    outputMedia,
-                    "The optimized output move did not reach a verifiable terminal state.",
-                    [artifact.Path, destinationPath]);
-            }
-
-            artifact = publication.File;
-            publicationCommitted = true;
-            IdentityPathProbe finalProbe = _transactions.Probe(destinationPath);
-            if (finalProbe.State != IdentityPathState.Present || finalProbe.Identity != artifact.Identity)
-            {
-                return Recovery(
-                    sourcePath,
-                    sourceMedia,
-                    outputMedia,
-                    "The published output identity could not be verified.",
-                    [destinationPath]);
-            }
-
-            IdentityTrackedFile final = _transactions.Capture(destinationPath);
-            if (final.Identity != artifact.Identity)
-            {
-                return Recovery(
-                    sourcePath,
-                    sourceMedia,
-                    outputMedia,
-                    "The published output was replaced before final verification.",
-                    [destinationPath]);
-            }
-
-            artifact = null;
-            reporter.Report(100);
-            return Result(
-                outputIsNotSmaller
-                    ? VideoOptimizationOutcome.KeptWithoutSaving
-                    : VideoOptimizationOutcome.Succeeded,
-                sourcePath,
-                destinationPath,
-                final.Length,
-                sourceMedia,
-                outputMedia,
-                request.ExpectedLength - final.Length,
-                outputIsNotSmaller
-                    ? "The verified output was kept even though it did not save space."
-                    : "The verified optimized video was published.");
+            VideoOptimizationResult? failure = await TranscodeAndVerifyAsync(state, reporter, cancellationToken).ConfigureAwait(false);
+            return failure ?? PublishOutput(state, reporter, cancellationToken);
         }
         catch (OperationCanceledException exception)
         {
-            if (publicationCommitted)
+            VideoOptimizationResult? recovery = HandleCancellation(state, exception, cancellationToken);
+            if (recovery is not null)
             {
-                return Recovery(
-                    sourcePath,
-                    sourceMedia,
-                    outputMedia,
-                    "The published output requires manual verification after a post-commit cancellation.",
-                    [destinationPath]);
-            }
-
-            IReadOnlyList<string> recoveryPaths = CleanupOwned(artifact);
-            if (recoveryPaths.Count != 0)
-            {
-                throw new VideoOptimizationCancellationException(
-                    recoveryPaths,
-                    sourceMedia,
-                    outputMedia,
-                    cancellationToken,
-                    exception);
+                return recovery;
             }
 
             throw;
         }
         catch (IdentitySourceChangedException)
         {
-            if (publicationCommitted)
-            {
-                return Recovery(
-                    sourcePath,
-                    sourceMedia,
-                    outputMedia,
-                    "The published output requires manual verification after a post-commit source check failure.",
-                    [destinationPath]);
-            }
-
-            return FinishAfterCleanup(
-                VideoOptimizationOutcome.SourceChanged,
-                sourcePath,
-                sourceMedia,
-                outputMedia,
-                artifact?.Length,
-                0,
-                "The source file changed before the output could be published.",
-                artifact);
+            return HandleSourceChanged(state);
         }
         catch (IdentityOwnedCreationRecoveryException exception)
         {
             return Recovery(
                 sourcePath,
-                sourceMedia,
-                outputMedia,
+                state.SourceMedia,
+                state.OutputMedia,
                 "A newly created temporary output requires manual recovery.",
                 [exception.RecoveryPath]);
         }
         catch (Exception)
         {
-            if (publicationCommitted)
-            {
-                return Recovery(
-                    sourcePath,
-                    sourceMedia,
-                    outputMedia,
-                    "The published output requires manual verification after an unexpected post-commit failure.",
-                    [destinationPath]);
-            }
-
-            IReadOnlyList<string> recoveryPaths = CleanupOwned(artifact);
-            return recoveryPaths.Count == 0
-                ? Result(
-                    VideoOptimizationOutcome.Failed,
-                    sourcePath,
-                    outputSizeBytes: artifact?.Length,
-                    sourceMedia: sourceMedia,
-                    outputMedia: outputMedia,
-                    detail: "Video optimization failed before publication.")
-                : Recovery(
-                    sourcePath,
-                    sourceMedia,
-                    outputMedia,
-                    "Video optimization failed and the temporary output requires manual recovery.",
-                    recoveryPaths);
+            return HandleUnexpectedFailure(state);
         }
+    }
+
+    private async Task<VideoOptimizationResult?> TranscodeAndVerifyAsync(
+        OptimizationState state,
+        MonotonicProgress reporter,
+        CancellationToken cancellationToken)
+    {
+        string sourcePath = state.SourcePath;
+        string destinationPath = state.DestinationPath;
+        IdentityTrackedFile source = state.Source;
+        VideoOptimizationRequest request = state.Request;
+        cancellationToken.ThrowIfCancellationRequested();
+        try
+        {
+            state.SourceMedia = await _probe.ProbeAsync(sourcePath, cancellationToken).ConfigureAwait(false);
+        }
+        catch (InvalidDataException)
+        {
+            return Result(
+                VideoOptimizationOutcome.UnsupportedInput,
+                sourcePath,
+                detail: "The source video metadata or track layout is unsupported.");
+        }
+
+        using (_transactions.GuardSourceSnapshot(source))
+        {
+            // Acquiring the guard verifies the source snapshot without mutating it.
+        }
+
+        reporter.Report(4);
+        VideoProfileBuildResult profileResult = VideoOptimizationProfilePolicy.Build(
+            state.SourceMedia,
+            request.Options);
+        if (profileResult.Profile is null)
+        {
+            return Result(
+                profileResult.FailureOutcome ?? VideoOptimizationOutcome.InvalidProfile,
+                sourcePath,
+                media: (state.SourceMedia, null),
+                detail: profileResult.Detail);
+        }
+
+        VideoTranscodeProfile profile = profileResult.Profile;
+        IdentityTrackedFile artifact = CreateUniqueTemp(destinationPath);
+        state.Artifact = artifact;
+        reporter.Report(5);
+
+        if (_transactions.EntryExistsCaseInsensitive(destinationPath))
+        {
+            return FinishAfterCleanup(
+                VideoOptimizationOutcome.DestinationCollision,
+                sourcePath,
+                (state.SourceMedia, null),
+                null,
+                0,
+                "The reserved output path is already occupied.",
+                artifact);
+        }
+
+        VideoTranscodeBackendResult backendResult;
+        using (_transactions.GuardSourceSnapshot(source))
+        using (_transactions.GuardOwnedPath(artifact))
+        {
+            var backendProgress = new InlineProgress(value => reporter.Report(5 + (Math.Clamp(value, 0, 100) * 0.85)));
+            backendResult = await _backend.TranscodeAsync(
+                sourcePath,
+                artifact.Path,
+                profile,
+                backendProgress,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        if (backendResult.Outcome != VideoTranscodeBackendOutcome.Succeeded)
+        {
+            return FinishAfterCleanup(
+                MapBackendOutcome(backendResult.Outcome),
+                sourcePath,
+                (state.SourceMedia, null),
+                null,
+                0,
+                DetailForBackendOutcome(backendResult.Outcome),
+                artifact);
+        }
+
+        IdentityTrackedFile completedArtifact = _transactions.Capture(artifact.Path);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (completedArtifact.Identity != artifact.Identity)
+        {
+            return Recovery(
+                sourcePath,
+                state.SourceMedia,
+                null,
+                "The temporary output identity changed after transcoding.",
+                [artifact.Path]);
+        }
+
+        artifact = completedArtifact with { Identity = artifact.Identity };
+        state.Artifact = artifact;
+        var verification = await VerifyArtifactAsync(state, artifact, profile, cancellationToken).ConfigureAwait(false);
+        bool outputVerified = verification.Verified;
+        string verificationDetail = verification.Detail;
+
+        if (!outputVerified)
+        {
+            return FinishAfterCleanup(
+                VideoOptimizationOutcome.VerificationFailed,
+                sourcePath,
+                (state.SourceMedia, null),
+                artifact.Length,
+                0,
+                verificationDetail,
+                artifact);
+        }
+
+        return null;
+    }
+
+    private async Task<(bool Verified, string Detail)> VerifyArtifactAsync(
+        OptimizationState state,
+        IdentityTrackedFile artifact,
+        VideoTranscodeProfile profile,
+        CancellationToken cancellationToken)
+    {
+        bool outputVerified;
+        string verificationDetail;
+        try
+        {
+            using (_transactions.GuardSourceSnapshot(artifact))
+            {
+                VideoMediaInfo candidate = await _probe.ProbeAsync(
+                    artifact.Path,
+                    cancellationToken).ConfigureAwait(false);
+                outputVerified = TryVerifyOutput(state.SourceMedia!, candidate, profile, out verificationDetail);
+                state.OutputMedia = outputVerified ? candidate : null;
+            }
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            outputVerified = false;
+            verificationDetail = "The temporary output could not be verified safely.";
+        }
+
+        return (outputVerified, verificationDetail);
+    }
+
+    private VideoOptimizationResult PublishOutput(
+        OptimizationState state,
+        MonotonicProgress reporter,
+        CancellationToken cancellationToken)
+    {
+        string sourcePath = state.SourcePath;
+        string destinationPath = state.DestinationPath;
+        IdentityTrackedFile source = state.Source;
+        VideoOptimizationRequest request = state.Request;
+        IdentityTrackedFile artifact = state.Artifact!;
+        reporter.Report(95);
+        try
+        {
+            using (_transactions.GuardSourceSnapshot(source))
+            {
+                // Acquiring the guard verifies the source snapshot before publication.
+            }
+        }
+        catch (IdentitySourceChangedException)
+        {
+            return FinishAfterCleanup(
+                VideoOptimizationOutcome.SourceChanged,
+                sourcePath,
+                (state.SourceMedia, state.OutputMedia),
+                artifact.Length,
+                0,
+                "The source file changed before the output could be published.",
+                artifact);
+        }
+
+        reporter.Report(97);
+        long savedBytes = request.ExpectedLength - artifact.Length;
+        bool outputIsNotSmaller = artifact.Length >= request.ExpectedLength;
+        if (outputIsNotSmaller && !request.Options.KeepOutputWhenNotSmaller)
+        {
+            return FinishAfterCleanup(
+                VideoOptimizationOutcome.NoSpaceSaving,
+                sourcePath,
+                (state.SourceMedia, state.OutputMedia),
+                artifact.Length,
+                savedBytes,
+                "The verified output was not smaller than the source and was removed.",
+                artifact);
+        }
+
+        reporter.Report(98);
+        if (_transactions.EntryExistsCaseInsensitive(destinationPath))
+        {
+            return FinishAfterCleanup(
+                VideoOptimizationOutcome.DestinationCollision,
+                sourcePath,
+                (state.SourceMedia, state.OutputMedia),
+                artifact.Length,
+                savedBytes,
+                "The reserved output path became occupied before publication.",
+                artifact);
+        }
+
+        return CommitOutput(state, artifact, reporter, savedBytes, outputIsNotSmaller, cancellationToken);
+    }
+
+    private VideoOptimizationResult CommitOutput(
+        OptimizationState state,
+        IdentityTrackedFile artifact,
+        MonotonicProgress reporter,
+        long savedBytes,
+        bool outputIsNotSmaller,
+        CancellationToken cancellationToken)
+    {
+        string sourcePath = state.SourcePath;
+        string destinationPath = state.DestinationPath;
+        IdentityTrackedFile source = state.Source;
+        VideoOptimizationRequest request = state.Request;
+        IdentityMoveResult publication;
+        using (_transactions.GuardSourceSnapshot(source))
+        {
+            reporter.Report(99);
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                publication = MoveWithResolution(artifact, destinationPath);
+            }
+            catch (IdentitySourceChangedException)
+            {
+                return FinishAfterCleanup(
+                    VideoOptimizationOutcome.VerificationFailed,
+                    sourcePath,
+                    (state.SourceMedia, null),
+                    artifact.Length,
+                    savedBytes,
+                    "The temporary output changed after verification.",
+                    artifact);
+            }
+        }
+
+        if (publication.CommitState == IdentityMoveCommitState.NotCommitted)
+        {
+            VideoOptimizationOutcome outcome = publication.DestinationOccupied
+                ? VideoOptimizationOutcome.DestinationCollision
+                : VideoOptimizationOutcome.Failed;
+            return FinishAfterCleanup(
+                outcome,
+                sourcePath,
+                (state.SourceMedia, state.OutputMedia),
+                artifact.Length,
+                savedBytes,
+                publication.DestinationOccupied
+                    ? "The reserved output path became occupied during publication."
+                    : "The optimized output could not be published.",
+                artifact);
+        }
+
+        if (publication.CommitState == IdentityMoveCommitState.Indeterminate)
+        {
+            return Recovery(
+                sourcePath,
+                state.SourceMedia,
+                state.OutputMedia,
+                "The optimized output move did not reach a verifiable terminal state.",
+                [artifact.Path, destinationPath]);
+        }
+
+        artifact = publication.File;
+        state.Artifact = artifact;
+        state.PublicationCommitted = true;
+        IdentityPathProbe finalProbe = _transactions.Probe(destinationPath);
+        if (finalProbe.State != IdentityPathState.Present || finalProbe.Identity != artifact.Identity)
+        {
+            return Recovery(
+                sourcePath,
+                state.SourceMedia,
+                state.OutputMedia,
+                "The published output identity could not be verified.",
+                [destinationPath]);
+        }
+
+        IdentityTrackedFile final = _transactions.Capture(destinationPath);
+        if (final.Identity != artifact.Identity)
+        {
+            return Recovery(
+                sourcePath,
+                state.SourceMedia,
+                state.OutputMedia,
+                "The published output was replaced before final verification.",
+                [destinationPath]);
+        }
+
+        state.Artifact = null;
+        reporter.Report(100);
+        return Result(
+            outputIsNotSmaller
+                ? VideoOptimizationOutcome.KeptWithoutSaving
+                : VideoOptimizationOutcome.Succeeded,
+            sourcePath,
+            destinationPath,
+            final.Length,
+            (state.SourceMedia, state.OutputMedia),
+            request.ExpectedLength - final.Length,
+            outputIsNotSmaller
+                ? "The verified output was kept even though it did not save space."
+                : "The verified optimized video was published.");
+    }
+
+    private VideoOptimizationResult? HandleCancellation(
+        OptimizationState state,
+        OperationCanceledException exception,
+        CancellationToken cancellationToken)
+    {
+        string sourcePath = state.SourcePath;
+        string destinationPath = state.DestinationPath;
+        if (state.PublicationCommitted)
+        {
+            return Recovery(
+                sourcePath,
+                state.SourceMedia,
+                state.OutputMedia,
+                "The published output requires manual verification after a post-commit cancellation.",
+                [destinationPath]);
+        }
+
+        string[] recoveryPaths = CleanupOwned(state.Artifact);
+        if (recoveryPaths.Length != 0)
+        {
+            throw new VideoOptimizationCancellationException(
+                recoveryPaths,
+                state.SourceMedia,
+                state.OutputMedia,
+                cancellationToken,
+                exception);
+        }
+
+        return null;
+    }
+
+    private VideoOptimizationResult HandleSourceChanged(OptimizationState state)
+    {
+        string sourcePath = state.SourcePath;
+        string destinationPath = state.DestinationPath;
+        if (state.PublicationCommitted)
+        {
+            return Recovery(
+                sourcePath,
+                state.SourceMedia,
+                state.OutputMedia,
+                "The published output requires manual verification after a post-commit source check failure.",
+                [destinationPath]);
+        }
+
+        return FinishAfterCleanup(
+            VideoOptimizationOutcome.SourceChanged,
+            sourcePath,
+            (state.SourceMedia, state.OutputMedia),
+            state.Artifact?.Length,
+            0,
+            "The source file changed before the output could be published.",
+            state.Artifact);
+    }
+
+    private VideoOptimizationResult HandleUnexpectedFailure(OptimizationState state)
+    {
+        string sourcePath = state.SourcePath;
+        string destinationPath = state.DestinationPath;
+        if (state.PublicationCommitted)
+        {
+            return Recovery(
+                sourcePath,
+                state.SourceMedia,
+                state.OutputMedia,
+                "The published output requires manual verification after an unexpected post-commit failure.",
+                [destinationPath]);
+        }
+
+        string[] recoveryPaths = CleanupOwned(state.Artifact);
+        return recoveryPaths.Length == 0
+            ? Result(
+                VideoOptimizationOutcome.Failed,
+                sourcePath,
+                outputSizeBytes: state.Artifact?.Length,
+                media: (state.SourceMedia, state.OutputMedia),
+                detail: "Video optimization failed before publication.")
+            : Recovery(
+                sourcePath,
+                state.SourceMedia,
+                state.OutputMedia,
+                "Video optimization failed and the temporary output requires manual recovery.",
+                recoveryPaths);
     }
 
     private IdentityTrackedFile CreateUniqueTemp(string destinationPath)
@@ -447,6 +522,7 @@ internal sealed class VideoOptimizerService : IVideoOptimizerService
             }
             catch (IOException) when (_transactions.EntryExistsCaseInsensitive(candidate))
             {
+                // A raced occupant is preserved; retry with a different owned temporary name.
             }
         }
 
@@ -465,27 +541,25 @@ internal sealed class VideoOptimizerService : IVideoOptimizerService
     private VideoOptimizationResult FinishAfterCleanup(
         VideoOptimizationOutcome outcome,
         string sourcePath,
-        VideoMediaInfo? sourceMedia,
-        VideoMediaInfo? outputMedia,
+        (VideoMediaInfo? Source, VideoMediaInfo? Output) media,
         long? outputSizeBytes,
         long savedBytes,
         string detail,
         IdentityTrackedFile? artifact)
     {
-        IReadOnlyList<string> recoveryPaths = CleanupOwned(artifact);
-        return recoveryPaths.Count == 0
+        string[] recoveryPaths = CleanupOwned(artifact);
+        return recoveryPaths.Length == 0
             ? Result(
                 outcome,
                 sourcePath,
                 outputSizeBytes: outputSizeBytes,
-                sourceMedia: sourceMedia,
-                outputMedia: outputMedia,
+                media: media,
                 savedBytes: savedBytes,
                 detail: detail)
-            : Recovery(sourcePath, sourceMedia, outputMedia, detail, recoveryPaths);
+            : Recovery(sourcePath, media.Source, media.Output, detail, recoveryPaths);
     }
 
-    private IReadOnlyList<string> CleanupOwned(IdentityTrackedFile? artifact)
+    private string[] CleanupOwned(IdentityTrackedFile? artifact)
     {
         if (artifact is null)
         {
@@ -513,7 +587,7 @@ internal sealed class VideoOptimizerService : IVideoOptimizerService
         }
 
         return _transactions.Probe(artifact.Path).State == IdentityPathState.Missing
-            ? []
+            ? Array.Empty<string>()
             : [artifact.Path];
     }
 
@@ -540,7 +614,7 @@ internal sealed class VideoOptimizerService : IVideoOptimizerService
                 return new IdentityMoveResult(IdentityMoveCommitState.Indeterminate, source);
             }
 
-            if (destinationOwned && !sourceOwned)
+            if (destinationOwned)
             {
                 return new IdentityMoveResult(
                     IdentityMoveCommitState.Committed,
@@ -597,9 +671,7 @@ internal sealed class VideoOptimizerService : IVideoOptimizerService
             return false;
         }
 
-        if (output.Width != profile.Width || output.Height != profile.Height ||
-            output.SquarePixelDisplayWidth != profile.Width ||
-            output.SquarePixelDisplayHeight != profile.Height)
+        if (!DimensionsMatchProfile(output, profile))
         {
             detail = "The optimized output dimensions do not match the calculated profile.";
             return false;
@@ -635,20 +707,8 @@ internal sealed class VideoOptimizerService : IVideoOptimizerService
             return false;
         }
 
-        if (source.AudioTrackCount == 0)
+        if (!TryVerifyAudio(source, output, profile, out detail))
         {
-            if (output.AudioTrackCount != 0)
-            {
-                detail = "The optimized output unexpectedly added an audio track.";
-                return false;
-            }
-        }
-        else if (output.AudioTrackCount != 1 ||
-            !string.Equals(output.AudioCodec, "AAC", StringComparison.OrdinalIgnoreCase) ||
-            output.AudioBitrate == 0 ||
-            output.AudioBitrate > profile.AudioBitrate)
-        {
-            detail = "The optimized output audio does not match the calculated AAC profile.";
             return false;
         }
 
@@ -660,6 +720,29 @@ internal sealed class VideoOptimizerService : IVideoOptimizerService
 
         detail = "The optimized output passed media verification.";
         return true;
+    }
+
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Major Code Smell", "S1244", Justification = "Square-pixel output dimensions must exactly equal the integer profile dimensions; tolerance would admit invalid geometry.")]
+    private static bool DimensionsMatchProfile(VideoMediaInfo output, VideoTranscodeProfile profile) =>
+        output.Width == profile.Width && output.Height == profile.Height &&
+        output.SquarePixelDisplayWidth == profile.Width && output.SquarePixelDisplayHeight == profile.Height;
+
+    private static bool TryVerifyAudio(
+        VideoMediaInfo source,
+        VideoMediaInfo output,
+        VideoTranscodeProfile profile,
+        out string detail)
+    {
+        if (source.AudioTrackCount == 0)
+        {
+            detail = "The optimized output unexpectedly added an audio track.";
+            return output.AudioTrackCount == 0;
+        }
+
+        detail = "The optimized output audio does not match the calculated AAC profile.";
+        return output.AudioTrackCount == 1 &&
+            string.Equals(output.AudioCodec, "AAC", StringComparison.OrdinalIgnoreCase) &&
+            output.AudioBitrate > 0 && output.AudioBitrate <= profile.AudioBitrate;
     }
 
     private static VideoOptimizationOutcome MapBackendOutcome(VideoTranscodeBackendOutcome outcome) => outcome switch
@@ -753,22 +836,44 @@ internal sealed class VideoOptimizerService : IVideoOptimizerService
         string sourcePath,
         string? outputPath = null,
         long? outputSizeBytes = null,
-        VideoMediaInfo? sourceMedia = null,
-        VideoMediaInfo? outputMedia = null,
+        (VideoMediaInfo? Source, VideoMediaInfo? Output) media = default,
         long savedBytes = 0,
         string detail = "") => new(
             outcome,
             sourcePath,
             outputPath,
             outputSizeBytes,
-            sourceMedia,
-            outputMedia,
+            media.Source,
+            media.Output,
             savedBytes,
             detail,
             []);
 
-    private sealed class MonotonicProgress(IProgress<double>? progress)
+    private sealed class OptimizationState(
+        VideoOptimizationRequest request,
+        IdentityTrackedFile source,
+        string sourcePath,
+        string destinationPath)
     {
+        public VideoOptimizationRequest Request { get; } = request;
+        public IdentityTrackedFile Source { get; } = source;
+        public string SourcePath { get; } = sourcePath;
+        public string DestinationPath { get; } = destinationPath;
+        public VideoMediaInfo? SourceMedia { get; set; }
+        public VideoMediaInfo? OutputMedia { get; set; }
+        public IdentityTrackedFile? Artifact { get; set; }
+        public bool PublicationCommitted { get; set; }
+    }
+
+    private sealed class MonotonicProgress
+    {
+        private readonly IProgress<double>? _progress;
+
+        public MonotonicProgress(IProgress<double>? progress)
+        {
+            _progress = progress;
+        }
+
         private double _last;
 
         public void Report(double value)
@@ -785,12 +890,19 @@ internal sealed class VideoOptimizerService : IVideoOptimizerService
             }
 
             _last = next;
-            progress?.Report(next);
+            _progress?.Report(next);
         }
     }
 
-    private sealed class InlineProgress(Action<double> report) : IProgress<double>
+    private sealed class InlineProgress : IProgress<double>
     {
-        public void Report(double value) => report(value);
+        private readonly Action<double> _report;
+
+        public InlineProgress(Action<double> report)
+        {
+            _report = report;
+        }
+
+        public void Report(double value) => _report(value);
     }
 }

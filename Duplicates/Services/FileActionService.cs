@@ -11,6 +11,7 @@ namespace Duplicates.Services;
 
 public sealed class FileActionService : IFileActionService
 {
+    private const string SourceChanged = "The source no longer matches the scan result.";
     private const uint RecycleEntryFlags =
         0x0004 | // FOF_SILENT
         0x0010 | // FOF_NOCONFIRMATION
@@ -137,38 +138,14 @@ public sealed class FileActionService : IFileActionService
                         cancellationToken.ThrowIfCancellationRequested();
                     }
 
-                    string? finalPath = null;
-                    string? recoveryPath = null;
-                    FileActionFailure? failure = null;
+                    FileOperationResult result;
                     try
                     {
-                        string leafName = Path.GetFileName(Path.TrimEndingDirectorySeparator(target.FullPath));
-                        bool collision = existingNames.Contains(leafName);
-                        if (collision && collisionBehavior != MoveCollisionBehavior.KeepBoth)
+                        result = MoveSingleTarget(target, destination, collisionBehavior, existingNames);
+                        if (result.Failure is null)
                         {
-                            throw new IOException("A file or folder with the same name already exists in the destination.");
+                            succeededBytes += target.SizeBytes;
                         }
-
-                        finalPath = collision
-                            ? GetKeepBothPath(destination, leafName, target.Kind, existingNames)
-                            : Path.Combine(destination, leafName);
-                        RevalidateTarget(target);
-                        _moveTarget(target, finalPath);
-                        if (PathEntryExists(finalPath))
-                        {
-                            recoveryPath = finalPath;
-                        }
-                        if (recoveryPath is null || PathEntryExists(target.FullPath))
-                        {
-                            throw new IOException("The move did not complete. Check the source and destination paths.");
-                        }
-                        existingNames.Add(Path.GetFileName(finalPath));
-                        succeededBytes += target.SizeBytes;
-                    }
-                    catch (Exception ex) when (IsOperationalFailure(ex))
-                    {
-                        finalPath = null;
-                        failure = new FileActionFailure(target.FullPath, ex.Message, recoveryPath);
                     }
                     finally
                     {
@@ -180,12 +157,56 @@ public sealed class FileActionService : IFileActionService
                             succeededBytes));
                     }
 
-                    results.Add(new FileOperationResult(target.FullPath, finalPath, failure));
+                    results.Add(result);
                 }
 
                 return new FileOperationSummary(results, succeededBytes);
             },
             cancellationToken);
+    }
+
+    private FileOperationResult MoveSingleTarget(
+        FileActionTarget target,
+        string destination,
+        MoveCollisionBehavior collisionBehavior,
+        HashSet<string> existingNames)
+    {
+        string? finalPath = null;
+        string? recoveryPath = null;
+        FileActionFailure? failure = null;
+        try
+        {
+            string leafName = Path.GetFileName(Path.TrimEndingDirectorySeparator(target.FullPath));
+            bool collision = existingNames.Contains(leafName);
+            if (collision && collisionBehavior != MoveCollisionBehavior.KeepBoth)
+            {
+                throw new IOException("A file or folder with the same name already exists in the destination.");
+            }
+
+            finalPath = collision
+                ? GetKeepBothPath(destination, leafName, target.Kind, existingNames)
+                : Path.Combine(destination, leafName);
+            RevalidateTarget(target);
+            _moveTarget(target, finalPath);
+            if (PathEntryExists(finalPath))
+            {
+                recoveryPath = finalPath;
+            }
+
+            if (recoveryPath is null || PathEntryExists(target.FullPath))
+            {
+                throw new IOException("The move did not complete. Check the source and destination paths.");
+            }
+
+            existingNames.Add(Path.GetFileName(finalPath));
+        }
+        catch (Exception ex) when (IsOperationalFailure(ex))
+        {
+            finalPath = null;
+            failure = new FileActionFailure(target.FullPath, ex.Message, recoveryPath);
+        }
+
+        return new FileOperationResult(target.FullPath, finalPath, failure);
     }
 
     public Task<FileOperationResult> RenameAsync(
@@ -246,7 +267,7 @@ public sealed class FileActionService : IFileActionService
         var file = new FileInfo(target.FullPath);
         if (target.Kind != FileActionTargetKind.File || file.LastWriteTimeUtc != constraint.ModifiedUtc)
         {
-            throw new IOException("The source no longer matches the scan result.");
+            throw new IOException(SourceChanged);
         }
 
         DetectedFileType? detected = await FileSignatureDetector.DetectFileAsync(
@@ -259,7 +280,7 @@ public sealed class FileActionService : IFileActionService
             !string.Equals(detected.Name, constraint.DetectedType, StringComparison.Ordinal) ||
             !string.Equals(recommendation, constraint.RecommendedExtension, StringComparison.Ordinal))
         {
-            throw new IOException("The source no longer matches the scan result.");
+            throw new IOException(SourceChanged);
         }
 
         string currentExtension = Path.GetExtension(target.FullPath);
@@ -268,7 +289,7 @@ public sealed class FileActionService : IFileActionService
                 string.Equals(extension, currentExtension, StringComparison.OrdinalIgnoreCase)) ||
             !string.Equals(newName, recommendedName, StringComparison.Ordinal))
         {
-            throw new IOException("The source no longer matches the scan result.");
+            throw new IOException(SourceChanged);
         }
     }
 
@@ -279,8 +300,13 @@ public sealed class FileActionService : IFileActionService
 
     public void RevealInExplorer(string path)
     {
-        Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{path}\"") { UseShellExecute = true });
+        Process.Start(CreateExplorerStartInfo(path));
     }
+
+    internal static ProcessStartInfo CreateExplorerStartInfo(string path) =>
+        new(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "explorer.exe"),
+            $"/select,\"{path}\"")
+        { UseShellExecute = true };
 
     private static void DeleteTarget(FileActionTarget target, RecycleOption recycleOption)
     {
@@ -337,14 +363,7 @@ public sealed class FileActionService : IFileActionService
 
     private static void RevalidateTarget(FileActionTarget target)
     {
-        if (target.ExpectedExactSurvivors is not null)
-        {
-            foreach (ExactFileConstraint survivor in target.ExpectedExactSurvivors)
-            {
-                RevalidateTarget(new FileActionTarget(survivor.FullPath, survivor.SizeBytes, FileActionTargetKind.File,
-                    ExpectedModifiedUtc: survivor.ModifiedUtc));
-            }
-        }
+        RevalidateExactSurvivors(target);
         FileAttributes attributes = File.GetAttributes(target.FullPath);
         FileActionTargetKind actualKind = (attributes.HasFlag(FileAttributes.Directory), attributes.HasFlag(FileAttributes.ReparsePoint)) switch
         {
@@ -356,9 +375,43 @@ public sealed class FileActionService : IFileActionService
 
         if (actualKind != target.Kind)
         {
-            throw new IOException("The source no longer matches the scan result.");
+            throw new IOException(SourceChanged);
         }
 
+        RevalidateInvalidLink(target);
+
+        if (target.Kind == FileActionTargetKind.File)
+        {
+            var file = new FileInfo(target.FullPath);
+            file.Refresh();
+            if (file.Length != target.SizeBytes ||
+                target.ExpectedModifiedUtc is DateTime expectedModifiedUtc &&
+                file.LastWriteTimeUtc != expectedModifiedUtc)
+            {
+                throw new IOException(SourceChanged);
+            }
+        }
+
+        if (target.Kind == FileActionTargetKind.Directory && Directory.EnumerateFileSystemEntries(target.FullPath).Any())
+        {
+            throw new IOException("The directory is no longer empty.");
+        }
+    }
+
+    private static void RevalidateExactSurvivors(FileActionTarget target)
+    {
+        if (target.ExpectedExactSurvivors is not null)
+        {
+            foreach (ExactFileConstraint survivor in target.ExpectedExactSurvivors)
+            {
+                RevalidateTarget(new FileActionTarget(survivor.FullPath, survivor.SizeBytes, FileActionTargetKind.File,
+                    ExpectedModifiedUtc: survivor.ModifiedUtc));
+            }
+        }
+    }
+
+    private static void RevalidateInvalidLink(FileActionTarget target)
+    {
         if (target.ExpectedInvalidLinkReason is not null &&
             target.Kind is FileActionTargetKind.FileLink or FileActionTargetKind.DirectoryLink)
         {
@@ -371,26 +424,10 @@ public sealed class FileActionService : IFileActionService
                     target.ExpectedInvalidLinkReason,
                     StringComparison.Ordinal))
             {
-                throw new IOException("The source no longer matches the scan result.");
+                throw new IOException(SourceChanged);
             }
         }
 
-        if (target.Kind == FileActionTargetKind.File)
-        {
-            var file = new FileInfo(target.FullPath);
-            file.Refresh();
-            if (file.Length != target.SizeBytes ||
-                target.ExpectedModifiedUtc is DateTime expectedModifiedUtc &&
-                file.LastWriteTimeUtc != expectedModifiedUtc)
-            {
-                throw new IOException("The source no longer matches the scan result.");
-            }
-        }
-
-        if (target.Kind == FileActionTargetKind.Directory && Directory.EnumerateFileSystemEntries(target.FullPath).Any())
-        {
-            throw new IOException("The directory is no longer empty.");
-        }
     }
 
     private static string ValidateDestination(string destinationFolder)
@@ -658,6 +695,7 @@ public sealed class FileActionService : IFileActionService
     [ComImport]
     [Guid("43826D1E-E718-42EE-BC55-A1E261C37BFE")]
     [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Interoperability", "SYSLIB1096", Justification = "Runtime COM wrappers are required by Marshal COM activation and deterministic release APIs.")]
     private interface IShellItem
     {
     }
@@ -672,6 +710,7 @@ public sealed class FileActionService : IFileActionService
     [ComImport]
     [Guid("947AAB5F-0A5C-4C13-B4D6-4BF7836FC9F8")]
     [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Interoperability", "SYSLIB1096", Justification = "Runtime COM wrappers are required by Marshal COM activation and deterministic release APIs.")]
     private interface IFileOperation
     {
         [PreserveSig]

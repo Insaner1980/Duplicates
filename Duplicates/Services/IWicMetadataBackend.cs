@@ -21,7 +21,7 @@ internal sealed record WicImageInspection(
     WicRenderState RenderState,
     IReadOnlyDictionary<string, string> Metadata);
 
-internal sealed class WicMetadataLayoutException : Exception
+public sealed class WicMetadataLayoutException : Exception
 {
     public WicMetadataLayoutException(string message)
         : base(message)

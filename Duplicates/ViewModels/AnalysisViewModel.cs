@@ -29,6 +29,9 @@ public sealed partial class AnalysisViewModel : ObservableObject
         IAppOperationCoordinator? operationCoordinator = null,
         ISettingsService? settingsService = null)
     {
+        LargeFileMinimumSizeEditor = new ByteSizeEditorViewModel(
+            () => LargeFileMinimumSizeValue,
+            value => LargeFileMinimumSizeValue = value);
         _analysisService = analysisService;
         _sessionStore = sessionStore;
         _pathScope = pathScope;
@@ -68,10 +71,10 @@ public sealed partial class AnalysisViewModel : ObservableObject
         _ => "No additional options are required.",
     };
 
-    public Visibility OptionsVisibility => Tool is ToolKind.EmptyFolders or ToolKind.EmptyFiles or
-        ToolKind.BrokenFiles or ToolKind.BadNames or ToolKind.MusicDuplicates
-        ? Visibility.Collapsed
-        : Visibility.Visible;
+    public Visibility OptionsVisibility => Tool is ToolKind.BigFiles or ToolKind.TemporaryFiles or
+        ToolKind.SimilarImages or ToolKind.SimilarVideos
+        ? Visibility.Visible
+        : Visibility.Collapsed;
 
     public Visibility LargeFileOptionsVisibility => Tool == ToolKind.BigFiles
         ? Visibility.Visible
@@ -93,17 +96,47 @@ public sealed partial class AnalysisViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(OptionsSummary))]
     public partial double LargeFileMinimumSizeValue { get; set; } = DefaultLargeFileMinimumSizeBytes;
 
+    public ByteSizeEditorViewModel LargeFileMinimumSizeEditor { get; }
+
+    partial void OnLargeFileMinimumSizeValueChanged(double value) => LargeFileMinimumSizeEditor.Refresh();
+
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(OptionsSummary))]
     public partial double TemporaryFileMinimumAgeDays { get; set; } = DefaultTemporaryFileMinimumAgeDays;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(OptionsSummary))]
+    [NotifyPropertyChangedFor(nameof(ImageSimilarityPresetIndex))]
     public partial SimilarityPreset ImageSimilarityPreset { get; set; } = SimilarityPreset.Balanced;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(OptionsSummary))]
+    [NotifyPropertyChangedFor(nameof(VideoSimilarityPresetIndex))]
     public partial SimilarityPreset VideoSimilarityPreset { get; set; } = SimilarityPreset.Balanced;
+
+    public int ImageSimilarityPresetIndex
+    {
+        get => EnumSelection.ToIndex(ImageSimilarityPreset);
+        set
+        {
+            if (EnumSelection.TryFromIndex(value, out SimilarityPreset preset))
+            {
+                ImageSimilarityPreset = preset;
+            }
+        }
+    }
+
+    public int VideoSimilarityPresetIndex
+    {
+        get => EnumSelection.ToIndex(VideoSimilarityPreset);
+        set
+        {
+            if (EnumSelection.TryFromIndex(value, out SimilarityPreset preset))
+            {
+                VideoSimilarityPreset = preset;
+            }
+        }
+    }
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(SetupVisibility))]
@@ -196,7 +229,7 @@ public sealed partial class AnalysisViewModel : ObservableObject
         _analysisCancellation = cancellation;
         CancellationToken cancellationToken = _analysisCancellation.Token;
         AnalysisScope scope = BuildScope();
-        ToolOptions toolOptions = BuildToolOptions(tool);
+        IToolOptions toolOptions = BuildToolOptions(tool);
         AnalysisResult? completedResult = null;
 
         try
@@ -281,7 +314,7 @@ public sealed partial class AnalysisViewModel : ObservableObject
         IgnoreSystemFiles = PathScope.IgnoreSystemFiles,
     };
 
-    private ToolOptions BuildToolOptions(ToolKind tool) => tool switch
+    private IToolOptions BuildToolOptions(ToolKind tool) => tool switch
     {
         ToolKind.BigFiles => new LargeFileToolOptions(GetLargeFileMinimumSizeBytes()),
         ToolKind.TemporaryFiles => BuildTemporaryFileOptions(),

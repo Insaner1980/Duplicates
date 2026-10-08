@@ -4,95 +4,33 @@
     x:Name="PageRoot"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:controls="using:Duplicates.Views.Controls">
+    xmlns:controls="using:Duplicates.Views.Controls"
+    xmlns:toolkit="using:CommunityToolkit.WinUI.Controls">
     <Grid Background="{ThemeResource BgBaseBrush}">
-        <VisualStateManager.VisualStateGroups>
-            <VisualStateGroup x:Name="WindowWidthStates">
-                <VisualState x:Name="Small">
-                    <VisualState.StateTriggers>
-                        <AdaptiveTrigger MinWindowWidth="0" />
-                    </VisualState.StateTriggers>
-                    <VisualState.Setters>
-                        <Setter Target="HeaderActionRail.(Grid.Row)" Value="1" />
-                    </VisualState.Setters>
-                </VisualState>
-                <VisualState x:Name="Medium">
-                    <VisualState.StateTriggers>
-                        <AdaptiveTrigger MinWindowWidth="641" />
-                    </VisualState.StateTriggers>
-                </VisualState>
-                <VisualState x:Name="Large">
-                    <VisualState.StateTriggers>
-                        <AdaptiveTrigger MinWindowWidth="1008" />
-                    </VisualState.StateTriggers>
-                    <VisualState.Setters>
-                        <Setter Target="OptionsRightColumn.Width" Value="*" />
-                        <Setter Target="OptionsSecondRow.Height" Value="0" />
-                        <Setter Target="SizeInputsGrid.(Grid.Column)" Value="1" />
-                        <Setter Target="SizeInputsGrid.(Grid.Row)" Value="0" />
-                    </VisualState.Setters>
-                </VisualState>
-            </VisualStateGroup>
-        </VisualStateManager.VisualStateGroups>
-
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <Grid
-            MaxWidth="{StaticResource ContentMaxWidth}"
-            Padding="{StaticResource PageHeaderPadding}"
-            HorizontalAlignment="Stretch"
-            ColumnSpacing="{StaticResource SpacingLarge}">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
-            </Grid.RowDefinitions>
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
-            <StackPanel Spacing="6">
-                <TextBlock
-                    AutomationProperties.HeadingLevel="Level1"
-                    Style="{ThemeResource TitleTextBlockStyle}"
-                    Foreground="{ThemeResource TextPrimaryBrush}"
-                    Text="Scan for duplicates" />
-                <TextBlock
-                    Style="{StaticResource MutedTextBlockStyle}"
-                    Text="Choose folders and compare files by exact byte content." />
-            </StackPanel>
-            <Grid
-                x:Name="HeaderActionRail"
-                Grid.ColumnSpan="2"
-                MaxWidth="{StaticResource ScanWorkAreaMaxWidth}"
-                HorizontalAlignment="Stretch">
-                <Button
-                    HorizontalAlignment="Right"
-                    VerticalAlignment="Center"
-                    AccessKey="S"
-                    AutomationProperties.Name="Start scan"
-                    Command="{Binding StartScanCommand}"
-                    Style="{StaticResource AccentButtonStyle}"
-                    Visibility="{Binding SetupVisibility}">
-                    <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpacingSmall}">
-                        <SymbolIcon Symbol="Play" />
-                        <TextBlock Text="Start scan" />
-                    </StackPanel>
-                </Button>
-            </Grid>
-        </Grid>
-
         <ScrollViewer
-            Grid.Row="1"
             HorizontalScrollBarVisibility="Disabled"
             HorizontalScrollMode="Disabled">
             <Grid
                 MaxWidth="{StaticResource ContentMaxWidth}"
-                Padding="{StaticResource PageContentPadding}"
+                Padding="{StaticResource ScrollingPageContentPadding}"
                 HorizontalAlignment="Stretch">
                 <StackPanel Spacing="{StaticResource SpacingExtraLarge}">
+                    <StackPanel Spacing="6">
+                        <TextBlock
+                            AutomationProperties.HeadingLevel="Level1"
+                            Style="{ThemeResource TitleTextBlockStyle}"
+                            Foreground="{ThemeResource TextPrimaryBrush}"
+                            Text="Scan for duplicates" />
+                        <TextBlock
+                            Style="{StaticResource MutedTextBlockStyle}"
+                            Text="Choose folders and compare files by exact byte content." />
+                    </StackPanel>
+
                     <InfoBar
                         AutomationProperties.LiveSetting="Polite"
                         AutomationProperties.Name="Scan status"
@@ -105,46 +43,43 @@
                         Spacing="{StaticResource SpacingExtraLarge}">
                         <controls:PathScopeEditor
                             x:Name="PathScopeEditor"
-                            MaxWidth="{StaticResource ScanWorkAreaMaxWidth}"
-                            HorizontalAlignment="Stretch"
                             DataContext="{Binding PathScope}" />
 
-                        <Expander
-                            x:Name="ScanOptions"
-                            MaxWidth="{StaticResource ScanWorkAreaMaxWidth}"
-                            HorizontalAlignment="Stretch"
-                            Header="Scan options"
-                            IsExpanded="True">
-                            <StackPanel Padding="0,12,0,0" Spacing="{StaticResource SpacingLarge}">
-                                <Grid
-                                    x:Name="OptionsGrid"
-                                    ColumnSpacing="{StaticResource SpacingExtraLarge}"
-                                    RowSpacing="{StaticResource SpacingLarge}">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition x:Name="OptionsRightColumn" Width="0" />
-                                    </Grid.ColumnDefinitions>
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition x:Name="OptionsSecondRow" Height="Auto" />
-                                    </Grid.RowDefinitions>
-
-                                    <StackPanel Spacing="{StaticResource SpacingMedium}">
-                                        <CheckBox
-                                            Content="Include subfolders"
-                                            IsChecked="{Binding PathScope.IncludeSubfolders, Mode=TwoWay}" />
+                        <StackPanel Spacing="4">
+                            <toolkit:SettingsExpander
+                                x:Name="ScanOptions"
+                                Header="Scan options"
+                                Description="Choose which files are compared."
+                                IsExpanded="True">
+                                <toolkit:SettingsExpander.HeaderIcon>
+                                    <FontIcon Glyph="&#xE71C;" />
+                                </toolkit:SettingsExpander.HeaderIcon>
+                                <toolkit:SettingsExpander.Items>
+                                    <toolkit:SettingsCard
+                                        Header="Include subfolders"
+                                        Description="Scan every folder below the included folders.">
+                                        <ToggleSwitch
+                                            AutomationProperties.Name="Include subfolders"
+                                            IsOn="{Binding PathScope.IncludeSubfolders, Mode=TwoWay}" />
+                                    </toolkit:SettingsCard>
+                                    <toolkit:SettingsCard
+                                        Header="File types"
+                                        Description="Limit the scan to selected kinds of files.">
                                         <ComboBox
-                                            Header="File types"
-                                            HorizontalAlignment="Stretch"
+                                            MinWidth="200"
+                                            AutomationProperties.Name="File types"
                                             SelectedIndex="{Binding SelectedFileFilterIndex, Mode=TwoWay}">
                                             <ComboBoxItem Content="All files" />
                                             <ComboBoxItem Content="Categories" />
                                             <ComboBoxItem Content="Custom extensions" />
                                         </ComboBox>
+                                    </toolkit:SettingsCard>
+                                    <toolkit:SettingsCard
+                                        Header="Categories"
+                                        Visibility="{Binding CategoryFiltersVisibility}">
                                         <VariableSizedWrapGrid
                                             Orientation="Horizontal"
-                                            MaximumRowsOrColumns="3"
-                                            Visibility="{Binding CategoryFiltersVisibility}">
+                                            MaximumRowsOrColumns="3">
                                             <CheckBox Content="Images" IsChecked="{Binding ImagesSelected, Mode=TwoWay}" />
                                             <CheckBox Content="Video" IsChecked="{Binding VideoSelected, Mode=TwoWay}" />
                                             <CheckBox Content="Audio" IsChecked="{Binding AudioSelected, Mode=TwoWay}" />
@@ -152,60 +87,69 @@
                                             <CheckBox Content="Archives" IsChecked="{Binding ArchivesSelected, Mode=TwoWay}" />
                                             <CheckBox Content="Code" IsChecked="{Binding CodeSelected, Mode=TwoWay}" />
                                         </VariableSizedWrapGrid>
+                                    </toolkit:SettingsCard>
+                                    <toolkit:SettingsCard
+                                        Header="Custom extensions"
+                                        Description="Separate extensions with commas."
+                                        Visibility="{Binding CustomExtensionsVisibility}">
                                         <TextBox
-                                            Header="Custom extensions"
+                                            MinWidth="200"
+                                            AutomationProperties.Name="Custom extensions"
                                             PlaceholderText="psd, ai, sketch"
-                                            Visibility="{Binding CustomExtensionsVisibility}"
                                             Text="{Binding CustomExtensionsText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                                    </StackPanel>
-
-                                    <StackPanel
-                                        x:Name="SizeInputsGrid"
-                                        Grid.Row="1"
-                                        Spacing="{StaticResource SpacingMedium}">
-                                        <Grid ColumnSpacing="{StaticResource SpacingMedium}">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*" />
-                                                <ColumnDefinition Width="*" />
-                                            </Grid.ColumnDefinitions>
-                                            <NumberBox
-                                                Header="Minimum size, bytes"
-                                                Minimum="0"
-                                                SpinButtonPlacementMode="Compact"
-                                                ValidationMode="InvalidInputOverwritten"
-                                                Value="{Binding MinSizeValue, Mode=TwoWay}" />
-                                            <NumberBox
-                                                Grid.Column="1"
-                                                Header="Maximum size, bytes"
-                                                Minimum="0"
-                                                PlaceholderText="No cap"
-                                                SpinButtonPlacementMode="Compact"
-                                                ValidationMode="InvalidInputOverwritten"
-                                                Value="{Binding MaxSizeValue, Mode=TwoWay}" />
-                                        </Grid>
-                                        <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpacingSmall}">
-                                            <Button Content="Any" Command="{Binding UseAnySizeCommand}" />
-                                            <Button Content="1 KB+" Command="{Binding UseOneKilobyteMinimumCommand}" />
-                                            <Button Content="1 MB+" Command="{Binding UseOneMegabyteMinimumCommand}" />
+                                    </toolkit:SettingsCard>
+                                    <toolkit:SettingsCard
+                                        Header="Minimum size"
+                                        Description="Smaller files are skipped.">
+                                        <StackPanel Spacing="{StaticResource SpacingSmall}">
+                                            <controls:ByteSizeBox
+                                                AccessibleName="Minimum size"
+                                                DataContext="{Binding MinSizeEditor}" />
+                                            <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpacingSmall}">
+                                                <Button Content="Any" Command="{Binding UseAnySizeCommand}" />
+                                                <Button Content="1 KB+" Command="{Binding UseOneKilobyteMinimumCommand}" />
+                                                <Button Content="1 MB+" Command="{Binding UseOneMegabyteMinimumCommand}" />
+                                            </StackPanel>
                                         </StackPanel>
-                                    </StackPanel>
-                                </Grid>
+                                    </toolkit:SettingsCard>
+                                    <toolkit:SettingsCard
+                                        Header="Maximum size"
+                                        Description="Leave empty for no limit.">
+                                        <controls:ByteSizeBox
+                                            AccessibleName="Maximum size"
+                                            DataContext="{Binding MaxSizeEditor}"
+                                            PlaceholderText="No cap" />
+                                    </toolkit:SettingsCard>
+                                </toolkit:SettingsExpander.Items>
+                            </toolkit:SettingsExpander>
 
-                                <Expander Header="Advanced options">
-                                    <StackPanel Padding="0,8,0,0" Spacing="{StaticResource SpacingSmall}">
-                                        <CheckBox
-                                            Content="Ignore hidden files"
-                                            IsChecked="{Binding PathScope.IgnoreHiddenFiles, Mode=TwoWay}" />
-                                        <CheckBox
-                                            Content="Ignore system files"
-                                            IsChecked="{Binding PathScope.IgnoreSystemFiles, Mode=TwoWay}" />
-                                        <CheckBox
-                                            Content="Verify byte-by-byte before reporting duplicates"
-                                            IsChecked="{Binding VerifyByteByByte, Mode=TwoWay}" />
-                                    </StackPanel>
-                                </Expander>
-                            </StackPanel>
-                        </Expander>
+                            <toolkit:SettingsExpander
+                                Header="Advanced options"
+                                Description="Skip protected files and control verification.">
+                                <toolkit:SettingsExpander.HeaderIcon>
+                                    <FontIcon Glyph="&#xE713;" />
+                                </toolkit:SettingsExpander.HeaderIcon>
+                                <toolkit:SettingsExpander.Items>
+                                    <toolkit:SettingsCard Header="Ignore hidden files">
+                                        <ToggleSwitch
+                                            AutomationProperties.Name="Ignore hidden files"
+                                            IsOn="{Binding PathScope.IgnoreHiddenFiles, Mode=TwoWay}" />
+                                    </toolkit:SettingsCard>
+                                    <toolkit:SettingsCard Header="Ignore system files">
+                                        <ToggleSwitch
+                                            AutomationProperties.Name="Ignore system files"
+                                            IsOn="{Binding PathScope.IgnoreSystemFiles, Mode=TwoWay}" />
+                                    </toolkit:SettingsCard>
+                                    <toolkit:SettingsCard
+                                        Header="Verify byte-by-byte"
+                                        Description="Compare complete file contents before reporting duplicates.">
+                                        <ToggleSwitch
+                                            AutomationProperties.Name="Verify byte-by-byte"
+                                            IsOn="{Binding VerifyByteByByte, Mode=TwoWay}" />
+                                    </toolkit:SettingsCard>
+                                </toolkit:SettingsExpander.Items>
+                            </toolkit:SettingsExpander>
+                        </StackPanel>
                     </StackPanel>
 
                     <StackPanel
@@ -256,5 +200,37 @@
                 </StackPanel>
             </Grid>
         </ScrollViewer>
+
+        <Border
+            x:Name="ActionFooter"
+            Grid.Row="1"
+            Style="{StaticResource PageFooterBorderStyle}"
+            Visibility="{Binding SetupVisibility}">
+            <Grid
+                MaxWidth="{StaticResource ContentMaxWidth}"
+                HorizontalAlignment="Stretch"
+                ColumnSpacing="{StaticResource SpacingLarge}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock
+                    VerticalAlignment="Center"
+                    Style="{StaticResource MutedTextBlockStyle}"
+                    Text="Add at least one folder or file to start."
+                    Visibility="{Binding PathScope.EmptyIncludedPathsVisibility}" />
+                <Button
+                    Grid.Column="1"
+                    AccessKey="S"
+                    AutomationProperties.Name="Start scan"
+                    Command="{Binding StartScanCommand}"
+                    Style="{StaticResource AccentButtonStyle}">
+                    <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpacingSmall}">
+                        <SymbolIcon Symbol="Play" />
+                        <TextBlock Text="Start scan" />
+                    </StackPanel>
+                </Button>
+            </Grid>
+        </Border>
     </Grid>
 </Page>

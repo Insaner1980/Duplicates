@@ -1,10 +1,9 @@
 using System.Diagnostics;
 using System.Globalization;
-using System.Runtime.InteropServices;
-using System.Security;
 using System.Text;
 using Duplicates.Engine.Analysis.Media;
 using Duplicates.Engine.Models;
+using static Duplicates.Engine.Analysis.Analyzers.SimilarityAnalyzerSupport;
 
 namespace Duplicates.Engine.Analysis.Analyzers;
 
@@ -39,35 +38,12 @@ public sealed class MusicDuplicateAnalyzer
         cancellationToken.ThrowIfCancellationRequested();
 
         var stopwatch = Stopwatch.StartNew();
-        InventoryFile[] files = inventory.Files
-            .Where(static file =>
-                !file.Attributes.HasFlag(FileAttributes.Directory) &&
-                !file.Attributes.HasFlag(FileAttributes.ReparsePoint) &&
-                AudioFilter.Matches(file.Extension))
-            .OrderBy(static file => file.FullPath, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(static file => file.FullPath, StringComparer.Ordinal)
-            .ToArray();
-        var outcomes = new FileAnalysisOutcome[files.Length];
-        await Parallel.ForEachAsync(
-            Enumerable.Range(0, files.Length),
-            new ParallelOptions
-            {
-                CancellationToken = cancellationToken,
-                MaxDegreeOfParallelism = _maximumConcurrency,
-                TaskScheduler = TaskScheduler.Default,
-            },
-            async (index, token) =>
-            {
-                outcomes[index] = await AnalyzeFileAsync(files[index], token).ConfigureAwait(false);
-            }).ConfigureAwait(false);
-        Candidate[] candidates = outcomes
-            .Where(static outcome => outcome.Candidate is not null)
-            .Select(static outcome => outcome.Candidate!)
-            .ToArray();
-        SkippedPath[] analyzerSkips = outcomes
-            .Where(static outcome => outcome.Skip is not null)
-            .Select(static outcome => outcome.Skip!)
-            .ToArray();
+        (Candidate[] candidates, IReadOnlyList<SkippedPath> skippedPaths) = await AnalyzeFilesAsync<Candidate>(
+            inventory,
+            AudioFilter,
+            _maximumConcurrency,
+            AnalyzeFileAsync,
+            cancellationToken).ConfigureAwait(false);
 
         IReadOnlyList<SimilarityGroup> groups = BuildGroups(candidates, options, cancellationToken);
         stopwatch.Stop();
@@ -75,14 +51,12 @@ public sealed class MusicDuplicateAnalyzer
         {
             Findings = [],
             Groups = groups,
-            SkippedPaths = analyzerSkips.Length == 0
-                ? inventory.SkippedPaths
-                : [.. inventory.SkippedPaths, .. analyzerSkips],
+            SkippedPaths = skippedPaths,
             Elapsed = stopwatch.Elapsed,
         };
     }
 
-    private async ValueTask<FileAnalysisOutcome> AnalyzeFileAsync(
+    private async ValueTask<FileAnalysisOutcome<Candidate>> AnalyzeFileAsync(
         InventoryFile file,
         CancellationToken cancellationToken)
     {
@@ -154,7 +128,7 @@ public sealed class MusicDuplicateAnalyzer
         return EvidenceEquals(expected, actual);
     }
 
-    public IReadOnlyList<SimilarityGroup> Regroup(
+    public static IReadOnlyList<SimilarityGroup> Regroup(
         IReadOnlyList<SimilarityItem> items,
         MusicDuplicateOptions options)
     {
@@ -175,7 +149,7 @@ public sealed class MusicDuplicateAnalyzer
         return BuildGroups(candidates, options, CancellationToken.None);
     }
 
-    private static IReadOnlyList<SimilarityGroup> BuildGroups(
+    private static List<SimilarityGroup> BuildGroups(
         IReadOnlyList<Candidate> source,
         MusicDuplicateOptions options,
         CancellationToken cancellationToken)
@@ -406,44 +380,6 @@ public sealed class MusicDuplicateAnalyzer
         }
     }
 
-    private static bool TryReadSnapshot(string path, out FileSnapshot snapshot)
-    {
-        try
-        {
-            FileAttributes attributes = File.GetAttributes(path);
-            var file = new FileInfo(path);
-            file.Refresh();
-            if (!file.Exists ||
-                attributes.HasFlag(FileAttributes.Directory) ||
-                attributes.HasFlag(FileAttributes.ReparsePoint))
-            {
-                snapshot = default;
-                return false;
-            }
-
-            snapshot = new FileSnapshot(file.Length, file.LastWriteTimeUtc);
-            return true;
-        }
-        catch (Exception ex) when (IsExpectedProviderFailure(ex))
-        {
-            snapshot = default;
-            return false;
-        }
-    }
-
-    private static bool MatchesInventory(FileSnapshot snapshot, InventoryFile file) =>
-        snapshot.SizeBytes == file.SizeBytes && snapshot.ModifiedUtc.Ticks == file.ModifiedUtc.Ticks;
-
-    private static bool IsExpectedProviderFailure(Exception exception) =>
-        exception is IOException or UnauthorizedAccessException or SecurityException or ArgumentException or
-            NotSupportedException or InvalidDataException or OverflowException or COMException;
-
-    private static SkippedPath ChangedSkip(string path) => new()
-    {
-        Path = path,
-        Reason = "File changed since scan.",
-    };
-
     private static SkippedPath UnreadableSkip(string path) => new()
     {
         Path = path,
@@ -462,9 +398,5 @@ public sealed class MusicDuplicateAnalyzer
         DateTime ModifiedUtc,
         MusicSimilarityEvidence Evidence);
 
-    private readonly record struct FileAnalysisOutcome(Candidate? Candidate, SkippedPath? Skip);
-
     private readonly record struct MusicKey(string NormalizedTitle, string NormalizedArtist);
-
-    private readonly record struct FileSnapshot(long SizeBytes, DateTime ModifiedUtc);
 }

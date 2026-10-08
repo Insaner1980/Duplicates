@@ -11,8 +11,21 @@ using Xunit.Sdk;
 
 namespace Duplicates.App.Tests;
 
-public sealed class FileActionServiceContractTests
+public sealed partial class FileActionServiceContractTests
 {
+    [Fact]
+    public void ExplorerLaunchUsesWindowsExecutableAndPreservesSelectedPath()
+    {
+        const string selectedPath = @"C:\files with spaces\source.bin";
+
+        System.Diagnostics.ProcessStartInfo startInfo = FileActionService.CreateExplorerStartInfo(selectedPath);
+
+        Assert.True(Path.IsPathFullyQualified(startInfo.FileName));
+        Assert.Equal(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "explorer.exe"), startInfo.FileName);
+        Assert.Equal($"/select,\"{selectedPath}\"", startInfo.Arguments);
+        Assert.True(startInfo.UseShellExecute);
+    }
+
     [Fact]
     public async Task CancellationDuringCommittedDeleteKeepsTheCommitAndDoesNotRepeatIt()
     {
@@ -176,7 +189,7 @@ public sealed class FileActionServiceContractTests
             [
                 new FileActionTarget(missingPath, 0, FileActionTargetKind.File),
                 new FileActionTarget(filePath, 3, FileActionTargetKind.File),
-                new FileActionTarget(directoryPath, 0, FileActionTargetKind.Directory),
+                new FileActionTarget(directoryPath, 0, FileActionTargetKind.Directory)
             ],
             new InlineProgress<DeleteProgress>(reports.Add),
             CancellationToken.None);
@@ -202,7 +215,7 @@ public sealed class FileActionServiceContractTests
         DeleteSummary summary = await service.DeleteAsync(
             [
                 new FileActionTarget(filePath, 1, FileActionTargetKind.File),
-                new FileActionTarget(directoryPath, 0, FileActionTargetKind.Directory),
+                new FileActionTarget(directoryPath, 0, FileActionTargetKind.Directory)
             ],
             null,
             CancellationToken.None);
@@ -278,7 +291,7 @@ public sealed class FileActionServiceContractTests
         DeleteSummary summary = await service.DeleteAsync(
             [
                 new FileActionTarget(fileLink, 0, FileActionTargetKind.FileLink),
-                new FileActionTarget(directoryLink, 0, FileActionTargetKind.DirectoryLink),
+                new FileActionTarget(directoryLink, 0, FileActionTargetKind.DirectoryLink)
             ],
             null,
             CancellationToken.None);
@@ -547,7 +560,7 @@ public sealed class FileActionServiceContractTests
         await Assert.ThrowsAsync<OperationCanceledException>(() => service.MoveAsync(
             [
                 new FileActionTarget(first, 1, FileActionTargetKind.File),
-                new FileActionTarget(second, 1, FileActionTargetKind.File),
+                new FileActionTarget(second, 1, FileActionTargetKind.File)
             ],
             destination,
             MoveCollisionBehavior.Cancel,
@@ -614,7 +627,7 @@ public sealed class FileActionServiceContractTests
         FileOperationSummary summary = await service.MoveAsync(
             [
                 new FileActionTarget(missing, 1, FileActionTargetKind.File),
-                new FileActionTarget(valid, 2, FileActionTargetKind.File),
+                new FileActionTarget(valid, 2, FileActionTargetKind.File)
             ],
             destination,
             MoveCollisionBehavior.Skip,
@@ -729,7 +742,7 @@ public sealed class FileActionServiceContractTests
             service.MoveAsync(
                 [
                     new FileActionTarget(first, 1, FileActionTargetKind.File),
-                    new FileActionTarget(second, 1, FileActionTargetKind.File),
+                    new FileActionTarget(second, 1, FileActionTargetKind.File)
                 ],
                 destination,
                 MoveCollisionBehavior.Skip,
@@ -766,7 +779,7 @@ public sealed class FileActionServiceContractTests
             service.DeleteAsync(
                 [
                     new FileActionTarget(first, 1, FileActionTargetKind.File),
-                    new FileActionTarget(second, 1, FileActionTargetKind.File),
+                    new FileActionTarget(second, 1, FileActionTargetKind.File)
                 ],
                 progress,
                 cancellation.Token));
@@ -910,7 +923,7 @@ public sealed class FileActionServiceContractTests
         ResultExportItem item = NewExportItem(@"C:\scan\file.bin", "group") with
         {
             SizeBytes = 3_000_000_000,
-            SimilarityPercent = 42.5,
+            SimilarityPercent = 42.5
         };
         CultureInfo originalCulture = CultureInfo.CurrentCulture;
         try
@@ -951,7 +964,7 @@ public sealed class FileActionServiceContractTests
         ResultExportItem item = NewExportItem(@"C:\scan\ä,東京,😀.txt", "group") with
         {
             Reason = "A \"quoted\" reason\r\nSecond line, ää 東京 😀",
-            Suggestion = "line\nnext",
+            Suggestion = "line\nnext"
         };
         var snapshot = new ResultExportSnapshot(ToolKind.BigFiles, DateTimeOffset.UtcNow,
             "Scope, \"quoted\"", [item], []);
@@ -1041,7 +1054,7 @@ public sealed class FileActionServiceContractTests
                 {
                     ["zeta"] = "2",
                     ["alpha"] = "1",
-                }),
+                })
             ],
             [new SkippedPath { Path = @"C:\\scan\\locked.jpg", Reason = "Locked" }]);
 
@@ -1149,13 +1162,13 @@ public sealed class FileActionServiceContractTests
                 typeof(ResultExportFormat),
                 typeof(string),
                 typeof(CancellationToken),
-                typeof(bool),
+                typeof(bool)
             ]);
 
         Assert.NotNull(pickerExport);
-        await Assert.IsAssignableFrom<Task>(pickerExport.Invoke(
+        await Assert.IsType<Task>(pickerExport.Invoke(
             service,
-            [snapshot, ResultExportFormat.Json, destination, CancellationToken.None, true]));
+            [snapshot, ResultExportFormat.Json, destination, CancellationToken.None, true]), exactMatch: false);
 
         Assert.NotEmpty(await File.ReadAllBytesAsync(destination, TestContext.Current.CancellationToken));
         using JsonDocument document = JsonDocument.Parse(await File.ReadAllTextAsync(destination, TestContext.Current.CancellationToken));
@@ -1328,7 +1341,7 @@ public sealed class FileActionServiceContractTests
         }
     }
 
-    private sealed class TemporaryDirectory : IDisposable
+    private sealed partial class TemporaryDirectory : IDisposable
     {
         public TemporaryDirectory()
         {
@@ -1364,9 +1377,16 @@ public sealed class FileActionServiceContractTests
         }
     }
 
-    private sealed class InlineProgress<T>(Action<T> report) : IProgress<T>
+    private sealed class InlineProgress<T> : IProgress<T>
     {
-        public void Report(T value) => report(value);
+        private readonly Action<T> _report;
+
+        public InlineProgress(Action<T> report)
+        {
+            _report = report;
+        }
+
+        public void Report(T value) => _report(value);
     }
 }
 

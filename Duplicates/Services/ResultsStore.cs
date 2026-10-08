@@ -27,6 +27,7 @@ public sealed class ResultsStore
         ResultChanged?.Invoke(this, CurrentResult);
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Major Code Smell", "S4220", Justification = "The nullable result payload signals that the current session has been cleared.")]
     public void Clear()
     {
         CurrentSession = null;

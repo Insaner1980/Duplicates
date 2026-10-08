@@ -29,17 +29,20 @@ public sealed record ScanOptions
     public int? MaxHashingConcurrency { get; init; }
 
     public int GetEffectiveMaxHashingConcurrency()
+        => ResolveMaxHashingConcurrency(MaxHashingConcurrency);
+
+    private static int ResolveMaxHashingConcurrency(int? maxHashingConcurrency)
     {
-        if (MaxHashingConcurrency is null)
+        if (maxHashingConcurrency is null)
         {
             return Math.Max(1, Environment.ProcessorCount);
         }
 
-        if (!AllowedConcurrencyOverrides.Contains(MaxHashingConcurrency.Value))
+        if (!AllowedConcurrencyOverrides.Contains(maxHashingConcurrency.Value))
         {
-            throw new ArgumentOutOfRangeException(nameof(MaxHashingConcurrency), MaxHashingConcurrency, "Allowed values are Auto, 1, 2, 4, or 8.");
+            throw new ArgumentOutOfRangeException(nameof(maxHashingConcurrency), maxHashingConcurrency, "Allowed values are Auto, 1, 2, 4, or 8.");
         }
 
-        return MaxHashingConcurrency.Value;
+        return maxHashingConcurrency.Value;
     }
 }

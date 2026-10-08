@@ -158,7 +158,7 @@ public sealed class SettingsViewModelTests
         System.Reflection.MethodInfo clearMethod = typeof(SettingsViewModel).GetMethod(
             "ClearCacheAsync",
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
-        await Assert.IsAssignableFrom<Task>(clearMethod.Invoke(viewModel, null));
+        await Assert.IsType<Task>(clearMethod.Invoke(viewModel, null), exactMatch: false);
         Assert.Equal(0, cache.ClearCallCount);
         lease!.Dispose();
 
@@ -250,7 +250,7 @@ public sealed class SettingsViewModelTests
         System.Reflection.MethodInfo clearMethod = typeof(SettingsViewModel).GetMethod(
             "ClearCacheAsync",
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
-        await Assert.IsAssignableFrom<Task>(clearMethod.Invoke(viewModel, null));
+        await Assert.IsType<Task>(clearMethod.Invoke(viewModel, null), exactMatch: false);
         Assert.Equal(1, cache.ClearCallCount);
 
         release.SetResult();
@@ -316,7 +316,7 @@ public sealed class SettingsViewModelTests
     {
         var viewModel = new SettingsViewModel(new FakeSettingsService());
 
-        Assert.Contains("Windows App SDK 2.3", viewModel.AboutText);
+        Assert.Contains("Windows App SDK 2.5", viewModel.AboutText);
     }
 
     private static T ReadSetting<T>(AppSettings settings, string propertyName)
@@ -379,5 +379,30 @@ public sealed class SettingsViewModelTests
             ClearCallCount++;
             return ClearHandler?.Invoke(cancellationToken) ?? Task.CompletedTask;
         }
+    }
+
+    [Fact]
+    public void BackdropAndDeletionIndexesMirrorEnumsAndIgnoreInvalidSelections()
+    {
+        var viewModel = new SettingsViewModel(new FakeSettingsService());
+
+        viewModel.SelectedBackdropModeIndex = (int)BackdropMode.Acrylic;
+        viewModel.SelectedDeletionModeIndex = (int)DeletionMode.Permanent;
+        viewModel.SelectedBackdropModeIndex = -1;
+        viewModel.SelectedDeletionModeIndex = 9;
+
+        Assert.Equal(BackdropMode.Acrylic, viewModel.SelectedBackdropMode);
+        Assert.Equal(DeletionMode.Permanent, viewModel.SelectedDeletionMode);
+        Assert.Equal((int)BackdropMode.Acrylic, viewModel.SelectedBackdropModeIndex);
+        Assert.Equal((int)DeletionMode.Permanent, viewModel.SelectedDeletionModeIndex);
+    }
+
+    [Fact]
+    public void AboutTextSeparatesPartsWithMiddleDots()
+    {
+        var viewModel = new SettingsViewModel(new FakeSettingsService());
+
+        Assert.EndsWith(" \u00B7 Finnvek \u00B7 .NET 10 \u00B7 Windows App SDK 2.5", viewModel.AboutText);
+        Assert.DoesNotContain(" - ", viewModel.AboutText, StringComparison.Ordinal);
     }
 }

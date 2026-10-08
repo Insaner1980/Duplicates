@@ -77,7 +77,7 @@ public sealed class AnalysisViewModelTests
                 typeof(AnalysisSessionStore),
                 typeof(PathScopeViewModel),
                 typeof(IAppOperationCoordinator),
-                typeof(ISettingsService),
+                typeof(ISettingsService)
             ]);
 
         Assert.NotNull(constructor);
@@ -270,7 +270,7 @@ public sealed class AnalysisViewModelTests
     [Fact]
     public async Task BrokenFilesShowsExactCoverageAndRunsWithoutOptions()
     {
-        ToolOptions? receivedOptions = null;
+        IToolOptions? receivedOptions = null;
         var service = new FakeAnalysisService
         {
             Run = (_, _, options, _, _) =>
@@ -366,7 +366,7 @@ public sealed class AnalysisViewModelTests
     [Fact]
     public async Task BigFiles_NormalizesOptionsOnceAndStoresTheExactRunSnapshot()
     {
-        ToolOptions? requestedOptions = null;
+        IToolOptions? requestedOptions = null;
         var service = new FakeAnalysisService
         {
             Run = (_, _, options, _, _) =>
@@ -399,7 +399,7 @@ public sealed class AnalysisViewModelTests
     [Fact]
     public async Task TemporaryFiles_NormalizesOptionsOnceAndStoresTheExactRunSnapshot()
     {
-        ToolOptions? requestedOptions = null;
+        IToolOptions? requestedOptions = null;
         var service = new FakeAnalysisService
         {
             Run = (_, _, options, _, _) =>
@@ -472,7 +472,7 @@ public sealed class AnalysisViewModelTests
     [Fact]
     public async Task SimilarImages_PresetIsNativeBalancedByDefaultAndStoresExactImmutableRunOptions()
     {
-        ToolOptions? requestedOptions = null;
+        IToolOptions? requestedOptions = null;
         var service = new FakeAnalysisService
         {
             Run = (_, _, options, _, _) =>
@@ -519,7 +519,7 @@ public sealed class AnalysisViewModelTests
         SimilarityPreset preset,
         int expectedDistance)
     {
-        ToolOptions? requestedOptions = null;
+        IToolOptions? requestedOptions = null;
         var service = new FakeAnalysisService
         {
             Run = (_, _, options, _, _) =>
@@ -561,7 +561,7 @@ public sealed class AnalysisViewModelTests
     [Fact]
     public async Task MusicDuplicates_UsesExactDisclosureCollapsedOptionsAndImmutableTwoSecondSnapshot()
     {
-        ToolOptions? requestedOptions = null;
+        IToolOptions? requestedOptions = null;
         var service = new FakeAnalysisService
         {
             Run = (_, _, options, _, _) =>
@@ -784,9 +784,19 @@ public sealed class AnalysisViewModelTests
         SizeBytes = size,
     };
 
+    [Fact]
+    public void LargeFileEditorShowsReadableUnitsForDefaultsAndPresets()
+    {
+        var analysis = new AnalysisViewModel(new FakeAnalysisService(), new AnalysisSessionStore(), NewScope());
+
+        Assert.Equal((1d, 3), (analysis.LargeFileMinimumSizeEditor.Amount, analysis.LargeFileMinimumSizeEditor.UnitIndex));
+        analysis.SetLargeFileMinimumSizeTo100MbCommand.Execute(null);
+        Assert.Equal((100d, 2), (analysis.LargeFileMinimumSizeEditor.Amount, analysis.LargeFileMinimumSizeEditor.UnitIndex));
+    }
+
     private sealed class FakeAnalysisService : IAnalysisService
     {
-        public Func<ToolKind, AnalysisScope, ToolOptions, IProgress<AnalysisProgress>?, CancellationToken, Task<AnalysisResult>> Run { get; init; } =
+        public Func<ToolKind, AnalysisScope, IToolOptions, IProgress<AnalysisProgress>?, CancellationToken, Task<AnalysisResult>> Run { get; init; } =
             (_, _, _, _, _) => Task.FromResult(NewResult());
 
         public int CallCount { get; private set; }
@@ -796,7 +806,7 @@ public sealed class AnalysisViewModelTests
         public Task<AnalysisResult> RunAsync(
             ToolKind tool,
             AnalysisScope scope,
-            ToolOptions toolOptions,
+            IToolOptions toolOptions,
             IProgress<AnalysisProgress>? progress,
             CancellationToken cancellationToken)
         {
@@ -807,7 +817,7 @@ public sealed class AnalysisViewModelTests
         public Task<AnalysisResult> RunAsync(
             ToolKind tool,
             AnalysisScope scope,
-            ToolOptions toolOptions,
+            IToolOptions toolOptions,
             AnalysisRunOptions runOptions,
             IProgress<AnalysisProgress>? progress,
             CancellationToken cancellationToken)
@@ -824,13 +834,20 @@ public sealed class AnalysisViewModelTests
 
         public IReadOnlyList<SimilarityGroup> RegroupSimilarityItems(
             ToolKind tool,
-            ToolOptions options,
+            IToolOptions options,
             IReadOnlyList<SimilarityItem> items) => throw new NotSupportedException();
     }
 
-    private sealed class CapturingProgress<T>(Action<T> report) : IProgress<T>
+    private sealed class CapturingProgress<T> : IProgress<T>
     {
-        public void Report(T value) => report(value);
+        private readonly Action<T> _report;
+
+        public CapturingProgress(Action<T> report)
+        {
+            _report = report;
+        }
+
+        public void Report(T value) => _report(value);
     }
 
     private sealed class QueuedAnalysisProgressContext : SynchronizationContext
@@ -848,5 +865,48 @@ public sealed class AnalysisViewModelTests
                 item.Callback(item.State);
             }
         }
+    }
+
+    [Fact]
+    public void SimilarityPresetIndexesMirrorEnumsAndIgnoreInvalidSelections()
+    {
+        var viewModel = new AnalysisViewModel(new FakeAnalysisService(), new AnalysisSessionStore(), NewScope());
+        var changed = new List<string?>();
+        viewModel.PropertyChanged += (_, args) => changed.Add(args.PropertyName);
+
+        Assert.Equal((int)SimilarityPreset.Balanced, viewModel.ImageSimilarityPresetIndex);
+        Assert.Equal((int)SimilarityPreset.Balanced, viewModel.VideoSimilarityPresetIndex);
+
+        viewModel.ImageSimilarityPresetIndex = (int)SimilarityPreset.Broad;
+        viewModel.VideoSimilarityPreset = SimilarityPreset.Strict;
+        viewModel.ImageSimilarityPresetIndex = -1;
+        viewModel.VideoSimilarityPresetIndex = 99;
+
+        Assert.Equal(SimilarityPreset.Broad, viewModel.ImageSimilarityPreset);
+        Assert.Equal(SimilarityPreset.Strict, viewModel.VideoSimilarityPreset);
+        Assert.Equal((int)SimilarityPreset.Strict, viewModel.VideoSimilarityPresetIndex);
+        Assert.Contains(nameof(AnalysisViewModel.ImageSimilarityPresetIndex), changed);
+        Assert.Contains(nameof(AnalysisViewModel.VideoSimilarityPresetIndex), changed);
+    }
+
+    [Theory]
+    [InlineData(ToolKind.BigFiles, true)]
+    [InlineData(ToolKind.TemporaryFiles, true)]
+    [InlineData(ToolKind.SimilarImages, true)]
+    [InlineData(ToolKind.SimilarVideos, true)]
+    [InlineData(ToolKind.EmptyFolders, false)]
+    [InlineData(ToolKind.EmptyFiles, false)]
+    [InlineData(ToolKind.MusicDuplicates, false)]
+    [InlineData(ToolKind.InvalidLinks, false)]
+    [InlineData(ToolKind.BrokenFiles, false)]
+    [InlineData(ToolKind.BadExtensions, false)]
+    [InlineData(ToolKind.BadNames, false)]
+    public void OptionsSectionIsShownOnlyForToolsWithEditableOptions(ToolKind tool, bool hasOptions)
+    {
+        var viewModel = new AnalysisViewModel(new FakeAnalysisService(), new AnalysisSessionStore(), NewScope());
+
+        viewModel.SelectTool(tool);
+
+        Assert.Equal(hasOptions ? Visibility.Visible : Visibility.Collapsed, viewModel.OptionsVisibility);
     }
 }

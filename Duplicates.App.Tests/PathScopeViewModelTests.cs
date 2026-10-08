@@ -2,7 +2,7 @@ using Duplicates.ViewModels;
 
 namespace Duplicates.App.Tests;
 
-public sealed class PathScopeViewModelTests : IDisposable
+public sealed partial class PathScopeViewModelTests : IDisposable
 {
     private readonly string _root = Path.Combine(Path.GetTempPath(), $"Duplicates.Scope.{Guid.NewGuid():N}");
 

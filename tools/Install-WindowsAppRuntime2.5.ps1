@@ -1,7 +1,7 @@
 $ErrorActionPreference = "Stop"
 
-$version = "2.3.1"
-$installerUrl = "https://aka.ms/windowsappsdk/2.3/$version/windowsappruntimeinstall-x64.exe"
+$version = "2.5.1"
+$installerUrl = "https://aka.ms/windowsappsdk/2.5/$version/windowsappruntimeinstall-x64.exe"
 $installerPath = Join-Path $env:TEMP "WindowsAppRuntimeInstall-$version-x64-$([guid]::NewGuid().ToString('N')).exe"
 [IO.File]::Open($installerPath, [IO.FileMode]::CreateNew).Dispose()
 

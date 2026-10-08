@@ -4,81 +4,31 @@
     x:Name="PageRoot"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:controls="using:Duplicates.Views.Controls">
+    xmlns:controls="using:Duplicates.Views.Controls"
+    xmlns:toolkit="using:CommunityToolkit.WinUI.Controls">
     <Grid Background="{ThemeResource BgBaseBrush}">
-        <VisualStateManager.VisualStateGroups>
-            <VisualStateGroup x:Name="WindowWidthStates">
-                <VisualState x:Name="Small">
-                    <VisualState.StateTriggers>
-                        <AdaptiveTrigger MinWindowWidth="0" />
-                    </VisualState.StateTriggers>
-                    <VisualState.Setters>
-                        <Setter Target="HeaderActionRail.(Grid.Row)" Value="1" />
-                    </VisualState.Setters>
-                </VisualState>
-                <VisualState x:Name="Medium">
-                    <VisualState.StateTriggers>
-                        <AdaptiveTrigger MinWindowWidth="641" />
-                    </VisualState.StateTriggers>
-                </VisualState>
-            </VisualStateGroup>
-        </VisualStateManager.VisualStateGroups>
-
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <Grid
-            MaxWidth="{StaticResource ContentMaxWidth}"
-            Padding="{StaticResource PageHeaderPadding}"
-            HorizontalAlignment="Stretch">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
-            </Grid.RowDefinitions>
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
-            <StackPanel Spacing="6">
-                <TextBlock
-                    AutomationProperties.HeadingLevel="Level1"
-                    Foreground="{ThemeResource TextPrimaryBrush}"
-                    Style="{ThemeResource TitleTextBlockStyle}"
-                    Text="{Binding Title}" />
-                <TextBlock Style="{StaticResource MutedTextBlockStyle}" Text="{Binding Subtitle}" />
-            </StackPanel>
-            <Grid
-                x:Name="HeaderActionRail"
-                Grid.ColumnSpan="2"
-                MaxWidth="{StaticResource ScanWorkAreaMaxWidth}"
-                HorizontalAlignment="Stretch">
-                <Button
-                    HorizontalAlignment="Right"
-                    VerticalAlignment="Center"
-                    AccessKey="S"
-                    AutomationProperties.Name="Start analysis"
-                    Command="{Binding StartAnalysisCommand}"
-                    Style="{StaticResource AccentButtonStyle}"
-                    Visibility="{Binding SetupVisibility}">
-                    <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpacingSmall}">
-                        <SymbolIcon Symbol="Play" />
-                        <TextBlock Text="Start analysis" />
-                    </StackPanel>
-                </Button>
-            </Grid>
-        </Grid>
-
         <ScrollViewer
-            Grid.Row="1"
             HorizontalScrollBarVisibility="Disabled"
             HorizontalScrollMode="Disabled">
             <Grid
                 MaxWidth="{StaticResource ContentMaxWidth}"
-                Padding="{StaticResource PageContentPadding}"
+                Padding="{StaticResource ScrollingPageContentPadding}"
                 HorizontalAlignment="Stretch">
                 <StackPanel Spacing="{StaticResource SpacingExtraLarge}">
+                    <StackPanel Spacing="6">
+                        <TextBlock
+                            AutomationProperties.HeadingLevel="Level1"
+                            Foreground="{ThemeResource TextPrimaryBrush}"
+                            Style="{ThemeResource TitleTextBlockStyle}"
+                            Text="{Binding Title}" />
+                        <TextBlock Style="{StaticResource MutedTextBlockStyle}" Text="{Binding Subtitle}" />
+                    </StackPanel>
+
                     <InfoBar
                         AutomationProperties.LiveSetting="Polite"
                         AutomationProperties.Name="Analysis status"
@@ -89,71 +39,88 @@
                     <StackPanel Visibility="{Binding SetupVisibility}" Spacing="{StaticResource SpacingExtraLarge}">
                         <controls:PathScopeEditor
                             x:Name="PathScopeEditor"
-                            MaxWidth="{StaticResource ScanWorkAreaMaxWidth}"
-                            HorizontalAlignment="Stretch"
                             DataContext="{Binding PathScope}" />
-                        <Expander
+                        <toolkit:SettingsExpander
                             x:Name="AnalysisOptions"
-                            MaxWidth="{StaticResource ScanWorkAreaMaxWidth}"
-                            HorizontalAlignment="Stretch"
                             Header="Analysis options"
+                            Description="{Binding OptionsSummary}"
                             IsExpanded="True"
                             Visibility="{Binding OptionsVisibility}">
-                            <StackPanel Padding="0,12,0,0" Spacing="{StaticResource SpacingMedium}">
-                                <StackPanel
-                                    Visibility="{Binding LargeFileOptionsVisibility}"
-                                    Spacing="{StaticResource SpacingSmall}">
-                                    <NumberBox
-                                        Header="Minimum size, bytes"
-                                        Minimum="0"
-                                        ValidationMode="InvalidInputOverwritten"
-                                        Value="{Binding LargeFileMinimumSizeValue, Mode=TwoWay}" />
-                                    <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpacingSmall}">
-                                        <Button
-                                            Command="{Binding SetLargeFileMinimumSizeToAnyCommand}"
-                                            Content="Any" />
-                                        <Button
-                                            Command="{Binding SetLargeFileMinimumSizeTo100MbCommand}"
-                                            Content="100 MB" />
-                                        <Button
-                                            Command="{Binding SetLargeFileMinimumSizeTo1GbCommand}"
-                                            Content="1 GB" />
-                                        <Button
-                                            Command="{Binding SetLargeFileMinimumSizeTo10GbCommand}"
-                                            Content="10 GB" />
+                            <toolkit:SettingsExpander.HeaderIcon>
+                                <FontIcon Glyph="&#xE71C;" />
+                            </toolkit:SettingsExpander.HeaderIcon>
+                            <toolkit:SettingsExpander.Items>
+                                <toolkit:SettingsCard
+                                    Header="Minimum size"
+                                    Description="Smaller files are skipped."
+                                    Visibility="{Binding LargeFileOptionsVisibility}">
+                                    <StackPanel Spacing="{StaticResource SpacingSmall}">
+                                        <controls:ByteSizeBox
+                                            AccessibleName="Minimum size"
+                                            DataContext="{Binding LargeFileMinimumSizeEditor}" />
+                                        <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpacingSmall}">
+                                            <Button
+                                                Command="{Binding SetLargeFileMinimumSizeToAnyCommand}"
+                                                Content="Any" />
+                                            <Button
+                                                Command="{Binding SetLargeFileMinimumSizeTo100MbCommand}"
+                                                Content="100 MB" />
+                                            <Button
+                                                Command="{Binding SetLargeFileMinimumSizeTo1GbCommand}"
+                                                Content="1 GB" />
+                                            <Button
+                                                Command="{Binding SetLargeFileMinimumSizeTo10GbCommand}"
+                                                Content="10 GB" />
+                                        </StackPanel>
                                     </StackPanel>
-                                </StackPanel>
-                                <StackPanel Visibility="{Binding TemporaryFileOptionsVisibility}">
+                                </toolkit:SettingsCard>
+                                <toolkit:SettingsCard
+                                    Header="Minimum age"
+                                    Description="In days. Newer files are skipped."
+                                    Visibility="{Binding TemporaryFileOptionsVisibility}">
                                     <NumberBox
-                                        Header="Minimum age, days"
+                                        MinWidth="200"
+                                        AutomationProperties.Name="Minimum age, days"
                                         Minimum="0"
+                                        SpinButtonPlacementMode="Compact"
                                         ValidationMode="InvalidInputOverwritten"
                                         Value="{Binding TemporaryFileMinimumAgeDays, Mode=TwoWay}" />
-                                </StackPanel>
-                                <StackPanel Visibility="{Binding SimilarImageOptionsVisibility}">
+                                </toolkit:SettingsCard>
+                                <toolkit:SettingsCard
+                                    Header="Image similarity"
+                                    Description="Strict finds closer matches. Broad finds more candidates."
+                                    Visibility="{Binding SimilarImageOptionsVisibility}">
                                     <ComboBox
-                                        Header="Image similarity"
-                                        SelectedIndex="{Binding ImageSimilarityPreset, Mode=TwoWay}">
+                                        MinWidth="200"
+                                        AutomationProperties.Name="Image similarity"
+                                        SelectedIndex="{Binding ImageSimilarityPresetIndex, Mode=TwoWay}">
                                         <ComboBoxItem Content="Strict" />
                                         <ComboBoxItem Content="Balanced" />
                                         <ComboBoxItem Content="Broad" />
                                     </ComboBox>
-                                </StackPanel>
-                                <StackPanel Visibility="{Binding SimilarVideoOptionsVisibility}">
+                                </toolkit:SettingsCard>
+                                <toolkit:SettingsCard
+                                    Header="Video similarity"
+                                    Description="Strict finds closer matches. Broad finds more candidates."
+                                    Visibility="{Binding SimilarVideoOptionsVisibility}">
                                     <ComboBox
-                                        Header="Video similarity"
-                                        SelectedIndex="{Binding VideoSimilarityPreset, Mode=TwoWay}">
+                                        MinWidth="200"
+                                        AutomationProperties.Name="Video similarity"
+                                        SelectedIndex="{Binding VideoSimilarityPresetIndex, Mode=TwoWay}">
                                         <ComboBoxItem Content="Strict" />
                                         <ComboBoxItem Content="Balanced" />
                                         <ComboBoxItem Content="Broad" />
                                     </ComboBox>
-                                </StackPanel>
-                                <TextBlock
-                                    Style="{StaticResource MutedTextBlockStyle}"
-                                    Text="{Binding OptionsSummary}"
-                                    TextWrapping="Wrap" />
-                            </StackPanel>
-                        </Expander>
+                                </toolkit:SettingsCard>
+                            </toolkit:SettingsExpander.Items>
+                        </toolkit:SettingsExpander>
+                        <toolkit:SettingsCard
+                            Header="Nothing changes until you choose"
+                            Description="The analysis only reads files. You review the results before anything is renamed, moved, or deleted.">
+                            <toolkit:SettingsCard.HeaderIcon>
+                                <FontIcon Glyph="&#xE946;" />
+                            </toolkit:SettingsCard.HeaderIcon>
+                        </toolkit:SettingsCard>
                     </StackPanel>
 
                     <StackPanel
@@ -196,5 +163,37 @@
                 </StackPanel>
             </Grid>
         </ScrollViewer>
+
+        <Border
+            x:Name="ActionFooter"
+            Grid.Row="1"
+            Style="{StaticResource PageFooterBorderStyle}"
+            Visibility="{Binding SetupVisibility}">
+            <Grid
+                MaxWidth="{StaticResource ContentMaxWidth}"
+                HorizontalAlignment="Stretch"
+                ColumnSpacing="{StaticResource SpacingLarge}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock
+                    VerticalAlignment="Center"
+                    Style="{StaticResource MutedTextBlockStyle}"
+                    Text="Add at least one folder or file to start."
+                    Visibility="{Binding PathScope.EmptyIncludedPathsVisibility}" />
+                <Button
+                    Grid.Column="1"
+                    AccessKey="S"
+                    AutomationProperties.Name="Start analysis"
+                    Command="{Binding StartAnalysisCommand}"
+                    Style="{StaticResource AccentButtonStyle}">
+                    <StackPanel Orientation="Horizontal" Spacing="{StaticResource SpacingSmall}">
+                        <SymbolIcon Symbol="Play" />
+                        <TextBlock Text="Start analysis" />
+                    </StackPanel>
+                </Button>
+            </Grid>
+        </Border>
     </Grid>
 </Page>

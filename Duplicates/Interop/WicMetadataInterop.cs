@@ -3,7 +3,7 @@ using System.Text;
 
 namespace Duplicates.Interop;
 
-internal static class WicMetadataInterop
+internal static partial class WicMetadataInterop
 {
     internal static readonly Guid FactoryClassId = new("317d06e8-5f24-433d-bdf7-79ce68d8abc2");
     internal static readonly Guid FactoryInterfaceId = new("ec5ec8a9-c395-4314-9c77-54d7a935ff70");
@@ -92,6 +92,7 @@ internal static class WicMetadataInterop
     [ComImport]
     [Guid("ec5ec8a9-c395-4314-9c77-54d7a935ff70")]
     [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Interoperability", "SYSLIB1096", Justification = "Runtime COM wrappers are required by Marshal COM activation and deterministic release APIs.")]
     internal interface IWICImagingFactory
     {
         [PreserveSig]
@@ -142,6 +143,7 @@ internal static class WicMetadataInterop
     [ComImport]
     [Guid("9EDDE9E7-8DEE-47ea-99DF-E6FAF2ED44BF")]
     [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Interoperability", "SYSLIB1096", Justification = "Runtime COM wrappers are required by Marshal COM activation and deterministic release APIs.")]
     internal interface IWICBitmapDecoder
     {
         [PreserveSig] int QueryCapability(nint stream, out uint capability);
@@ -183,6 +185,7 @@ internal static class WicMetadataInterop
     [ComImport]
     [Guid("00000301-a8f2-4877-ba0a-fd2b6645fb94")]
     [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Interoperability", "SYSLIB1096", Justification = "Runtime COM wrappers are required by Marshal COM activation and deterministic release APIs.")]
     internal interface IWICFormatConverter
     {
         [PreserveSig] int GetSize(out uint width, out uint height);
@@ -211,6 +214,7 @@ internal static class WicMetadataInterop
     [ComImport]
     [Guid("00000101-0000-0000-C000-000000000046")]
     [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Interoperability", "SYSLIB1096", Justification = "Runtime COM wrappers are required by Marshal COM activation and deterministic release APIs.")]
     internal interface IEnumString
     {
         [PreserveSig] int Next(uint count, out nint element, out uint fetched);
@@ -246,6 +250,7 @@ internal static class WicMetadataInterop
     [ComImport]
     [Guid("b84e2c09-78c9-4ac4-8bd3-524ae1663a2f")]
     [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Interoperability", "SYSLIB1096", Justification = "Runtime COM wrappers are required by Marshal COM activation and deterministic release APIs.")]
     internal interface IWICFastMetadataEncoder
     {
         [PreserveSig] int Commit();
@@ -269,19 +274,19 @@ internal static class WicMetadataInterop
         [PreserveSig] int GetExifColorSpace(out uint value);
     }
 
-    [DllImport("ole32.dll")]
-    private static extern int CoCreateInstance(
+    [LibraryImport("ole32.dll")]
+    private static partial int CoCreateInstance(
         in Guid classId,
         nint outer,
         uint classContext,
         in Guid interfaceId,
         out nint instance);
 
-    [DllImport("ole32.dll")]
-    internal static extern int PropVariantClear(nint value);
+    [LibraryImport("ole32.dll")]
+    internal static partial int PropVariantClear(nint value);
 
-    [DllImport("propsys.dll")]
-    internal static extern int StgSerializePropVariant(
+    [LibraryImport("propsys.dll")]
+    internal static partial int StgSerializePropVariant(
         nint value,
         out nint serialized,
         out uint serializedSize);

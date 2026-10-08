@@ -7,7 +7,7 @@ Exact duplicates are content-verified and survivor-protected. Similar-media matc
 ## Stack
 
 - .NET SDK 10.0.301
-- Windows App SDK 2.3.1
+- Windows App SDK 2.5.1
 - WinUI 3, packaged MSIX by default
 - `Duplicates.Engine` is a UI-free `net10.0` exact-scanner and analysis library
 - `Duplicates` is the WinUI app
@@ -34,7 +34,7 @@ dotnet build Duplicates\Duplicates.csproj -c Debug -p:Platform=x64 --no-restore 
 
 Task 20 verified fresh unpackaged and packaged Debug x64 identities and broad native flows. Final isolated 100,000-file scans reached responsive Results in 94.035 s unpackaged and 63.567 s packaged, with virtualization and End/Home keyboard traversal verified in both modes. These are one-host NTFS/NVMe measurements, not cross-machine guarantees.
 
-The historical Task 20 GUI verification used Windows App SDK 1.8. The merged Windows App SDK 2.3 build requires a separate packaged/unpackaged GUI acceptance run.
+The historical Task 20 GUI verification used Windows App SDK 1.8. The Windows App SDK 2.5 build requires a separate packaged/unpackaged GUI acceptance run.
 
 For the packaged Debug x64 development launch, generate a fresh MSIX, unpack it to a unique loose layout with the x64 Windows SDK MakeAppx, remove only the generated root block map, and register the manifest:
 
@@ -63,6 +63,27 @@ Start-Process explorer.exe "shell:AppsFolder\$($package.PackageFamilyName)!App"
 
 The successful Task 20 host used x64 MakeAppx `10.0.26100.8249`; another Windows SDK may install the executable under a different version directory. After closing the app, remove the development package before deleting its exact layout.
 
+## SonarQube Cloud analysis
+
+With the existing local PowerShell profile loaded, run `sonar` from `C:\Dev\Duplicates`
+or a directory inside it. The command finds `tools/sonar.ps1` and uses the CLI's saved
+credential (or `SONAR_TOKEN`). Run `sonar -PlanOnly` to preview the steps without
+building or uploading.
+
+Without that profile, set `SONAR_TOKEN` and run:
+
+```powershell
+.\tools\sonar.ps1 -AllowExternalUpload
+```
+
+The script restores the local scanner and solution, builds Debug/x64 with the app's
+test configuration, runs both xUnit test projects with TRX and OpenCover coverage
+reports, and uploads to `Insaner1980_Duplicates` in organization `insaner1980`.
+Engine and app code are both included in coverage. Logs and fresh test results are
+written under `reports/`; scanner output is ignored by Git. The final link opens
+the analysis in SonarQube Cloud, where server processing and the Quality Gate can
+be checked.
+
 ## Packaging
 
 The preferred distribution path is packaged MSIX. For local sideloading, create and trust a self-signed certificate:
@@ -74,10 +95,10 @@ Import-Certificate -FilePath .\certs\Duplicates.cer -CertStoreLocation Cert:\Cur
 
 Then build/package from Visual Studio or MSBuild's MSIX targets.
 
-Packaged and framework-dependent debug launches also require Windows App Runtime 2.3 for the current user. Install it with the official 2.3.1 x64 installer:
+Packaged and framework-dependent debug launches also require Windows App Runtime 2.5 for the current user. Install it with the official 2.5.1 x64 installer:
 
 ```powershell
-.\tools\Install-WindowsAppRuntime2.3.ps1
+.\tools\Install-WindowsAppRuntime2.5.ps1
 ```
 
 If certificate friction is not worth it for personal use, publish an unpackaged x64 folder. Framework-dependent unpackaged output still needs the Windows App Runtime above:

@@ -11,14 +11,14 @@ public interface IAnalysisService
     Task<AnalysisResult> RunAsync(
         ToolKind tool,
         AnalysisScope scope,
-        ToolOptions toolOptions,
+        IToolOptions toolOptions,
         IProgress<AnalysisProgress>? progress,
         CancellationToken cancellationToken);
 
     Task<AnalysisResult> RunAsync(
         ToolKind tool,
         AnalysisScope scope,
-        ToolOptions toolOptions,
+        IToolOptions toolOptions,
         AnalysisRunOptions runOptions,
         IProgress<AnalysisProgress>? progress,
         CancellationToken cancellationToken) => RunAsync(
@@ -35,7 +35,7 @@ public interface IAnalysisService
 
     IReadOnlyList<SimilarityGroup> RegroupSimilarityItems(
         ToolKind tool,
-        ToolOptions options,
+        IToolOptions options,
         IReadOnlyList<SimilarityItem> items);
 }
 
@@ -86,7 +86,7 @@ public sealed class AnalysisService : IAnalysisService
     public Task<AnalysisResult> RunAsync(
         ToolKind tool,
         AnalysisScope scope,
-        ToolOptions toolOptions,
+        IToolOptions toolOptions,
         IProgress<AnalysisProgress>? progress,
         CancellationToken cancellationToken) => RunAsync(
             tool,
@@ -99,12 +99,45 @@ public sealed class AnalysisService : IAnalysisService
     public async Task<AnalysisResult> RunAsync(
         ToolKind tool,
         AnalysisScope scope,
-        ToolOptions toolOptions,
+        IToolOptions toolOptions,
         AnalysisRunOptions runOptions,
         IProgress<AnalysisProgress>? progress,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(runOptions);
+        ValidateOptions(tool, toolOptions, runOptions);
+        EnsureAnalyzerAvailable(tool);
+
+        var stopwatch = Stopwatch.StartNew();
+        IProgress<AnalysisProgress>? inventoryProgress = progress is null
+            ? null
+            : new InventoryProgress(progress);
+        FileInventory inventory = await Task.Run(
+            () => FileInventoryBuilder.Build(scope, inventoryProgress, cancellationToken),
+            cancellationToken).ConfigureAwait(false);
+        long totalBytes = inventory.Files.Sum(static file => file.SizeBytes);
+        progress?.Report(new AnalysisProgress(
+            AnalysisPhase.Inspecting,
+            inventory.Files.Count,
+            0,
+            0,
+            totalBytes,
+            null));
+        var mediaProgress = new MediaAttemptProgress(inventory, totalBytes, progress);
+        AnalysisResult result = await AnalyzeInventoryAsync(
+            tool, toolOptions, runOptions, inventory, mediaProgress, cancellationToken).ConfigureAwait(false);
+
+        return CompleteSuccessfulRun(
+            result,
+            stopwatch,
+            inventory.Files.Count,
+            totalBytes,
+            progress,
+            cancellationToken);
+    }
+
+    private static void ValidateOptions(ToolKind tool, IToolOptions toolOptions, AnalysisRunOptions runOptions)
+    {
         if (runOptions.MaxMediaConcurrency is not (1 or 2 or 4))
         {
             throw new ArgumentOutOfRangeException(nameof(runOptions));
@@ -156,6 +189,10 @@ public sealed class AnalysisService : IAnalysisService
             throw new ArgumentOutOfRangeException(nameof(toolOptions));
         }
 
+    }
+
+    private void EnsureAnalyzerAvailable(ToolKind tool)
+    {
         if (tool == ToolKind.BrokenFiles && _fileFormatProbe is null)
         {
             throw new NotSupportedException(
@@ -180,47 +217,39 @@ public sealed class AnalysisService : IAnalysisService
                 $"The {ToolDescriptor.For(tool).Title} analyzer is not installed yet.");
         }
 
-        var stopwatch = Stopwatch.StartNew();
-        IProgress<AnalysisProgress>? inventoryProgress = progress is null
-            ? null
-            : new InventoryProgress(progress);
-        FileInventory inventory = await Task.Run(
-            () => new FileInventoryBuilder().Build(scope, inventoryProgress, cancellationToken),
-            cancellationToken).ConfigureAwait(false);
-        long totalBytes = inventory.Files.Sum(static file => file.SizeBytes);
-        progress?.Report(new AnalysisProgress(
-            AnalysisPhase.Inspecting,
-            inventory.Files.Count,
-            0,
-            0,
-            totalBytes,
-            null));
-        var mediaProgress = new MediaAttemptProgress(inventory, totalBytes, progress);
-        AnalysisResult result = (tool, toolOptions) switch
+    }
+
+    private async Task<AnalysisResult> AnalyzeInventoryAsync(
+        ToolKind tool,
+        IToolOptions toolOptions,
+        AnalysisRunOptions runOptions,
+        FileInventory inventory,
+        MediaAttemptProgress mediaProgress,
+        CancellationToken cancellationToken) => (tool, toolOptions) switch
         {
-            (ToolKind.BigFiles, LargeFileToolOptions options) => await new LargeFileAnalyzer().AnalyzeAsync(
+            (ToolKind.BigFiles, LargeFileToolOptions options) => await LargeFileAnalyzer.AnalyzeAsync(
                 inventory,
                 options.MinimumSizeBytes,
                 cancellationToken).ConfigureAwait(false),
-            (ToolKind.EmptyFiles, NoToolOptions) => await new EmptyFileAnalyzer().AnalyzeAsync(
+            (ToolKind.EmptyFiles, NoToolOptions) => await EmptyFileAnalyzer.AnalyzeAsync(
                 inventory,
                 cancellationToken).ConfigureAwait(false),
-            (ToolKind.EmptyFolders, NoToolOptions) => await new EmptyFolderAnalyzer().AnalyzeAsync(
+            (ToolKind.EmptyFolders, NoToolOptions) => await EmptyFolderAnalyzer.AnalyzeAsync(
                 inventory,
                 cancellationToken).ConfigureAwait(false),
-            (ToolKind.InvalidLinks, NoToolOptions) => await new InvalidLinkAnalyzer().AnalyzeAsync(
+            (ToolKind.InvalidLinks, NoToolOptions) => await InvalidLinkAnalyzer.AnalyzeAsync(
                 inventory,
                 cancellationToken).ConfigureAwait(false),
             (ToolKind.BrokenFiles, NoToolOptions) => await new BrokenFileAnalyzer(_fileFormatProbe!).AnalyzeAsync(
                 inventory,
                 cancellationToken).ConfigureAwait(false),
-            (ToolKind.BadExtensions, NoToolOptions) => await new BadExtensionAnalyzer().AnalyzeAsync(
+            (ToolKind.BadExtensions, NoToolOptions) => await BadExtensionAnalyzer.AnalyzeAsync(
                 inventory,
                 cancellationToken).ConfigureAwait(false),
-            (ToolKind.BadNames, NoToolOptions) => await new BadNameAnalyzer().AnalyzeAsync(
+            (ToolKind.BadNames, NoToolOptions) => await BadNameAnalyzer.AnalyzeAsync(
                 inventory,
                 cancellationToken).ConfigureAwait(false),
-            (ToolKind.TemporaryFiles, TemporaryFileToolOptions options) => await new TemporaryFileAnalyzer().AnalyzeAsync(
+            (ToolKind.TemporaryFiles, TemporaryFileToolOptions options) => await TemporaryFileAnalyzer.AnalyzeAsync(
                 inventory,
                 new TemporaryFileOptions(options.MinimumAge, options.UtcNow),
                 cancellationToken).ConfigureAwait(false),
@@ -251,15 +280,6 @@ public sealed class AnalysisService : IAnalysisService
             _ => throw new NotSupportedException(
                 $"The {ToolDescriptor.For(tool).Title} analyzer is not installed yet."),
         };
-
-        return CompleteSuccessfulRun(
-            result,
-            stopwatch,
-            inventory.Files.Count,
-            totalBytes,
-            progress,
-            cancellationToken);
-    }
 
     internal static AnalysisResult CompleteSuccessfulRun(
         AnalysisResult result,
@@ -297,19 +317,19 @@ public sealed class AnalysisService : IAnalysisService
 
     public IReadOnlyList<SimilarityGroup> RegroupSimilarityItems(
         ToolKind tool,
-        ToolOptions options,
+        IToolOptions options,
         IReadOnlyList<SimilarityItem> items) => (tool, options, _imageSampleProvider) switch
         {
             (ToolKind.SimilarImages, SimilarImageToolOptions imageOptions, not null) =>
-                new SimilarImageAnalyzer(_imageSampleProvider).Regroup(
+                SimilarImageAnalyzer.Regroup(
                     items,
                     new SimilarImageOptions(imageOptions.MaximumHammingDistance)),
             (ToolKind.SimilarVideos, SimilarVideoToolOptions videoOptions, _) when _videoSampleProvider is not null =>
-                new SimilarVideoAnalyzer(_videoSampleProvider).Regroup(
+                SimilarVideoAnalyzer.Regroup(
                     items,
                     new SimilarVideoOptions(videoOptions.MaximumMeanFrameDistance)),
             (ToolKind.MusicDuplicates, MusicDuplicateToolOptions musicOptions, _) when _musicMetadataProvider is not null =>
-                new MusicDuplicateAnalyzer(_musicMetadataProvider).Regroup(
+                MusicDuplicateAnalyzer.Regroup(
                     items,
                     new MusicDuplicateOptions(musicOptions.MaximumDurationDifference)),
             _ => throw new NotSupportedException($"Regrouping is not available for {tool} with these options."),
@@ -381,7 +401,7 @@ public sealed class AnalysisService : IAnalysisService
     private sealed class MediaAttemptProgress
     {
         private readonly Lock _gate = new();
-        private readonly IReadOnlyDictionary<string, long> _fileSizes;
+        private readonly Dictionary<string, long> _fileSizes;
         private readonly long _itemsDiscovered;
         private readonly long _totalBytes;
         private readonly IProgress<AnalysisProgress>? _progress;

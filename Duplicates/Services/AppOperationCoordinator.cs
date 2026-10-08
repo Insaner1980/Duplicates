@@ -2,7 +2,7 @@ using Duplicates.Models;
 
 namespace Duplicates.Services;
 
-public sealed class AppOperationCoordinator : IAppOperationCoordinator
+public sealed partial class AppOperationCoordinator : IAppOperationCoordinator
 {
     private readonly object _gate = new();
     private OperationLease? _activeLease;
@@ -102,7 +102,7 @@ public sealed class AppOperationCoordinator : IAppOperationCoordinator
         idleCompletion?.TrySetResult();
     }
 
-    private sealed class OperationLease(AppOperationCoordinator owner) : IAppOperationLease
+    private sealed partial class OperationLease(AppOperationCoordinator owner) : IAppOperationLease
     {
         private AppOperationCoordinator? _owner = owner;
 

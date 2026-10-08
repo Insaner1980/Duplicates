@@ -1,9 +1,8 @@
 using System.Diagnostics;
 using System.Globalization;
-using System.Runtime.InteropServices;
-using System.Security;
 using Duplicates.Engine.Analysis.Media;
 using Duplicates.Engine.Models;
+using static Duplicates.Engine.Analysis.Analyzers.SimilarityAnalyzerSupport;
 
 namespace Duplicates.Engine.Analysis.Analyzers;
 
@@ -41,35 +40,12 @@ public sealed class SimilarVideoAnalyzer
         cancellationToken.ThrowIfCancellationRequested();
 
         var stopwatch = Stopwatch.StartNew();
-        InventoryFile[] files = inventory.Files
-            .Where(static file =>
-                !file.Attributes.HasFlag(FileAttributes.Directory) &&
-                !file.Attributes.HasFlag(FileAttributes.ReparsePoint) &&
-                VideoFilter.Matches(file.Extension))
-            .OrderBy(static file => file.FullPath, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(static file => file.FullPath, StringComparer.Ordinal)
-            .ToArray();
-        var outcomes = new FileAnalysisOutcome[files.Length];
-        await Parallel.ForEachAsync(
-            Enumerable.Range(0, files.Length),
-            new ParallelOptions
-            {
-                CancellationToken = cancellationToken,
-                MaxDegreeOfParallelism = _maximumConcurrency,
-                TaskScheduler = TaskScheduler.Default,
-            },
-            async (index, token) =>
-            {
-                outcomes[index] = await AnalyzeFileAsync(files[index], token).ConfigureAwait(false);
-            }).ConfigureAwait(false);
-        Candidate[] candidates = outcomes
-            .Where(static outcome => outcome.Candidate is not null)
-            .Select(static outcome => outcome.Candidate!)
-            .ToArray();
-        SkippedPath[] analyzerSkips = outcomes
-            .Where(static outcome => outcome.Skip is not null)
-            .Select(static outcome => outcome.Skip!)
-            .ToArray();
+        (Candidate[] candidates, IReadOnlyList<SkippedPath> skippedPaths) = await AnalyzeFilesAsync<Candidate>(
+            inventory,
+            VideoFilter,
+            _maximumConcurrency,
+            AnalyzeFileAsync,
+            cancellationToken).ConfigureAwait(false);
 
         IReadOnlyList<SimilarityGroup> groups = BuildGroups(
             candidates,
@@ -81,14 +57,12 @@ public sealed class SimilarVideoAnalyzer
         {
             Findings = [],
             Groups = groups,
-            SkippedPaths = analyzerSkips.Length == 0
-                ? inventory.SkippedPaths
-                : [.. inventory.SkippedPaths, .. analyzerSkips],
+            SkippedPaths = skippedPaths,
             Elapsed = stopwatch.Elapsed,
         };
     }
 
-    private async ValueTask<FileAnalysisOutcome> AnalyzeFileAsync(
+    private async ValueTask<FileAnalysisOutcome<Candidate>> AnalyzeFileAsync(
         InventoryFile file,
         CancellationToken cancellationToken)
     {
@@ -155,7 +129,7 @@ public sealed class SimilarVideoAnalyzer
         return BuildEvidence(sample) == expected;
     }
 
-    public IReadOnlyList<SimilarityGroup> Regroup(
+    public static IReadOnlyList<SimilarityGroup> Regroup(
         IReadOnlyList<SimilarityItem> items,
         SimilarVideoOptions options) => RegroupPrehashed(items, options, pairScored: null);
 
@@ -184,7 +158,7 @@ public sealed class SimilarVideoAnalyzer
         return BuildGroups(candidates, options, pairScored, cancellationToken);
     }
 
-    private static IReadOnlyList<SimilarityGroup> BuildGroups(
+    private static List<SimilarityGroup> BuildGroups(
         IReadOnlyList<Candidate> source,
         SimilarVideoOptions options,
         Action<string, string>? pairScored,
@@ -212,38 +186,8 @@ public sealed class SimilarVideoAnalyzer
                 activeStart++;
             }
 
-            var priorCandidates = new SortedSet<int>();
-            for (int frameIndex = 0; frameIndex < FrameCount; frameIndex++)
-            {
-                ulong hash = GetFrameHash(current.Evidence, frameIndex);
-                for (int bandIndex = 0; bandIndex < BandCount; bandIndex++)
-                {
-                    var key = new BandKey(frameIndex, bandIndex, ReadBand(hash, bandIndex));
-                    if (bands.TryGetValue(key, out HashSet<int>? matching))
-                    {
-                        priorCandidates.UnionWith(matching);
-                    }
-                }
-            }
-
-            foreach (int otherIndex in priorCandidates)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                Candidate other = candidates[otherIndex];
-                if (!DurationMatches(other.Evidence, current.Evidence) ||
-                    !AspectRatiosMatch(other.Evidence, current.Evidence))
-                {
-                    continue;
-                }
-
-                pairScored?.Invoke(other.FullPath, current.FullPath);
-                cancellationToken.ThrowIfCancellationRequested();
-                int totalDistance = TotalDistance(other.Evidence, current.Evidence);
-                if (totalDistance <= FrameCount * options.MaximumMeanFrameDistance)
-                {
-                    disjointSet.Union(index, otherIndex);
-                }
-            }
+            SortedSet<int> priorCandidates = GetPriorCandidates(bands, current);
+            ConnectCandidates(candidates, index, priorCandidates, disjointSet, options, pairScored, cancellationToken);
 
             AddToBands(bands, current, index);
         }
@@ -303,6 +247,55 @@ public sealed class SimilarVideoAnalyzer
 
         cancellationToken.ThrowIfCancellationRequested();
         return groups;
+    }
+
+    private static SortedSet<int> GetPriorCandidates(Dictionary<BandKey, HashSet<int>> bands, Candidate current)
+    {
+        var priorCandidates = new SortedSet<int>();
+        for (int frameIndex = 0; frameIndex < FrameCount; frameIndex++)
+        {
+            ulong hash = GetFrameHash(current.Evidence, frameIndex);
+            for (int bandIndex = 0; bandIndex < BandCount; bandIndex++)
+            {
+                var key = new BandKey(frameIndex, bandIndex, ReadBand(hash, bandIndex));
+                if (bands.TryGetValue(key, out HashSet<int>? matching))
+                {
+                    priorCandidates.UnionWith(matching);
+                }
+            }
+        }
+
+        return priorCandidates;
+    }
+
+    private static void ConnectCandidates(
+        Candidate[] candidates,
+        int index,
+        SortedSet<int> priorCandidates,
+        DisjointSet disjointSet,
+        SimilarVideoOptions options,
+        Action<string, string>? pairScored,
+        CancellationToken cancellationToken)
+    {
+        Candidate current = candidates[index];
+        foreach (int otherIndex in priorCandidates)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Candidate other = candidates[otherIndex];
+            if (!DurationMatches(other.Evidence, current.Evidence) ||
+                !AspectRatiosMatch(other.Evidence, current.Evidence))
+            {
+                continue;
+            }
+
+            pairScored?.Invoke(other.FullPath, current.FullPath);
+            cancellationToken.ThrowIfCancellationRequested();
+            int totalDistance = TotalDistance(other.Evidence, current.Evidence);
+            if (totalDistance <= FrameCount * options.MaximumMeanFrameDistance)
+            {
+                disjointSet.Union(index, otherIndex);
+            }
+        }
     }
 
     private static SimilarityItem BuildItem(Candidate candidate, double meanDistance) => new()
@@ -494,44 +487,6 @@ public sealed class SimilarVideoAnalyzer
         }
     }
 
-    private static bool TryReadSnapshot(string path, out FileSnapshot snapshot)
-    {
-        try
-        {
-            FileAttributes attributes = File.GetAttributes(path);
-            var file = new FileInfo(path);
-            file.Refresh();
-            if (!file.Exists ||
-                attributes.HasFlag(FileAttributes.Directory) ||
-                attributes.HasFlag(FileAttributes.ReparsePoint))
-            {
-                snapshot = default;
-                return false;
-            }
-
-            snapshot = new FileSnapshot(file.Length, file.LastWriteTimeUtc);
-            return true;
-        }
-        catch (Exception ex) when (IsExpectedProviderFailure(ex))
-        {
-            snapshot = default;
-            return false;
-        }
-    }
-
-    private static bool MatchesInventory(FileSnapshot snapshot, InventoryFile file) =>
-        snapshot.SizeBytes == file.SizeBytes && snapshot.ModifiedUtc.Ticks == file.ModifiedUtc.Ticks;
-
-    private static bool IsExpectedProviderFailure(Exception exception) =>
-        exception is IOException or UnauthorizedAccessException or SecurityException or ArgumentException or
-            NotSupportedException or InvalidDataException or OverflowException or COMException;
-
-    private static SkippedPath ChangedSkip(string path) => new()
-    {
-        Path = path,
-        Reason = "File changed since scan.",
-    };
-
     private static SkippedPath DecodeSkip(string path) => new()
     {
         Path = path,
@@ -544,35 +499,5 @@ public sealed class SimilarVideoAnalyzer
         DateTime ModifiedUtc,
         VideoSimilarityEvidence Evidence);
 
-    private readonly record struct FileAnalysisOutcome(Candidate? Candidate, SkippedPath? Skip);
-
     private readonly record struct BandKey(int FrameIndex, int BandIndex, int Value);
-
-    private readonly record struct FileSnapshot(long SizeBytes, DateTime ModifiedUtc);
-
-    private sealed class DisjointSet(int count)
-    {
-        private readonly int[] _parents = Enumerable.Range(0, count).ToArray();
-
-        public int Find(int item)
-        {
-            while (_parents[item] != item)
-            {
-                _parents[item] = _parents[_parents[item]];
-                item = _parents[item];
-            }
-
-            return item;
-        }
-
-        public void Union(int left, int right)
-        {
-            int leftRoot = Find(left);
-            int rightRoot = Find(right);
-            if (leftRoot != rightRoot)
-            {
-                _parents[Math.Max(leftRoot, rightRoot)] = Math.Min(leftRoot, rightRoot);
-            }
-        }
-    }
 }

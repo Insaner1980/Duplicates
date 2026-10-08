@@ -60,11 +60,13 @@ internal static class VideoOptimizationProfilePolicy
             ? bitrateCap
             : Math.Min(source.VideoBitrate, bitrateCap);
         bool includeAudio = source.AudioTrackCount == 1;
-        uint targetAudioBitrate = includeAudio
-            ? source.AudioBitrate == 0
+        uint targetAudioBitrate = 0;
+        if (includeAudio)
+        {
+            targetAudioBitrate = source.AudioBitrate == 0
                 ? AudioBitrateCap
-                : Math.Min(source.AudioBitrate, AudioBitrateCap)
-            : 0;
+                : Math.Min(source.AudioBitrate, AudioBitrateCap);
+        }
 
         return new VideoProfileBuildResult(
             new VideoTranscodeProfile(

@@ -9,9 +9,9 @@ public sealed record LinkFinding(
     string Reason,
     bool IsDirectoryLink);
 
-public sealed class InvalidLinkAnalyzer
+public static class InvalidLinkAnalyzer
 {
-    public Task<AnalysisResult> AnalyzeAsync(
+    public static Task<AnalysisResult> AnalyzeAsync(
         FileInventory inventory,
         CancellationToken cancellationToken)
     {

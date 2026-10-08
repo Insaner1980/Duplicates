@@ -29,7 +29,7 @@ public sealed partial class AnalysisPage : Page
         ViewModel.AnalysisCompleted -= AnalysisCompleted;
     }
 
-    private void AnalysisCompleted(object? sender, AnalysisSession e)
+    private static void AnalysisCompleted(object? sender, AnalysisSession e)
     {
         App.Current.MainWindow?.ShowAnalysisResultsPage();
     }
