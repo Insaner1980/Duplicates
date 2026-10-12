@@ -253,7 +253,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
 
     public bool CanMutateSelection => !IsActionRunning && _operationCoordinator.ActiveOperation is null;
 
-    public bool CanSelectAll => CanMutateSelection && _allFindings.Count > 0;
+    public bool CanSelectAll => CanMutateSelection && IsBulkMutationToolSupported && _allFindings.Count > 0;
 
     internal bool TryResetSession(AnalysisSession expectedSession)
     {

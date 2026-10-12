@@ -76,6 +76,24 @@ public sealed class AnalysisResultsViewModelTests
         Assert.Equal(1, viewModel.SelectedItemCount);
     }
 
+    [Theory]
+    [InlineData(ToolKind.BadExtensions)]
+    [InlineData(ToolKind.BadNames)]
+    public void SelectAllIsUnavailableForRenameOnlyTools(ToolKind tool)
+    {
+        var store = new AnalysisSessionStore();
+        var viewModel = new AnalysisResultsViewModel(store);
+        store.SetCompleted(tool, new AnalysisScope(), new NoToolOptions(), NewResult(
+            [NewFinding(@"C:\one.txt", 100), NewFinding(@"C:\two.txt", 200)]));
+
+        Assert.False(viewModel.SelectAllCommand.CanExecute(null));
+        viewModel.SelectAllCommand.Execute(null);
+        Assert.Equal(0, viewModel.SelectedItemCount);
+
+        viewModel.Findings[0].IsSelected = true;
+        Assert.True(viewModel.CanRenameSelection);
+    }
+
     [Fact]
     public void SelectAllTracksSharedOperationAvailability()
     {

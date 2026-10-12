@@ -3,7 +3,7 @@
 Build a per-user Windows 11 x64 installer with .NET SDK and Inno Setup installed:
 
 ```powershell
-pwsh -File tools/Build-Installer.ps1 -Version 1.0.1
+pwsh -File tools/Build-Installer.ps1 -Version 1.0.2
 ```
 
 The command prints the setup EXE path under `reports/installer/`. It publishes
