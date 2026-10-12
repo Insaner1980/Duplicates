@@ -572,7 +572,7 @@ public sealed partial class VideoOptimizationQueueItemViewModel : ObservableObje
 
     public string SizeText => FormatBytes(SizeBytes);
 
-    public string SnapshotText => $"{SizeText} · {ModifiedUtc.ToLocalTime():g}";
+    public string SnapshotText => $"{SizeText}, {ModifiedUtc.ToLocalTime():g}";
 
     [ObservableProperty]
     public partial double Progress { get; set; }
@@ -607,24 +607,24 @@ public sealed partial class VideoOptimizationQueueItemViewModel : ObservableObje
 
     public string SourceSummary => SourceMedia is null
         ? "Source media has not been inspected."
-        : $"{SourceMedia.VideoCodec} · {SourceMedia.Width} × {SourceMedia.Height} · " +
-          $"{SourceMedia.Duration:g} · {FormatBits(SourceMedia.TotalBitrate)}";
+        : $"{SourceMedia.VideoCodec}, {SourceMedia.Width} × {SourceMedia.Height}, " +
+          $"{SourceMedia.Duration:g}, {FormatBits(SourceMedia.TotalBitrate)}";
 
     public string TargetSummary => OutputMedia is null
         ? _options.Preset switch
         {
-            VideoOptimizationPreset.Smaller => "Smaller target · MP4 / H.264 · up to 1280 × 720 · up to 30 fps",
-            VideoOptimizationPreset.Balanced => "Balanced target · MP4 / H.264 · up to 1920 × 1080 · up to 60 fps",
-            VideoOptimizationPreset.HighQuality => "High quality target · MP4 / H.264 · up to 3840 × 2160 · up to 60 fps",
+            VideoOptimizationPreset.Smaller => "Smaller target, MP4 / H.264, up to 1280 × 720, up to 30 fps",
+            VideoOptimizationPreset.Balanced => "Balanced target, MP4 / H.264, up to 1920 × 1080, up to 60 fps",
+            VideoOptimizationPreset.HighQuality => "High quality target, MP4 / H.264, up to 3840 × 2160, up to 60 fps",
             _ => "MP4 / H.264 target",
         }
-        : $"{OutputMedia.ContainerCodec} / {OutputMedia.VideoCodec} · " +
-          $"{OutputMedia.Width} × {OutputMedia.Height} · " +
+        : $"{OutputMedia.ContainerCodec} / {OutputMedia.VideoCodec}, " +
+          $"{OutputMedia.Width} × {OutputMedia.Height}, " +
           $"{(double)OutputMedia.FramesPerSecondNumerator / OutputMedia.FramesPerSecondDenominator:N2} fps";
 
     public string OutputSummary => OutputSizeBytes is null
         ? string.Empty
-        : $"{FormatBytes(OutputSizeBytes.Value)} · {FormatSavings(SavedBytes)}";
+        : $"{FormatBytes(OutputSizeBytes.Value)}, {FormatSavings(SavedBytes)}";
 
     public Visibility OutputActionsVisibility =>
         Outcome is VideoOptimizationOutcome.Succeeded or VideoOptimizationOutcome.KeptWithoutSaving &&

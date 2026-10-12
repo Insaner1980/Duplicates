@@ -384,6 +384,6 @@ public sealed partial class SettingsViewModel : ObservableObject
     private static string BuildAboutText()
     {
         string version = typeof(SettingsViewModel).Assembly.GetName().Version?.ToString() ?? "unknown";
-        return $"Duplicates {version} \u00B7 Finnvek \u00B7 .NET 10 \u00B7 Windows App SDK 2.5";
+        return $"Duplicates {version}, Finnvek, .NET 10, Windows App SDK 2.5";
     }
 }

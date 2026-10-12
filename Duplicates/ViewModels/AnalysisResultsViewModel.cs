@@ -29,6 +29,7 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
     private readonly List<SimilarityGroupViewModel> _allGroups = [];
     private CancellationTokenSource? _previewCancellation;
     private long _previewRequestGeneration;
+    private bool _isUpdatingSelection;
 
     public AnalysisResultsViewModel(AnalysisSessionStore sessionStore)
         : this(sessionStore, null, null, (FileSignatureDetector.DetectFileAsync, null))
@@ -177,7 +178,9 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(CanExport))]
     [NotifyPropertyChangedFor(nameof(CanStartNewAnalysis))]
     [NotifyPropertyChangedFor(nameof(CanMutateSelection))]
+    [NotifyPropertyChangedFor(nameof(CanSelectAll))]
     [NotifyCanExecuteChangedFor(nameof(ClearSelectionCommand))]
+    [NotifyCanExecuteChangedFor(nameof(SelectAllCommand))]
     public partial bool IsActionRunning { get; set; }
 
     public Visibility BeforeFirstAnalysisVisibility => _sessionStore.CurrentSession is null
@@ -222,6 +225,8 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
 
     public int SelectedItemCount => GetSelectedFindings().Count + GetSelectedSimilarityItems().Count;
 
+    public string SelectionSummaryText => $"{SelectedItemCount:N0} selected";
+
     public long SelectedBytes => GetSelectedFindings().Sum(static item => item.SizeBytes) +
         GetSelectedSimilarityItems().Sum(static item => item.SizeBytes);
 
@@ -247,6 +252,8 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
     public bool CanStartNewAnalysis => _operationCoordinator.ActiveOperation is null;
 
     public bool CanMutateSelection => !IsActionRunning && _operationCoordinator.ActiveOperation is null;
+
+    public bool CanSelectAll => CanMutateSelection && IsBulkMutationToolSupported && _allFindings.Count > 0;
 
     internal bool TryResetSession(AnalysisSession expectedSession)
     {
@@ -328,17 +335,46 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         NewAnalysisRequested?.Invoke(this, tool);
     }
 
+    [RelayCommand(CanExecute = nameof(CanSelectAll))]
+    private void SelectAll()
+    {
+        if (CanSelectAll)
+        {
+            SetSelection(true);
+        }
+    }
+
     [RelayCommand(CanExecute = nameof(CanMutateSelection))]
     private void ClearSelection()
     {
-        foreach (PathFindingViewModel finding in _allFindings)
+        if (CanMutateSelection)
         {
-            finding.IsSelected = false;
+            SetSelection(false);
         }
+    }
 
-        foreach (SimilarityItemViewModel item in _allGroups.SelectMany(static group => group.Items))
+    private void SetSelection(bool selected)
+    {
+        _isUpdatingSelection = true;
+        try
         {
-            item.IsSelected = false;
+            foreach (PathFindingViewModel finding in _allFindings)
+            {
+                finding.IsSelected = selected;
+            }
+
+            if (!selected)
+            {
+                foreach (SimilarityItemViewModel item in _allGroups.SelectMany(static group => group.Items))
+                {
+                    item.IsSelected = false;
+                }
+            }
+        }
+        finally
+        {
+            _isUpdatingSelection = false;
+            SelectionChanged();
         }
     }
 
@@ -1183,7 +1219,13 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
 
     private void SelectionChanged()
     {
+        if (_isUpdatingSelection)
+        {
+            return;
+        }
+
         OnPropertyChanged(nameof(SelectedItemCount));
+        OnPropertyChanged(nameof(SelectionSummaryText));
         OnPropertyChanged(nameof(SelectedBytes));
         OnPropertyChanged(nameof(CanActOnSelection));
         OnPropertyChanged(nameof(CanRenameSelection));
@@ -1191,6 +1233,8 @@ public sealed partial class AnalysisResultsViewModel : ObservableObject
         OnPropertyChanged(nameof(CanExport));
         OnPropertyChanged(nameof(CanStartNewAnalysis));
         OnPropertyChanged(nameof(CanMutateSelection));
+        OnPropertyChanged(nameof(CanSelectAll));
+        SelectAllCommand.NotifyCanExecuteChanged();
     }
 
     private void OperationChanged(object? sender, EventArgs e)

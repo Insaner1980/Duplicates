@@ -127,6 +127,7 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
@@ -140,17 +141,42 @@
             <TextBlock
                 AutomationProperties.LiveSetting="Polite"
                 Style="{StaticResource MutedTextBlockStyle}"
+                Text="{Binding SelectionSummaryText}" />
+            <TextBlock
+                AutomationProperties.LiveSetting="Polite"
+                Style="{StaticResource MutedTextBlockStyle}"
                 Text="{Binding ActionStatusMessage}" />
         </StackPanel>
 
-        <CommandBar Grid.Row="1" DefaultLabelPosition="Right">
+        <Grid Grid.Row="1" Margin="0,12,0,8" ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <AutoSuggestBox
+                x:Name="SearchBox"
+                AutomationProperties.Name="Search analysis results"
+                PlaceholderText="Search results"
+                QueryIcon="Find"
+                Text="{Binding SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+            <ComboBox
+                Grid.Column="1"
+                AutomationProperties.Name="Sort analysis results"
+                SelectedIndex="{Binding SelectedSortIndex, Mode=TwoWay}">
+                <ComboBoxItem Content="Path" />
+                <ComboBoxItem Content="Size" />
+                <ComboBoxItem Content="Modified" />
+            </ComboBox>
+        </Grid>
+
+        <CommandBar Grid.Row="2" DefaultLabelPosition="Right" HorizontalContentAlignment="Left">
             <AppBarButton
-                AccessKey="N"
-                AutomationProperties.Name="New analysis"
-                Command="{Binding NewAnalysisCommand}"
-                Icon="Refresh"
-                IsEnabled="{Binding CanStartNewAnalysis}"
-                Label="New analysis" />
+                AccessKey="A"
+                AutomationProperties.Name="Select all analysis findings"
+                Command="{Binding SelectAllCommand}"
+                Icon="SelectAll"
+                Label="Select all"
+                ToolTipService.ToolTip="Select all findings, including results hidden by search. Similarity candidates must be selected individually." />
             <AppBarButton
                 AccessKey="C"
                 AutomationProperties.Name="Clear action selection"
@@ -158,19 +184,6 @@
                 Icon="ClearSelection"
                 IsEnabled="{Binding CanMutateSelection}"
                 Label="Clear selection" />
-            <AppBarButton
-                AccessKey="P"
-                AutomationProperties.Name="Toggle preview"
-                Command="{Binding TogglePreviewPaneCommand}"
-                Icon="View"
-                Label="Preview" />
-            <AppBarButton
-                AccessKey="R"
-                AutomationProperties.Name="Rename selected analysis result"
-                Icon="Edit"
-                IsEnabled="{Binding CanRenameSelection}"
-                Label="Rename selected"
-                Click="RenameSelected_Click" />
             <AppBarButton
                 AccessKey="D"
                 AutomationProperties.Name="Delete selected analysis results"
@@ -186,38 +199,38 @@
                 IsEnabled="{Binding CanActOnSelection}"
                 Label="Move selected"
                 Click="MoveSelected_Click" />
-            <AppBarButton
-                AccessKey="E"
-                AutomationProperties.Name="Export analysis results"
-                Icon="Save"
-                IsEnabled="{Binding CanExport}"
-                Label="Export"
-                Click="Export_Click" />
-            <CommandBar.Content>
-                <Grid ColumnSpacing="12">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="240" />
-                        <ColumnDefinition Width="180" />
-                    </Grid.ColumnDefinitions>
-                    <AutoSuggestBox
-                        x:Name="SearchBox"
-                        AutomationProperties.Name="Search analysis results"
-                        PlaceholderText="Search results"
-                        QueryIcon="Find"
-                        Text="{Binding SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                    <ComboBox
-                        Grid.Column="1"
-                        AutomationProperties.Name="Sort analysis results"
-                        SelectedIndex="{Binding SelectedSortIndex, Mode=TwoWay}">
-                        <ComboBoxItem Content="Path" />
-                        <ComboBoxItem Content="Size" />
-                        <ComboBoxItem Content="Modified" />
-                    </ComboBox>
-                </Grid>
-            </CommandBar.Content>
+            <CommandBar.SecondaryCommands>
+                <AppBarButton
+                    AccessKey="N"
+                    AutomationProperties.Name="New analysis"
+                    Command="{Binding NewAnalysisCommand}"
+                    Icon="Refresh"
+                    IsEnabled="{Binding CanStartNewAnalysis}"
+                    Label="New analysis" />
+                <AppBarButton
+                    AccessKey="P"
+                    AutomationProperties.Name="Toggle preview"
+                    Command="{Binding TogglePreviewPaneCommand}"
+                    Icon="View"
+                    Label="Preview" />
+                <AppBarButton
+                    AccessKey="R"
+                    AutomationProperties.Name="Rename selected analysis result"
+                    Icon="Edit"
+                    IsEnabled="{Binding CanRenameSelection}"
+                    Label="Rename selected"
+                    Click="RenameSelected_Click" />
+                <AppBarButton
+                    AccessKey="E"
+                    AutomationProperties.Name="Export analysis results"
+                    Icon="Save"
+                    IsEnabled="{Binding CanExport}"
+                    Label="Export"
+                    Click="Export_Click" />
+            </CommandBar.SecondaryCommands>
         </CommandBar>
 
-        <Grid Grid.Row="2">
+        <Grid Grid.Row="3">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="*" />

@@ -237,7 +237,12 @@ public sealed class ScanViewModelTests
             var coordinator = new AppOperationCoordinator();
             var viewModel = new ScanViewModel(new DuplicateScanner(), new FakeSettingsService(), store, scope, coordinator);
             using var releaseProgress = new ManualResetEventSlim();
-            var context = new QueuedScanProgressContext(() => viewModel.CancelScanCommand.Execute(null), releaseProgress);
+            int cancellations = 0;
+            var context = new QueuedScanProgressContext(() =>
+            {
+                Interlocked.Increment(ref cancellations);
+                viewModel.CancelScanCommand.Execute(null);
+            }, releaseProgress);
             SynchronizationContext? previous = SynchronizationContext.Current;
             Task scan;
             SynchronizationContext.SetSynchronizationContext(context);
@@ -263,6 +268,7 @@ public sealed class ScanViewModelTests
 
             await viewModel.StartScanCommand.ExecuteAsync(null);
 
+            Assert.Equal(1, cancellations);
             Assert.NotNull(store.CurrentResult);
             Assert.Empty(viewModel.StatusMessage);
         }
@@ -577,7 +583,7 @@ public sealed class ScanViewModelTests
 
     private sealed class QueuedScanProgressContext : SynchronizationContext
     {
-        private readonly Action? _beforeContinuation;
+        private Action? _beforeContinuation;
         private readonly ManualResetEventSlim? _releaseProgress;
 
         public QueuedScanProgressContext(Action? beforeContinuation = null, ManualResetEventSlim? releaseProgress = null)
@@ -601,7 +607,7 @@ public sealed class ScanViewModelTests
             {
                 ThreadPool.QueueUserWorkItem(_ =>
                 {
-                    _beforeContinuation?.Invoke();
+                    Interlocked.Exchange(ref _beforeContinuation, null)?.Invoke();
                     callback(state);
                 });
             }

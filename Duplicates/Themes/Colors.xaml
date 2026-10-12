@@ -32,7 +32,7 @@
     <SolidColorBrush x:Key="AccentTextFillColorTertiaryBrush" Color="{StaticResource PaletteAccentRed}" Opacity="0.80" />
     <SolidColorBrush x:Key="TextOnAccentFillColorPrimaryBrush" Color="{StaticResource PaletteWarmWhite}" />
     <SolidColorBrush x:Key="TextOnAccentFillColorSecondaryBrush" Color="{StaticResource PaletteWarmWhite}" Opacity="0.70" />
-    <SolidColorBrush x:Key="NavigationViewSelectionIndicatorForeground" Color="{StaticResource PaletteAccentRed}" />
+    <SolidColorBrush x:Key="NavigationViewSelectionIndicatorForeground" Color="{StaticResource PaletteAccentRed}" Opacity="0" />
 
     <ResourceDictionary.ThemeDictionaries>
         <ResourceDictionary x:Key="Default">
@@ -41,15 +41,19 @@
             <SolidColorBrush x:Key="BgCardBrush" Color="{StaticResource PaletteSurface}" />
             <SolidColorBrush x:Key="BgCardHoverBrush" Color="{StaticResource PaletteSurface}" />
             <SolidColorBrush x:Key="BgCardSelectedBrush" Color="{StaticResource PaletteSurface}" />
-            <SolidColorBrush x:Key="StrokeSubtleBrush" Color="{StaticResource PaletteBlack}" />
+            <SolidColorBrush x:Key="StrokeSubtleBrush" Color="{StaticResource PaletteWarmWhite}" Opacity="0.07" />
             <SolidColorBrush x:Key="StrokeDefaultBrush" Color="{StaticResource PaletteAccentRed}" />
             <SolidColorBrush x:Key="StrokeStrongBrush" Color="{StaticResource PaletteWarmWhite}" />
             <SolidColorBrush x:Key="TextPrimaryBrush" Color="{StaticResource PaletteWarmWhite}" />
-            <SolidColorBrush x:Key="TextSecondaryBrush" Color="{StaticResource PaletteWarmWhite}" />
-            <SolidColorBrush x:Key="TextTertiaryBrush" Color="{StaticResource PaletteWarmWhite}" />
-            <SolidColorBrush x:Key="NavigationViewDefaultPaneBackground" Color="{StaticResource PaletteBackground}" />
-            <SolidColorBrush x:Key="NavigationViewExpandedPaneBackground" Color="{StaticResource PaletteBackground}" />
+            <SolidColorBrush x:Key="TextSecondaryBrush" Color="{StaticResource PaletteWarmWhite}" Opacity="0.72" />
+            <SolidColorBrush x:Key="TextTertiaryBrush" Color="{StaticResource PaletteWarmWhite}" Opacity="0.56" />
+            <SolidColorBrush x:Key="NavigationViewDefaultPaneBackground" Color="{StaticResource PaletteSurface}" />
+            <SolidColorBrush x:Key="NavigationViewExpandedPaneBackground" Color="{StaticResource PaletteSurface}" />
             <SolidColorBrush x:Key="NavigationViewContentBackground" Color="{StaticResource PaletteBackground}" />
+            <StaticResource x:Key="SettingsCardBackground" ResourceKey="BgCardBrush" />
+            <StaticResource x:Key="SettingsCardBorderBrush" ResourceKey="StrokeSubtleBrush" />
+            <StaticResource x:Key="ExpanderContentBackground" ResourceKey="BgCardBrush" />
+            <StaticResource x:Key="ExpanderContentBorderBrush" ResourceKey="BgCardBrush" />
         </ResourceDictionary>
         <ResourceDictionary x:Key="Light">
             <SolidColorBrush x:Key="BgBaseBrush" Color="{StaticResource PaletteWarmWhite}" />
