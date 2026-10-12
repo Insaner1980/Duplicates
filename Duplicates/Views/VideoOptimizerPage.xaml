@@ -216,6 +216,7 @@
             Style="{StaticResource PageFooterBorderStyle}">
             <Grid
                 MaxWidth="{StaticResource ContentMaxWidth}"
+                Padding="{StaticResource PageFooterPadding}"
                 HorizontalAlignment="Stretch"
                 ColumnSpacing="{StaticResource SpacingLarge}">
                 <Grid.ColumnDefinitions>
@@ -223,9 +224,11 @@
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <TextBlock
+                    HorizontalAlignment="Right"
                     VerticalAlignment="Center"
                     Style="{StaticResource MutedTextBlockStyle}"
                     Text="Add at least one folder or file to start."
+                    TextAlignment="Right"
                     Visibility="{Binding PathScope.EmptyIncludedPathsVisibility}" />
                 <Button
                     Grid.Column="1"

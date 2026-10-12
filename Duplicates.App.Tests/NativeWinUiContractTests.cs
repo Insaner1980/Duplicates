@@ -64,6 +64,76 @@ public sealed class NativeWinUiContractTests
     }
 
     [Fact]
+    public void Theme_DisablesLeftSelectionIndicatorsWithoutReplacingTemplates()
+    {
+        XElement navigation = LoadXaml(@"Themes\Colors.xaml").Descendants()
+            .Single(element => (string?)element.Attribute(Xaml + "Key") == "NavigationViewSelectionIndicatorForeground");
+        Assert.Equal("0", (string?)navigation.Attribute("Opacity"));
+        XElement listIndicator = LoadXaml(@"Themes\Styles.xaml").Descendants()
+            .Single(element => (string?)element.Attribute(Xaml + "Key") == "ListViewItemSelectionIndicatorVisualEnabled");
+        Assert.Equal("False", listIndicator.Value);
+    }
+
+    [Fact]
+    public void AnalysisResultsPage_ExposesBulkActionsOutsideSearchAndShowsSelectionCount()
+    {
+        XDocument page = LoadXaml(@"Views\AnalysisResultsPage.xaml");
+        XElement bar = Assert.Single(page.Descendants(Presentation + "CommandBar"));
+        XElement selectAll = bar.Elements(Presentation + "AppBarButton")
+            .Single(button => (string?)button.Attribute("Label") == "Select all");
+        Assert.Equal("{Binding SelectAllCommand}", (string?)selectAll.Attribute("Command"));
+        Assert.Contains(bar.Elements(Presentation + "AppBarButton"),
+            button => (string?)button.Attribute("Click") == "DeleteSelected_Click");
+        Assert.Contains(bar.Elements(Presentation + "AppBarButton"),
+            button => (string?)button.Attribute("Click") == "MoveSelected_Click");
+        Assert.Empty(bar.Descendants(Presentation + "AutoSuggestBox"));
+        Assert.Contains(page.Descendants(Presentation + "TextBlock"),
+            text => (string?)text.Attribute("Text") == "{Binding SelectionSummaryText}");
+    }
+
+    [Fact]
+    public void Styles_UseSoftRoundedNativeControlsAndGroupedSettingsCards()
+    {
+        XDocument styles = LoadXaml(@"Themes\Styles.xaml");
+        Dictionary<string, string> radii = styles
+            .Descendants(Presentation + "CornerRadius")
+            .ToDictionary(
+                element => (string)element.Attribute(Xaml + "Key")!,
+                element => element.Value.Trim(),
+                StringComparer.Ordinal);
+
+        Assert.Equal("6", radii["ControlCornerRadius"]);
+        Assert.Equal("10", radii["OverlayCornerRadius"]);
+        Assert.Equal("10", radii["CardCornerRadius"]);
+
+        foreach (string target in new[] { "toolkit:SettingsExpander", "toolkit:SettingsCard" })
+        {
+            XElement style = Assert.Single(
+                styles.Descendants(Presentation + "Style"),
+                element =>
+                    (string?)element.Attribute("TargetType") == target &&
+                    element.Attribute(Xaml + "Key") is null);
+            XElement setter = Assert.Single(style.Elements(Presentation + "Setter"));
+            Assert.Equal("CornerRadius", (string?)setter.Attribute("Property"));
+            Assert.Equal("{StaticResource CardCornerRadius}", (string?)setter.Attribute("Value"));
+        }
+
+        XDocument colors = LoadXaml(@"Themes\Colors.xaml");
+        XElement dark = colors
+            .Descendants(Presentation + "ResourceDictionary")
+            .Single(element => (string?)element.Attribute(Xaml + "Key") == "Default");
+        string? ResourceKeyOf(string key) => (string?)dark
+            .Elements(Presentation + "StaticResource")
+            .Single(element => (string?)element.Attribute(Xaml + "Key") == key)
+            .Attribute("ResourceKey");
+
+        Assert.Equal("BgCardBrush", ResourceKeyOf("SettingsCardBackground"));
+        Assert.Equal("BgCardBrush", ResourceKeyOf("ExpanderContentBackground"));
+        Assert.Equal("BgCardBrush", ResourceKeyOf("ExpanderContentBorderBrush"));
+        Assert.Equal("StrokeSubtleBrush", ResourceKeyOf("SettingsCardBorderBrush"));
+    }
+
+    [Fact]
     public void Resources_DoNotDefineLegacyButtonOrCardEmulationStyles()
     {
         XDocument styles = LoadXaml(@"Themes\Styles.xaml");
@@ -1218,7 +1288,26 @@ public sealed class NativeWinUiContractTests
                 footer.Descendants(Presentation + "TextBlock"),
                 text => (string?)text.Attribute("Visibility") == "{Binding PathScope.EmptyIncludedPathsVisibility}");
             Assert.Equal("Add at least one folder or file to start.", (string?)hint.Attribute("Text"));
+            Assert.Equal("Right", (string?)hint.Attribute("HorizontalAlignment"));
+
+            XElement column = footer.Elements(Presentation + "Grid").Single();
+            Assert.Equal("{StaticResource ContentMaxWidth}", (string?)column.Attribute("MaxWidth"));
+            Assert.Equal("{StaticResource PageFooterPadding}", (string?)column.Attribute("Padding"));
         }
+
+        XDocument styles = LoadXaml(@"Themes\Styles.xaml");
+        XElement footerStyle = styles
+            .Descendants(Presentation + "Style")
+            .Single(style => (string?)style.Attribute(Xaml + "Key") == "PageFooterBorderStyle");
+        Dictionary<string, string?> setters = footerStyle
+            .Elements(Presentation + "Setter")
+            .ToDictionary(
+                setter => (string)setter.Attribute("Property")!,
+                setter => (string?)setter.Attribute("Value"),
+                StringComparer.Ordinal);
+        Assert.Equal("{ThemeResource BgBaseBrush}", setters["Background"]);
+        Assert.False(setters.ContainsKey("BorderThickness"));
+        Assert.False(setters.ContainsKey("Padding"));
     }
 
     [Fact]

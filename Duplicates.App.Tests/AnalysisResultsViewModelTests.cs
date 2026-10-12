@@ -11,6 +11,95 @@ namespace Duplicates.App.Tests;
 
 public sealed class AnalysisResultsViewModelTests
 {
+    [Fact]
+    public void SelectAllIncludesFilteredFindingsAndPublishesTotalsOnce()
+    {
+        var store = new AnalysisSessionStore();
+        var viewModel = new AnalysisResultsViewModel(store);
+        store.SetCompleted(ToolKind.BigFiles, new AnalysisScope(), NewResult(
+            [NewFinding(@"C:\visible\one.bin", 100), NewFinding(@"C:\hidden\two.bin", 200)]));
+        viewModel.SearchText = "visible";
+        int totalsUpdates = 0;
+        viewModel.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(viewModel.SelectedItemCount))
+            {
+                totalsUpdates++;
+            }
+        };
+
+        viewModel.SelectAllCommand.Execute(null);
+
+        Assert.Single(viewModel.Findings);
+        Assert.Equal(2, viewModel.SelectedItemCount);
+        Assert.Equal(300, viewModel.SelectedBytes);
+        Assert.True(viewModel.CanActOnSelection);
+        Assert.Equal(1, totalsUpdates);
+
+        totalsUpdates = 0;
+        viewModel.ClearSelectionCommand.Execute(null);
+        Assert.Equal(0, viewModel.SelectedItemCount);
+        Assert.Equal(1, totalsUpdates);
+    }
+
+    [Fact]
+    public void SelectAllIsUnavailableForEmptyResultsAndSimilarityCandidates()
+    {
+        var store = new AnalysisSessionStore();
+        var viewModel = new AnalysisResultsViewModel(store);
+        Assert.False(viewModel.SelectAllCommand.CanExecute(null));
+        store.SetCompleted(ToolKind.SimilarImages, new AnalysisScope(),
+            NewResult(groups: [NewGroup("images", @"C:\one.jpg", @"C:\two.jpg")]));
+
+        Assert.False(viewModel.SelectAllCommand.CanExecute(null));
+        viewModel.SelectAllCommand.Execute(null);
+        Assert.Equal(0, viewModel.SelectedItemCount);
+    }
+
+    [Fact]
+    public void SelectAllCannotMutateSelectionDuringAnAction()
+    {
+        var store = new AnalysisSessionStore();
+        var viewModel = new AnalysisResultsViewModel(store);
+        store.SetCompleted(ToolKind.EmptyFolders, new AnalysisScope(),
+            NewResult([NewDirectoryFinding(@"C:\empty", 1)]));
+        Assert.True(viewModel.SelectAllCommand.CanExecute(null));
+
+        viewModel.IsActionRunning = true;
+        Assert.False(viewModel.SelectAllCommand.CanExecute(null));
+        viewModel.SelectAllCommand.Execute(null);
+        Assert.Equal(0, viewModel.SelectedItemCount);
+
+        viewModel.IsActionRunning = false;
+        Assert.True(viewModel.SelectAllCommand.CanExecute(null));
+        viewModel.SelectAllCommand.Execute(null);
+        Assert.Equal(1, viewModel.SelectedItemCount);
+    }
+
+    [Fact]
+    public void SelectAllTracksSharedOperationAvailability()
+    {
+        var store = new AnalysisSessionStore();
+        var coordinator = new AppOperationCoordinator();
+        var viewModel = new AnalysisResultsViewModel(store, null, null, null, null, coordinator);
+        store.SetCompleted(ToolKind.EmptyFolders, new AnalysisScope(),
+            NewResult([NewDirectoryFinding(@"C:\empty", 1)]));
+        int commandUpdates = 0;
+        viewModel.SelectAllCommand.CanExecuteChanged += (_, _) => commandUpdates++;
+
+        Assert.True(coordinator.TryAcquire(new AppOperationDescriptor(AppOperationKind.AnalysisRun),
+            () => { }, out IAppOperationLease? lease));
+        using (lease)
+        {
+            Assert.False(viewModel.SelectAllCommand.CanExecute(null));
+            viewModel.SelectAllCommand.Execute(null);
+            Assert.Equal(0, viewModel.SelectedItemCount);
+        }
+
+        Assert.True(viewModel.SelectAllCommand.CanExecute(null));
+        Assert.Equal(2, commandUpdates);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -764,10 +853,10 @@ public sealed class AnalysisResultsViewModelTests
                     NewDirectoryFinding(shallow, depth: 1),
                     NewDirectoryFinding(deep, depth: 2)
                 ]));
-            foreach (PathFindingViewModel finding in viewModel.Findings)
-            {
-                finding.IsSelected = true;
-            }
+            viewModel.SearchText = "shallow";
+            viewModel.SelectAllCommand.Execute(null);
+            Assert.Single(viewModel.Findings);
+            Assert.Equal(2, viewModel.SelectedItemCount);
 
             DeleteSummary summary = await viewModel.DeleteSelectedAsync(CancellationToken.None);
 

@@ -402,7 +402,7 @@ public sealed class SettingsViewModelTests
     {
         var viewModel = new SettingsViewModel(new FakeSettingsService());
 
-        Assert.EndsWith(" \u00B7 Finnvek \u00B7 .NET 10 \u00B7 Windows App SDK 2.5", viewModel.AboutText);
+        Assert.EndsWith(", Finnvek, .NET 10, Windows App SDK 2.5", viewModel.AboutText);
         Assert.DoesNotContain(" - ", viewModel.AboutText, StringComparison.Ordinal);
     }
 }
